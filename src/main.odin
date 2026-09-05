@@ -3,6 +3,7 @@ package main
 main :: proc(){
     window_create()
     renderer_init()
+    renderer_create_depth_buffer()
     renderer_load_assets()
     defer renderer_destroy()
 

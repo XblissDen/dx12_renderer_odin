@@ -50,6 +50,13 @@ Renderer :: struct {
     constant_buffer: ^d3d12.IResource,
     cb_mapped_data: ^SceneConstants,
 
+    depth_buffer: ^d3d12.IResource,
+    dsv_heap: ^d3d12.IDescriptorHeap,
+
+    index_buffer: ^d3d12.IResource,
+    index_buffer_view: d3d12.INDEX_BUFFER_VIEW,
+    index_count: u32,
+
     rotation_angle: f32,
 
     frame_index: u32,
@@ -287,9 +294,12 @@ renderer_load_assets :: proc(){
             }},
         },
         DepthStencilState = {
-            DepthEnable = false,
+            DepthEnable = true,
+            DepthWriteMask = .ALL,
+            DepthFunc = .LESS,
             StencilEnable = false,
         },
+        DSVFormat = .D32_FLOAT,
         SampleMask = max(u32),
         PrimitiveTopologyType = .TRIANGLE,
         NumRenderTargets = 1,
@@ -303,12 +313,30 @@ renderer_load_assets :: proc(){
         (^rawptr)(&r.pipeline_state),
     ))
 
-    // VERTEX BUFFER
+    // Geometry
     vertices := []Vertex {
-        { position = { 0.0,  0.5, 0.0 }, color = { 1, 0, 0, 1 } }, // верх, красный
-        { position = { 0.5, -0.5, 0.0 }, color = { 0, 1, 0, 1 } }, // право, зелёный
-        { position = {-0.5, -0.5, 0.0 }, color = { 0, 0, 1, 1 } }, // лево, синий
+        // Front
+        { position = {-0.5,  0.5, -0.5}, color = {1, 0, 0, 1} },
+        { position = { 0.5,  0.5, -0.5}, color = {0, 1, 0, 1} },
+        { position = { 0.5, -0.5, -0.5}, color = {0, 0, 1, 1} },
+        { position = {-0.5, -0.5, -0.5}, color = {1, 1, 0, 1} },
+        // Back
+        { position = {-0.5,  0.5,  0.5}, color = {1, 0, 1, 1} },
+        { position = { 0.5,  0.5,  0.5}, color = {0, 1, 1, 1} },
+        { position = { 0.5, -0.5,  0.5}, color = {1, 1, 1, 1} },
+        { position = {-0.5, -0.5,  0.5}, color = {0, 0, 0, 1} },
     }
+
+    indices := []u32 {
+        0, 1, 2,  0, 2, 3, // front
+        5, 4, 7,  5, 7, 6, // back
+        4, 0, 3,  4, 3, 7, // left
+        1, 5, 6,  1, 6, 2, // right
+        4, 5, 1,  4, 1, 0, // top
+        3, 2, 6,  3, 6, 7, // bottom
+    }
+
+    r.index_count = u32(len(indices))
 
     vb_size := u64(len(vertices) * size_of(Vertex))
 
@@ -343,6 +371,41 @@ renderer_load_assets :: proc(){
         BufferLocation = r.vertex_buffer->GetGPUVirtualAddress(),
         StrideInBytes  = size_of(Vertex),
         SizeInBytes    = u32(vb_size),
+    }
+
+    // INDEX BUFFER
+    ib_size := u64(len(indices) * size_of(u32))
+
+    ib_heap_props := d3d12.HEAP_PROPERTIES { Type = .UPLOAD }
+    ib_desc := d3d12.RESOURCE_DESC {
+        Dimension        = .BUFFER,
+        Width            = ib_size,
+        Height           = 1,
+        DepthOrArraySize = 1,
+        MipLevels        = 1,
+        SampleDesc       = { Count = 1 },
+        Layout           = .ROW_MAJOR,
+    }
+
+    dx_check(r.device->CreateCommittedResource(
+        &ib_heap_props,
+        {},
+        &ib_desc,
+        { .VERTEX_AND_CONSTANT_BUFFER },
+        nil,
+        d3d12.IResource_UUID,
+        (^rawptr)(&r.index_buffer),
+    ))
+
+    ib_mapped: rawptr
+    dx_check(r.index_buffer->Map(0, nil, &ib_mapped))
+    runtime.mem_copy(ib_mapped, raw_data(indices), int(ib_size))
+    r.index_buffer->Unmap(0, nil)
+
+    r.index_buffer_view = d3d12.INDEX_BUFFER_VIEW {
+        BufferLocation = r.index_buffer->GetGPUVirtualAddress(),
+        Format         = .R32_UINT,
+        SizeInBytes    = u32(ib_size),
     }
 
     // CONSTANT BUFFER
@@ -383,6 +446,64 @@ renderer_load_assets :: proc(){
         right  = WINDOW_WIDTH,
         bottom = WINDOW_HEIGHT,
     }
+}
+
+renderer_create_depth_buffer :: proc(){
+    r := &g_renderer
+
+    dsv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{
+        NumDescriptors = 1,
+        Type = .DSV,
+        Flags = {},
+    }
+    dx_check(r.device->CreateDescriptorHeap(
+        &dsv_heap_desc,
+        d3d12.IDescriptorHeap_UUID,
+        (^rawptr)(&r.dsv_heap),
+    ))
+
+    depth_desc := d3d12.RESOURCE_DESC{
+        Dimension = .TEXTURE2D,
+        Width = WINDOW_WIDTH,
+        Height = WINDOW_HEIGHT,
+        DepthOrArraySize = 1,
+        MipLevels = 1,
+        Format = .D32_FLOAT,
+        SampleDesc = { Count = 1 },
+        Flags = {.ALLOW_DEPTH_STENCIL},
+    }
+
+    clear_value := d3d12.CLEAR_VALUE{
+        Format = .D32_FLOAT,
+    }
+    clear_value.DepthStencil = {Depth = 1.0, Stencil = 0}
+
+    heap_props := d3d12.HEAP_PROPERTIES { Type = .DEFAULT }
+
+    dx_check(r.device->CreateCommittedResource(
+        &heap_props,
+        {},
+        &depth_desc,
+        { .DEPTH_WRITE },
+        &clear_value,
+        d3d12.IResource_UUID,
+        (^rawptr)(&r.depth_buffer),
+    ))
+
+    dsv_desc := d3d12.DEPTH_STENCIL_VIEW_DESC{
+        Format = .D32_FLOAT,
+        ViewDimension = .TEXTURE2D,
+        Flags = {},
+    }
+    dsv_handle : d3d12.CPU_DESCRIPTOR_HANDLE
+    r.dsv_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle)
+
+    r.device->CreateDepthStencilView(
+        r.depth_buffer,
+        &dsv_desc,
+        dsv_handle,
+    )
+
 }
 
 renderer_render_frame :: proc(){
@@ -434,8 +555,13 @@ renderer_render_frame :: proc(){
     rtv_handle.ptr += uint(r.frame_index * r.rtv_descriptor_size)
 
     clear_color := [4]f32{0.1, 0.1, 0.2, 1.0}
-    r.command_list->OMSetRenderTargets(1, &rtv_handle, false, nil)
+
+    dsv_handle : d3d12.CPU_DESCRIPTOR_HANDLE
+    r.dsv_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle)
+
+    r.command_list->OMSetRenderTargets(1, &rtv_handle, false, &dsv_handle)
     r.command_list->ClearRenderTargetView(rtv_handle, &clear_color, 0, nil)
+    r.command_list->ClearDepthStencilView(dsv_handle, { .DEPTH }, 1.0, 0, 0, nil)
 
     // Pipeline
     r.command_list->SetGraphicsRootSignature(r.root_signature)
@@ -446,15 +572,18 @@ renderer_render_frame :: proc(){
         r.constant_buffer->GetGPUVirtualAddress(),
     )
 
-    // Geometry
-    r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
-    r.command_list->IASetVertexBuffers(0, 1, &r.vertex_buffer_view)
-
     // viewport, scissor
     r.command_list->RSSetViewports(1, &r.viewport)
     r.command_list->RSSetScissorRects(1, &r.scissor_rect)
 
-    r.command_list->DrawInstanced(3, 1, 0, 0)
+    // Geometry
+    r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
+    r.command_list->IASetVertexBuffers(0, 1, &r.vertex_buffer_view)
+    r.command_list->IASetIndexBuffer(&r.index_buffer_view)
+    r.command_list->DrawIndexedInstanced(r.index_count, 1, 0, 0, 0)
+    //r.command_list->DrawInstanced(3, 1, 0, 0)
+
+
 
     barrier.Transition.StateBefore = {.RENDER_TARGET}
     barrier.Transition.StateAfter = d3d12.RESOURCE_STATE_PRESENT
@@ -504,6 +633,10 @@ renderer_destroy :: proc(){
     r.root_signature->Release()
 
     r.constant_buffer->Release()
+
+    r.index_buffer->Release()
+    r.depth_buffer->Release()
+    r.dsv_heap->Release()
 
     r.device->Release()
 }
