@@ -9,11 +9,14 @@ import d3dc "vendor:directx/d3d_compiler"
 import "core:math"
 import alg "core:math/linalg"
 
+import "core:image"
+import "core:image/png"
+
 FRAME_COUNT :: 2
 
 Vertex :: struct {
-    position: [3]f32,
-    color:    [4]f32,
+    position:   [3]f32,
+    texcoord:   [2]f32,
 }
 
 SceneConstants :: struct #align(256){
@@ -56,6 +59,9 @@ Renderer :: struct {
     index_buffer: ^d3d12.IResource,
     index_buffer_view: d3d12.INDEX_BUFFER_VIEW,
     index_count: u32,
+
+    texture: ^d3d12.IResource,
+    srv_heap: ^d3d12.IDescriptorHeap,
 
     rotation_angle: f32,
 
@@ -195,9 +201,39 @@ renderer_load_assets :: proc(){
     root_param.Descriptor = { ShaderRegister = 0, RegisterSpace = 0}
 
     // ROOT SIGNATURE
+    cbv_param := d3d12.ROOT_PARAMETER{}
+    cbv_param.ParameterType = .CBV
+    cbv_param.ShaderVisibility = .ALL
+    cbv_param.Descriptor = {ShaderRegister = 0}
+
+    srv_range := d3d12.DESCRIPTOR_RANGE{
+        RangeType = .SRV,
+        NumDescriptors = 1,
+        BaseShaderRegister = 0,
+        OffsetInDescriptorsFromTableStart = 0,
+    }
+
+    srv_param := d3d12.ROOT_PARAMETER{}
+    srv_param.ParameterType = .DESCRIPTOR_TABLE
+    srv_param.ShaderVisibility = .PIXEL
+    srv_param.DescriptorTable = { NumDescriptorRanges = 1, pDescriptorRanges = &srv_range}
+
+    static_sampler := d3d12.STATIC_SAMPLER_DESC{
+        Filter = .MIN_MAG_MIP_LINEAR,
+        AddressU = .WRAP,
+        AddressV = .WRAP,
+        AddressW = .WRAP,
+        ShaderRegister = 0,
+        ShaderVisibility = .PIXEL,
+    }
+
+    params := []d3d12.ROOT_PARAMETER{cbv_param, srv_param}
+
     rs_desc := d3d12.ROOT_SIGNATURE_DESC{
-        NumParameters = 1,
-        pParameters = &root_param,
+        NumParameters = u32(len(params)),
+        pParameters = raw_data(params),
+        NumStaticSamplers = 1,
+        pStaticSamplers = &static_sampler,
         Flags = { .ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT },
     }
 
@@ -263,9 +299,9 @@ renderer_load_assets :: proc(){
             InstanceDataStepRate = 0,
         },
         {
-            SemanticName         = "COLOR",
+            SemanticName         = "TEXCOORD",
             SemanticIndex        = 0,
-            Format               = .R32G32B32A32_FLOAT,
+            Format               = .R32G32_FLOAT,
             InputSlot            = 0,
             AlignedByteOffset    = 12,
             InputSlotClass       = .PER_VERTEX_DATA,
@@ -283,15 +319,31 @@ renderer_load_assets :: proc(){
             NumElements = u32(len(input_layout)),
         },
         RasterizerState = {
-            FillMode = .SOLID,
-            CullMode = .BACK,
+            FillMode              = .SOLID,
+            CullMode              = .BACK,
             FrontCounterClockwise = false,
-            DepthClipEnable = true,
+            DepthBias             = 0,
+            DepthBiasClamp        = 0,
+            SlopeScaledDepthBias  = 0,
+            DepthClipEnable       = true,
+            MultisampleEnable     = false,
+            AntialiasedLineEnable = false,
+            ForcedSampleCount     = 0,
+            ConservativeRaster    = .OFF,
         },
         BlendState = {
             RenderTarget = { 0 = {
-                RenderTargetWriteMask = u8(d3d12.COLOR_WRITE_ENABLE_ALL),
-            }},
+            BlendEnable           = false,
+            LogicOpEnable         = false,
+            SrcBlend              = .ONE,
+            DestBlend             = .ZERO,
+            BlendOp               = .ADD,
+            SrcBlendAlpha         = .ONE,
+            DestBlendAlpha        = .ZERO,
+            BlendOpAlpha          = .ADD,
+            LogicOp               = .NOOP,
+            RenderTargetWriteMask = u8(d3d12.COLOR_WRITE_ENABLE_ALL),
+        }},
         },
         DepthStencilState = {
             DepthEnable = true,
@@ -316,24 +368,44 @@ renderer_load_assets :: proc(){
     // Geometry
     vertices := []Vertex {
         // Front
-        { position = {-0.5,  0.5, -0.5}, color = {1, 0, 0, 1} },
-        { position = { 0.5,  0.5, -0.5}, color = {0, 1, 0, 1} },
-        { position = { 0.5, -0.5, -0.5}, color = {0, 0, 1, 1} },
-        { position = {-0.5, -0.5, -0.5}, color = {1, 1, 0, 1} },
+        { position = {-0.5,  0.5, -0.5}, texcoord = {0, 0} },
+        { position = { 0.5,  0.5, -0.5}, texcoord = {1, 0} },
+        { position = { 0.5, -0.5, -0.5}, texcoord = {1, 1} },
+        { position = {-0.5, -0.5, -0.5}, texcoord = {0, 1} },
         // Back
-        { position = {-0.5,  0.5,  0.5}, color = {1, 0, 1, 1} },
-        { position = { 0.5,  0.5,  0.5}, color = {0, 1, 1, 1} },
-        { position = { 0.5, -0.5,  0.5}, color = {1, 1, 1, 1} },
-        { position = {-0.5, -0.5,  0.5}, color = {0, 0, 0, 1} },
+        { position = { 0.5,  0.5,  0.5}, texcoord = {0, 0} },
+        { position = {-0.5,  0.5,  0.5}, texcoord = {1, 0} },
+        { position = {-0.5, -0.5,  0.5}, texcoord = {1, 1} },
+        { position = { 0.5, -0.5,  0.5}, texcoord = {0, 1} },
+        // Left
+        { position = {-0.5,  0.5,  0.5}, texcoord = {0, 0} },
+        { position = {-0.5,  0.5, -0.5}, texcoord = {1, 0} },
+        { position = {-0.5, -0.5, -0.5}, texcoord = {1, 1} },
+        { position = {-0.5, -0.5,  0.5}, texcoord = {0, 1} },
+        // Right
+        { position = { 0.5,  0.5, -0.5}, texcoord = {0, 0} },
+        { position = { 0.5,  0.5,  0.5}, texcoord = {1, 0} },
+        { position = { 0.5, -0.5,  0.5}, texcoord = {1, 1} },
+        { position = { 0.5, -0.5, -0.5}, texcoord = {0, 1} },
+        // Top
+        { position = {-0.5,  0.5,  0.5}, texcoord = {0, 0} },
+        { position = { 0.5,  0.5,  0.5}, texcoord = {1, 0} },
+        { position = { 0.5,  0.5, -0.5}, texcoord = {1, 1} },
+        { position = {-0.5,  0.5, -0.5}, texcoord = {0, 1} },
+        // Bottom
+        { position = {-0.5, -0.5, -0.5}, texcoord = {0, 0} },
+        { position = { 0.5, -0.5, -0.5}, texcoord = {1, 0} },
+        { position = { 0.5, -0.5,  0.5}, texcoord = {1, 1} },
+        { position = {-0.5, -0.5,  0.5}, texcoord = {0, 1} },
     }
 
     indices := []u32 {
-        0, 1, 2,  0, 2, 3, // front
-        5, 4, 7,  5, 7, 6, // back
-        4, 0, 3,  4, 3, 7, // left
-        1, 5, 6,  1, 6, 2, // right
-        4, 5, 1,  4, 1, 0, // top
-        3, 2, 6,  3, 6, 7, // bottom
+        0,  1,  2,   0,  2,  3, // front
+        4,  5,  6,   4,  6,  7, // back
+        8,  9, 10,   8, 10, 11, // left
+        12, 13, 14,  12, 14, 15, // right
+        16, 17, 18,  16, 18, 19, // top
+        20, 21, 22,  20, 22, 23, // bottom
     }
 
     r.index_count = u32(len(indices))
@@ -506,6 +578,154 @@ renderer_create_depth_buffer :: proc(){
 
 }
 
+renderer_load_texture :: proc(){
+    r := &g_renderer
+
+    // LOADING PNG
+    img, err := image.load_from_file("textures/2.png")
+    if err != nil{
+        fmt.panicf("Failed to load texture: %v", err)
+    }
+    defer image.destroy(img)
+
+    if img.channels == 3{
+        ok := image.alpha_add_if_missing(img)
+        if !ok{
+            panic("Failed to add alpha channel")
+        }
+    }
+
+    width := u64(img.width)
+    height := u64(img.height)
+    pixels := img.pixels.buf[:]
+
+    srv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{
+        NumDescriptors = 1,
+        Type = .CBV_SRV_UAV,
+        Flags = {.SHADER_VISIBLE}
+    }
+
+    dx_check(r.device->CreateDescriptorHeap(
+        &srv_heap_desc,
+        d3d12.IDescriptorHeap_UUID,
+        (^rawptr)(&r.srv_heap),
+    ))
+
+    tex_desc := d3d12.RESOURCE_DESC{
+        Dimension = .TEXTURE2D,
+        Width = width,
+        Height = u32(height),
+        DepthOrArraySize = 1,
+        MipLevels = 1,
+        Format = .R8G8B8A8_UNORM,
+        SampleDesc = {Count = 1},
+        Flags = {},
+    }
+
+    default_heap := d3d12.HEAP_PROPERTIES{ Type = .DEFAULT }
+    dx_check(r.device->CreateCommittedResource(
+        &default_heap,
+        {},
+        &tex_desc,
+        { .COPY_DEST },
+        nil,
+        d3d12.IResource_UUID,
+        (^rawptr)(&r.texture),
+    ))
+
+    // UPLOAD BUFFER
+    row_pitch := (width * 4 + 255) & ~u64(255)
+    upload_size := row_pitch * height
+
+    upload_heap := d3d12.HEAP_PROPERTIES { Type = .UPLOAD }
+    upload_desc := d3d12.RESOURCE_DESC{
+        Dimension = .BUFFER,
+        Width = upload_size,
+        Height = 1,
+        DepthOrArraySize = 1,
+        MipLevels = 1,
+        SampleDesc = { Count = 1},
+        Layout = .ROW_MAJOR,
+    }
+
+    upload_buffer: ^d3d12.IResource
+    dx_check(r.device->CreateCommittedResource(
+        &upload_heap,
+        {},
+        &upload_desc,
+        { .VERTEX_AND_CONSTANT_BUFFER },
+        nil,
+        d3d12.IResource_UUID,
+        (^rawptr)(&upload_buffer),
+    ))
+    defer upload_buffer->Release()
+
+    mapped: rawptr
+    dx_check(upload_buffer->Map(0, nil, &mapped))
+    src := raw_data(pixels)
+    dst := uintptr(mapped)
+    for y in 0..<height {
+        dst_row := dst + uintptr(y * row_pitch)
+        src_row := uintptr(src) + uintptr(y * width * 4)
+        runtime.mem_copy(rawptr(dst_row), rawptr(src_row), int(width * 4))
+    }
+    upload_buffer->Unmap(0, nil)
+
+    dx_check(r.command_allocators[0]->Reset())
+    dx_check(r.command_list->Reset(r.command_allocators[0], nil))
+
+    src_location := d3d12.TEXTURE_COPY_LOCATION{
+        pResource = upload_buffer,
+        Type = .PLACED_FOOTPRINT,
+    }
+    src_location.PlacedFootprint = {
+        Footprint = {
+            Format = .R8G8B8A8_UNORM,
+            Width = u32(width),
+            Height = u32(height),
+            Depth = 1,
+            RowPitch = u32(row_pitch),
+        },
+    }
+
+    dst_location := d3d12.TEXTURE_COPY_LOCATION{
+        pResource = r.texture,
+        Type = .SUBRESOURCE_INDEX,
+        SubresourceIndex = 0,
+    }
+
+    // Transition: COPY_DEST → SHADER_RESOURCE
+    copy_barrier := d3d12.RESOURCE_BARRIER { Type = .TRANSITION }
+    copy_barrier.Transition = {
+        pResource   = r.texture,
+        StateBefore = { .COPY_DEST },
+        StateAfter  = { .PIXEL_SHADER_RESOURCE },
+        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+    }
+
+    r.command_list->CopyTextureRegion(&dst_location, 0, 0, 0, &src_location, nil)
+    r.command_list->ResourceBarrier(1, &copy_barrier)
+    dx_check(r.command_list->Close())
+
+    lists := []^d3d12.ICommandList{ r.command_list }
+    r.command_queue->ExecuteCommandLists(u32(len(lists)), raw_data(lists))
+
+    renderer_wait_for_gpu()
+
+    // ── SRV ───────────────────────────────────────────────────────────────────
+    srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC {
+        Format                  = .R8G8B8A8_UNORM,
+        ViewDimension           = .TEXTURE2D,
+        Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
+    }
+    srv_desc.Texture2D = { MipLevels = 1 }
+
+    srv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+    r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv_handle)
+    r.device->CreateShaderResourceView(r.texture, &srv_desc, srv_handle)
+
+}
+
 renderer_render_frame :: proc(){
     r := &g_renderer
 
@@ -567,10 +787,20 @@ renderer_render_frame :: proc(){
     r.command_list->SetGraphicsRootSignature(r.root_signature)
     r.command_list->SetPipelineState(r.pipeline_state)
 
+    // Привязываем heap с текстурой — обязательно до draw call
+    heaps := []^d3d12.IDescriptorHeap{ r.srv_heap }
+    r.command_list->SetDescriptorHeaps(u32(len(heaps)), raw_data(heaps))
+
+    // CBV slot 0
     r.command_list->SetGraphicsRootConstantBufferView(
         0,
         r.constant_buffer->GetGPUVirtualAddress(),
     )
+
+    // SRV slot 1
+    srv_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
+    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&srv_gpu_handle)
+    r.command_list->SetGraphicsRootDescriptorTable(1, srv_gpu_handle)
 
     // viewport, scissor
     r.command_list->RSSetViewports(1, &r.viewport)
@@ -637,6 +867,9 @@ renderer_destroy :: proc(){
     r.index_buffer->Release()
     r.depth_buffer->Release()
     r.dsv_heap->Release()
+
+    r.texture->Release()
+    r.srv_heap->Release()
 
     r.device->Release()
 }

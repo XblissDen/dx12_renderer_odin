@@ -5,16 +5,19 @@ cbuffer SceneConstants : register(b0)
     float4x4 projection;
 };
 
+Texture2D    g_texture : register(t0);
+SamplerState g_sampler : register(s0);
+
 struct VSInput
 {
     float3 position : POSITION;
-    float4 color    : COLOR;
+    float2 texcoord : TEXCOORD;
 };
 
 struct PSInput
 {
     float4 position : SV_POSITION;
-    float4 color    : COLOR;
+    float2 texcoord : TEXCOORD;
 };
 
 PSInput VSMain(VSInput input)
@@ -25,11 +28,11 @@ PSInput VSMain(VSInput input)
     pos = mul(pos, view);
     pos = mul(pos, projection);
     output.position = pos;
-    output.color    = input.color;
+    output.texcoord = input.texcoord;
     return output;
 }
 
 float4 PSMain(PSInput input) : SV_TARGET
 {
-    return input.color;
+    return g_texture.Sample(g_sampler, input.texcoord);
 }

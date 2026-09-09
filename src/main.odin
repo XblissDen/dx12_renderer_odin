@@ -5,6 +5,7 @@ main :: proc(){
     renderer_init()
     renderer_create_depth_buffer()
     renderer_load_assets()
+    renderer_load_texture()
     defer renderer_destroy()
 
     for g_running{
