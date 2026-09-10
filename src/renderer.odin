@@ -380,7 +380,7 @@ renderer_load_assets :: proc(){
     ))
 
     // Geometry
-    vertices := []Vertex {
+    /*vertices := []Vertex {
         // Front (normal: 0, 0, -1)
         { position = {-0.5,  0.5, -0.5}, normal = {0, 0, -1}, texcoord = {0, 0} },
         { position = { 0.5,  0.5, -0.5}, normal = {0, 0, -1}, texcoord = {1, 0} },
@@ -420,8 +420,15 @@ renderer_load_assets :: proc(){
         12, 13, 14,  12, 14, 15, // right
         16, 17, 18,  16, 18, 19, // top
         20, 21, 22,  20, 22, 23, // bottom
+    }*/
+
+    mesh, mesh_ok := mesh_load_obj("models/cube.obj")
+    if !mesh_ok{
+        panic("Failed to load mesh")
     }
 
+    vertices := mesh.vertices
+    indices := mesh.indices
     r.index_count = u32(len(indices))
 
     vb_size := u64(len(vertices) * size_of(Vertex))
@@ -748,7 +755,7 @@ renderer_render_frame :: proc(){
     dx_check(r.command_list->Reset(allocator, nil))
 
     r.rotation_angle += 0.01
-    //model := alg.matrix4_rotate_f32(r.rotation_angle, {0 , 1, 0})
+    model := alg.matrix4_rotate_f32(r.rotation_angle, {0 , 1, 0})
 
     view := look_at_lh(
         eye    = { 0, 0, -2 },
@@ -763,7 +770,7 @@ renderer_render_frame :: proc(){
         100.0,
     )
 
-    r.cb_mapped_data.model = /*model*/ alg.MATRIX4F32_IDENTITY
+    r.cb_mapped_data.model = model
     r.cb_mapped_data.view = view
     r.cb_mapped_data.projection = proj
 
