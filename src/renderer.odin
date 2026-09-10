@@ -16,13 +16,21 @@ FRAME_COUNT :: 2
 
 Vertex :: struct {
     position:   [3]f32,
+    normal:     [3]f32,
     texcoord:   [2]f32,
 }
 
 SceneConstants :: struct #align(256){
-    model: alg.Matrix4f32,
-    view: alg.Matrix4f32,
-    projection: alg.Matrix4f32
+    model:          alg.Matrix4f32,
+    view:           alg.Matrix4f32,
+    projection:     alg.Matrix4f32,
+
+    light_position: [3]f32,
+    _pad0:          f32,
+    view_position:  [3]f32,
+    _pad1:          f32,
+    light_color:    [3]f32,
+    _pad2:          f32,
 }
 
 Renderer :: struct {
@@ -299,11 +307,17 @@ renderer_load_assets :: proc(){
             InstanceDataStepRate = 0,
         },
         {
+            SemanticName      = "NORMAL",
+            Format            = .R32G32B32_FLOAT,
+            AlignedByteOffset = 12, 
+            InputSlotClass    = .PER_VERTEX_DATA,
+        },
+        {
             SemanticName         = "TEXCOORD",
             SemanticIndex        = 0,
             Format               = .R32G32_FLOAT,
             InputSlot            = 0,
-            AlignedByteOffset    = 12,
+            AlignedByteOffset    = 24,
             InputSlotClass       = .PER_VERTEX_DATA,
             InstanceDataStepRate = 0,
         },
@@ -367,36 +381,36 @@ renderer_load_assets :: proc(){
 
     // Geometry
     vertices := []Vertex {
-        // Front
-        { position = {-0.5,  0.5, -0.5}, texcoord = {0, 0} },
-        { position = { 0.5,  0.5, -0.5}, texcoord = {1, 0} },
-        { position = { 0.5, -0.5, -0.5}, texcoord = {1, 1} },
-        { position = {-0.5, -0.5, -0.5}, texcoord = {0, 1} },
-        // Back
-        { position = { 0.5,  0.5,  0.5}, texcoord = {0, 0} },
-        { position = {-0.5,  0.5,  0.5}, texcoord = {1, 0} },
-        { position = {-0.5, -0.5,  0.5}, texcoord = {1, 1} },
-        { position = { 0.5, -0.5,  0.5}, texcoord = {0, 1} },
-        // Left
-        { position = {-0.5,  0.5,  0.5}, texcoord = {0, 0} },
-        { position = {-0.5,  0.5, -0.5}, texcoord = {1, 0} },
-        { position = {-0.5, -0.5, -0.5}, texcoord = {1, 1} },
-        { position = {-0.5, -0.5,  0.5}, texcoord = {0, 1} },
-        // Right
-        { position = { 0.5,  0.5, -0.5}, texcoord = {0, 0} },
-        { position = { 0.5,  0.5,  0.5}, texcoord = {1, 0} },
-        { position = { 0.5, -0.5,  0.5}, texcoord = {1, 1} },
-        { position = { 0.5, -0.5, -0.5}, texcoord = {0, 1} },
-        // Top
-        { position = {-0.5,  0.5,  0.5}, texcoord = {0, 0} },
-        { position = { 0.5,  0.5,  0.5}, texcoord = {1, 0} },
-        { position = { 0.5,  0.5, -0.5}, texcoord = {1, 1} },
-        { position = {-0.5,  0.5, -0.5}, texcoord = {0, 1} },
-        // Bottom
-        { position = {-0.5, -0.5, -0.5}, texcoord = {0, 0} },
-        { position = { 0.5, -0.5, -0.5}, texcoord = {1, 0} },
-        { position = { 0.5, -0.5,  0.5}, texcoord = {1, 1} },
-        { position = {-0.5, -0.5,  0.5}, texcoord = {0, 1} },
+        // Front (normal: 0, 0, -1)
+        { position = {-0.5,  0.5, -0.5}, normal = {0, 0, -1}, texcoord = {0, 0} },
+        { position = { 0.5,  0.5, -0.5}, normal = {0, 0, -1}, texcoord = {1, 0} },
+        { position = { 0.5, -0.5, -0.5}, normal = {0, 0, -1}, texcoord = {1, 1} },
+        { position = {-0.5, -0.5, -0.5}, normal = {0, 0, -1}, texcoord = {0, 1} },
+        // Back (normal: 0, 0, 1)
+        { position = { 0.5,  0.5,  0.5}, normal = {0, 0, 1}, texcoord = {0, 0} },
+        { position = {-0.5,  0.5,  0.5}, normal = {0, 0, 1}, texcoord = {1, 0} },
+        { position = {-0.5, -0.5,  0.5}, normal = {0, 0, 1}, texcoord = {1, 1} },
+        { position = { 0.5, -0.5,  0.5}, normal = {0, 0, 1}, texcoord = {0, 1} },
+        // Left (normal: -1, 0, 0)
+        { position = {-0.5,  0.5,  0.5}, normal = {-1, 0, 0}, texcoord = {0, 0} },
+        { position = {-0.5,  0.5, -0.5}, normal = {-1, 0, 0}, texcoord = {1, 0} },
+        { position = {-0.5, -0.5, -0.5}, normal = {-1, 0, 0}, texcoord = {1, 1} },
+        { position = {-0.5, -0.5,  0.5}, normal = {-1, 0, 0}, texcoord = {0, 1} },
+        // Right (normal: 1, 0, 0)
+        { position = { 0.5,  0.5, -0.5}, normal = {1, 0, 0}, texcoord = {0, 0} },
+        { position = { 0.5,  0.5,  0.5}, normal = {1, 0, 0}, texcoord = {1, 0} },
+        { position = { 0.5, -0.5,  0.5}, normal = {1, 0, 0}, texcoord = {1, 1} },
+        { position = { 0.5, -0.5, -0.5}, normal = {1, 0, 0}, texcoord = {0, 1} },
+        // Top (normal: 0, 1, 0)
+        { position = {-0.5,  0.5,  0.5}, normal = {0, 1, 0}, texcoord = {0, 0} },
+        { position = { 0.5,  0.5,  0.5}, normal = {0, 1, 0}, texcoord = {1, 0} },
+        { position = { 0.5,  0.5, -0.5}, normal = {0, 1, 0}, texcoord = {1, 1} },
+        { position = {-0.5,  0.5, -0.5}, normal = {0, 1, 0}, texcoord = {0, 1} },
+        // Bottom (normal: 0, -1, 0)
+        { position = {-0.5, -0.5, -0.5}, normal = {0, -1, 0}, texcoord = {0, 0} },
+        { position = { 0.5, -0.5, -0.5}, normal = {0, -1, 0}, texcoord = {1, 0} },
+        { position = { 0.5, -0.5,  0.5}, normal = {0, -1, 0}, texcoord = {1, 1} },
+        { position = {-0.5, -0.5,  0.5}, normal = {0, -1, 0}, texcoord = {0, 1} },
     }
 
     indices := []u32 {
@@ -734,7 +748,7 @@ renderer_render_frame :: proc(){
     dx_check(r.command_list->Reset(allocator, nil))
 
     r.rotation_angle += 0.01
-    model := alg.matrix4_rotate_f32(r.rotation_angle, {0 , 1, 0})
+    //model := alg.matrix4_rotate_f32(r.rotation_angle, {0 , 1, 0})
 
     view := look_at_lh(
         eye    = { 0, 0, -2 },
@@ -749,10 +763,15 @@ renderer_render_frame :: proc(){
         100.0,
     )
 
-    r.cb_mapped_data.model = model
+    r.cb_mapped_data.model = /*model*/ alg.MATRIX4F32_IDENTITY
     r.cb_mapped_data.view = view
     r.cb_mapped_data.projection = proj
 
+    light_x := math.cos(r.rotation_angle) * 2.0
+    light_z := math.sin(r.rotation_angle) * 2.0
+    r.cb_mapped_data.light_position = {light_x, 1.5, light_z}
+    r.cb_mapped_data.view_position = {0, 0, -2}
+    r.cb_mapped_data.light_color = { 1.0, 1.0, 1.0}
     //r.cb_mapped_data.model      = alg.MATRIX4F32_IDENTITY
     //r.cb_mapped_data.view       = alg.MATRIX4F32_IDENTITY
     //r.cb_mapped_data.projection = alg.MATRIX4F32_IDENTITY
