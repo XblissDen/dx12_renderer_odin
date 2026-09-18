@@ -757,11 +757,7 @@ renderer_render_frame :: proc(){
     r.rotation_angle += 0.01
     model := alg.matrix4_rotate_f32(r.rotation_angle, {0 , 1, 0})
 
-    view := look_at_lh(
-        eye    = { 0, 0, -2 },
-        centre = { 0, 0,  0 },
-        up     = { 0, 1,  0 },
-    )
+    view := camera_view_matrix(&g_camera)
 
     proj := perspective_lh(
         alg.to_radians(f32(45)),
@@ -777,7 +773,7 @@ renderer_render_frame :: proc(){
     light_x := math.cos(r.rotation_angle) * 2.0
     light_z := math.sin(r.rotation_angle) * 2.0
     r.cb_mapped_data.light_position = {light_x, 1.5, light_z}
-    r.cb_mapped_data.view_position = {0, 0, -2}
+    r.cb_mapped_data.view_position = g_camera.position
     r.cb_mapped_data.light_color = { 1.0, 1.0, 1.0}
     //r.cb_mapped_data.model      = alg.MATRIX4F32_IDENTITY
     //r.cb_mapped_data.view       = alg.MATRIX4F32_IDENTITY

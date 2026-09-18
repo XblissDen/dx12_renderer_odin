@@ -11,6 +11,10 @@ WINDOW_HEIGHT :: 720
 g_hwnd: win32.HWND
 g_running: bool
 
+g_mouse_delta_x: i32
+g_mouse_delta_y: i32
+g_cursor_locked: bool
+
 window_create :: proc(){
     hinstance := win32.HINSTANCE(win32.GetModuleHandleW(nil))
 
@@ -58,12 +62,61 @@ window_process_messages :: proc(){
     }
 }
 
+window_lock_cursor :: proc() {
+    g_cursor_locked = true
+    win32.ShowCursor(false)
+
+    // clip cursor to window
+    rect: win32.RECT
+    win32.GetClientRect(g_hwnd, &rect)
+
+    top_left := win32.POINT{rect.left, rect.top}
+    bottom_right := win32.POINT{rect.right, rect.bottom}
+    win32.ClientToScreen(g_hwnd, &top_left)
+    win32.ClientToScreen(g_hwnd, &bottom_right)
+
+    clip_rect := win32.RECT{ top_left.x, top_left.y, bottom_right.x, bottom_right.y }
+    win32.ClipCursor(&clip_rect)
+
+
+    // raw input registration
+    rid: win32.RAWINPUTDEVICE
+    rid.usUsagePage = 0x01 // Generic Desktop Controls
+    rid.usUsage     = 0x02 // Mouse
+    rid.dwFlags     = 0
+    rid.hwndTarget  = g_hwnd
+
+    win32.RegisterRawInputDevices(&rid, 1, size_of(win32.RAWINPUTDEVICE))
+}
+
 @(private)
 window_proc :: proc "stdcall" (hwnd: win32.HWND, msg: win32.UINT,
 wparam: win32.WPARAM, lparam: win32.LPARAM) -> win32.LRESULT{
     context = runtime.default_context()
 
     switch msg{
+        case win32.WM_INPUT:
+            if g_cursor_locked {
+                size: win32.UINT
+                win32.GetRawInputData(win32.HRAWINPUT(lparam), win32.RID_INPUT, nil, &size, size_of(win32.RAWINPUTHEADER))
+                
+                buf := make([]u8, size, context.temp_allocator)
+                win32.GetRawInputData(win32.HRAWINPUT(lparam), win32.RID_INPUT, raw_data(buf), &size, size_of(win32.RAWINPUTHEADER))
+
+                raw := (^win32.RAWINPUT)(raw_data(buf))
+                if raw.header.dwType == win32.RIM_TYPEMOUSE {
+                    g_mouse_delta_x += raw.data.mouse.lLastX
+                    g_mouse_delta_y += raw.data.mouse.lLastY
+                }
+            }
+        case win32.WM_KILLFOCUS:
+            win32.ClipCursor(nil)
+            win32.ShowCursor(false)
+            g_cursor_locked = false
+        case win32.WM_SETFOCUS:
+            if !g_cursor_locked{
+                window_lock_cursor()
+            }
         case win32.WM_KEYDOWN:
             if wparam == win32.VK_ESCAPE{
                 win32.PostQuitMessage(0)
