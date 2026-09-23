@@ -63,7 +63,13 @@ window_process_messages :: proc(){
 }
 
 window_lock_cursor :: proc() {
+    if g_cursor_locked {
+        return
+    }
+    
     g_cursor_locked = true
+    g_mouse_delta_x = 0
+    g_mouse_delta_y = 0
     win32.ShowCursor(false)
 
     // clip cursor to window
@@ -89,6 +95,18 @@ window_lock_cursor :: proc() {
     win32.RegisterRawInputDevices(&rid, 1, size_of(win32.RAWINPUTDEVICE))
 }
 
+window_unlock_cursor :: proc(){
+    if !g_cursor_locked{
+        return
+    }
+
+    g_cursor_locked = false
+    g_mouse_delta_x = 0
+    g_mouse_delta_y = 0
+    win32.ClipCursor(nil)
+    win32.ShowCursor(true)
+}
+
 @(private)
 window_proc :: proc "stdcall" (hwnd: win32.HWND, msg: win32.UINT,
 wparam: win32.WPARAM, lparam: win32.LPARAM) -> win32.LRESULT{
@@ -110,18 +128,21 @@ wparam: win32.WPARAM, lparam: win32.LPARAM) -> win32.LRESULT{
                 }
             }
         case win32.WM_KILLFOCUS:
-            win32.ClipCursor(nil)
-            win32.ShowCursor(false)
-            g_cursor_locked = false
-        case win32.WM_SETFOCUS:
-            if !g_cursor_locked{
-                window_lock_cursor()
-            }
+            window_unlock_cursor()
         case win32.WM_KEYDOWN:
             if wparam == win32.VK_ESCAPE{
                 win32.PostQuitMessage(0)
+            } else if wparam == win32.WPARAM('L'){
+                if (u64(lparam) & (u64(1) << 30)) == 0{
+                    if g_cursor_locked{
+                        window_unlock_cursor()
+                    } else{
+                        window_lock_cursor()
+                    }
+                }
             }
         case win32.WM_DESTROY:
+            window_unlock_cursor()
             win32.PostQuitMessage(0)
     }
 
