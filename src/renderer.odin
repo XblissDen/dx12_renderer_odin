@@ -806,7 +806,20 @@ renderer_render_frame :: proc(scene: ^Scene){
     dx_check(allocator->Reset())
     dx_check(r.command_list->Reset(allocator, nil))
 
-    view := camera_view_matrix(&g_camera)
+    camera_index := -1
+
+    for i in 0..<scene.entity_count{
+        if scene.has_transform[i] && scene.has_camera[i]{
+            camera_index = i
+            break
+        }
+    }
+
+    assert(camera_index >= 0)
+
+    camera := &scene.cameras[camera_index]
+    camera_position := scene.transforms[camera_index].position
+    view := camera_view_matrix(camera, camera_position)
 
     proj := perspective_lh(
         alg.to_radians(f32(45)),
@@ -845,7 +858,7 @@ renderer_render_frame :: proc(scene: ^Scene){
             view = view,
             projection = proj,
             light_position = light_position,
-            view_position = g_camera.position,
+            view_position = camera_position,
             light_color = light_color,
         }
 

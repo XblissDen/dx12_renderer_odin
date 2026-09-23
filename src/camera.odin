@@ -5,23 +5,10 @@ import "core:math/linalg"
 import win32 "core:sys/windows"
 
 Camera :: struct {
-    position: linalg.Vector3f32,
     yaw:      f32, // radians
     pitch:    f32,
     speed:    f32,
     sensitivity: f32,
-}
-
-g_camera: Camera
-
-camera_init :: proc(){
-    g_camera = Camera {
-        position    = { 0, 0, -3 },
-        yaw         = math.PI * 0.5, // смотрим вдоль +Z изначально
-        pitch       = 0,
-        speed       = 3.0,           // единиц в секунду
-        sensitivity = 0.003,
-    }
 }
 
 camera_forward :: proc(c: ^Camera) -> linalg.Vector3f32 {
@@ -37,7 +24,7 @@ camera_right :: proc(c: ^Camera) -> linalg.Vector3f32 {
     return linalg.normalize(linalg.cross(camera_forward(c), world_up))
 }
 
-camera_update :: proc(c: ^Camera, dt: f32) {
+camera_update :: proc(c: ^Camera, transform: ^Transform, dt: f32) {
     if !g_cursor_locked{
         return
     }
@@ -64,14 +51,14 @@ camera_update :: proc(c: ^Camera, dt: f32) {
 
     if linalg.length(move) > 0 {
         move = linalg.normalize(move)
-        c.position += move * c.speed * dt
+        transform.position += move * c.speed * dt
     }
 }
 
-camera_view_matrix :: proc(c: ^Camera) -> linalg.Matrix4f32 {
+camera_view_matrix :: proc(c: ^Camera, position: linalg.Vector3f32) -> linalg.Matrix4f32 {
     forward := camera_forward(c)
-    target  := c.position + forward
-    return look_at_lh(c.position, target, { 0, 1, 0 })
+    target  := position + forward
+    return look_at_lh(position, target, { 0, 1, 0 })
 }
 
 key_down :: proc(vkey: i32) -> bool {

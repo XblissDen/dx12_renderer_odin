@@ -6,7 +6,6 @@ import win32 "core:sys/windows"
 main :: proc(){
     window_create()
     window_lock_cursor()
-    camera_init()
     scene_init()
 
     renderer_init()
@@ -33,7 +32,6 @@ main :: proc(){
         }
 
         renderer_resize(g_client_width, g_client_height)
-        camera_update(&g_camera, dt)
         scene_update(&g_scene, dt)
         renderer_render_frame(&g_scene)
     }
