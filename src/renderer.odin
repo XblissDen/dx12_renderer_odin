@@ -13,6 +13,7 @@ import "core:image"
 import "core:image/png"
 
 FRAME_COUNT :: 2
+OBJECT_COUNT :: 3
 
 Vertex :: struct {
     position:   [3]f32,
@@ -62,7 +63,7 @@ Renderer :: struct {
     scissor_rect: d3d12.RECT,
 
     constant_buffer: ^d3d12.IResource,
-    cb_mapped_data: ^SceneConstants,
+    cb_mapped_data: [^]SceneConstants,
 
     depth_buffer: ^d3d12.IResource,
     dsv_heap: ^d3d12.IDescriptorHeap,
@@ -507,7 +508,7 @@ renderer_load_assets :: proc(){
     }
 
     // CONSTANT BUFFER
-    cb_size := u64(size_of(SceneConstants))
+    cb_size := u64(size_of(SceneConstants)) * u64(OBJECT_COUNT)
 
     cb_heap_props := d3d12.HEAP_PROPERTIES{ Type = .UPLOAD }
     cb_desc := d3d12.RESOURCE_DESC{
@@ -809,7 +810,6 @@ renderer_render_frame :: proc(dt: f32){
     dx_check(r.command_list->Reset(allocator, nil))
 
     r.rotation_angle += 0.6 * dt
-    model := alg.matrix4_rotate_f32(r.rotation_angle, {0 , 1, 0})
 
     view := camera_view_matrix(&g_camera)
 
@@ -820,15 +820,27 @@ renderer_render_frame :: proc(dt: f32){
         100.0,
     )
 
-    r.cb_mapped_data.model = model
-    r.cb_mapped_data.view = view
-    r.cb_mapped_data.projection = proj
-
     light_x := math.cos(r.rotation_angle) * 2.0
     light_z := math.sin(r.rotation_angle) * 2.0
-    r.cb_mapped_data.light_position = {light_x, 1.5, light_z}
-    r.cb_mapped_data.view_position = g_camera.position
-    r.cb_mapped_data.light_color = { 1.0, 1.0, 1.0}
+
+    positions := [OBJECT_COUNT]alg.Vector3f32{
+        {-2, 0, 0},
+        { 0, 0, 0},
+        { 2, 0, 0},
+    }
+    rotation := alg.matrix4_rotate_f32(r.rotation_angle, {0 , 1, 0})
+
+    for i in 0..<OBJECT_COUNT{
+        r.cb_mapped_data[i] = SceneConstants{
+            model = alg.transpose(alg.matrix4_translate_f32(positions[i]) * rotation),
+            view = view,
+            projection = proj,
+            light_position = {light_x, 1.5, light_z},
+            view_position = g_camera.position,
+            light_color = {1.0, 1.0, 1.0}
+        }
+    }
+
     //r.cb_mapped_data.model      = alg.MATRIX4F32_IDENTITY
     //r.cb_mapped_data.view       = alg.MATRIX4F32_IDENTITY
     //r.cb_mapped_data.projection = alg.MATRIX4F32_IDENTITY
@@ -867,12 +879,6 @@ renderer_render_frame :: proc(dt: f32){
     heaps := []^d3d12.IDescriptorHeap{ r.srv_heap }
     r.command_list->SetDescriptorHeaps(u32(len(heaps)), raw_data(heaps))
 
-    // CBV slot 0
-    r.command_list->SetGraphicsRootConstantBufferView(
-        0,
-        r.constant_buffer->GetGPUVirtualAddress(),
-    )
-
     // SRV slot 1
     srv_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetGPUDescriptorHandleForHeapStart(&srv_gpu_handle)
@@ -886,9 +892,18 @@ renderer_render_frame :: proc(dt: f32){
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
     r.command_list->IASetVertexBuffers(0, 1, &r.vertex_buffer_view)
     r.command_list->IASetIndexBuffer(&r.index_buffer_view)
-    r.command_list->DrawIndexedInstanced(r.index_count, 1, 0, 0, 0)
+    
     //r.command_list->DrawInstanced(3, 1, 0, 0)
+    for i in 0..<OBJECT_COUNT{
+        cb_offset := u64(i) * u64(size_of(SceneConstants))
 
+        r.command_list->SetGraphicsRootConstantBufferView(
+            0,
+            r.constant_buffer->GetGPUVirtualAddress() + cb_offset,
+        )
+
+        r.command_list->DrawIndexedInstanced(r.index_count, 1, 0, 0, 0)
+    }
 
 
     barrier.Transition.StateBefore = {.RENDER_TARGET}
