@@ -20,6 +20,10 @@ PointLight :: struct{
     orbit_speed: f32,
 }
 
+Material :: struct{
+    tint: [3]f32,
+}
+
 Scene :: struct{
     entity_count: int,
 
@@ -33,6 +37,9 @@ Scene :: struct{
 
     cameras: [MAX_ENTITIES]Camera,
     has_camera: [MAX_ENTITIES]bool,
+
+    materials: [MAX_ENTITIES]Material,
+    has_material: [MAX_ENTITIES]bool,
 }
 
 g_scene: Scene
@@ -67,6 +74,12 @@ scene_add_camera :: proc(scene: ^Scene, entity: Entity, camera: Camera){
     scene.has_camera[index] = true
 }
 
+scene_add_material :: proc(scene: ^Scene, entity: Entity, material: Material){
+    index := int(entity)
+    scene.materials[index] = material
+    scene.has_material[index] = true
+}
+
 scene_init :: proc(){
     positions := [3]alg.Vector3f32{
         {-2, 0, 0},
@@ -74,11 +87,20 @@ scene_init :: proc(){
         {2, 0, 0}
     }
 
-    for position in positions{
+    tints := [3][3]f32{
+        {1.0, 0.35, 0.35},
+        {0.35, 1.0, 0.35},
+        {0.35, 0.55, 1.0},
+    }
+
+    for i in 0..<len(positions){
         entity := scene_create_entity(&g_scene)
 
-        scene_add_transform(&g_scene, entity, Transform{position = position, rotation_speed = 0.6})
+        scene_add_transform(&g_scene, entity, Transform{position = positions[i], rotation_speed = 0.6})
         scene_add_mesh_renderer(&g_scene, entity)
+        scene_add_material(&g_scene, entity, Material{
+            tint = tints[i],
+        })
     }
 
     light_entity := scene_create_entity(&g_scene)

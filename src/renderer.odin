@@ -31,6 +31,8 @@ SceneConstants :: struct #align(256){
     _pad1:          f32,
     light_color:    [3]f32,
     _pad2:          f32,
+    material_tint: [3]f32,
+    _pad3: f32,
 }
 
 Renderer :: struct {
@@ -846,7 +848,7 @@ renderer_render_frame :: proc(scene: ^Scene){
     draw_count := 0
 
     for i in 0..<scene.entity_count{
-        if !scene.has_transform[i] || !scene.has_mesh_renderer[i]{
+        if !scene.has_transform[i] || !scene.has_mesh_renderer[i] || !scene.has_material[i]{
             continue
         }
 
@@ -860,6 +862,7 @@ renderer_render_frame :: proc(scene: ^Scene){
             light_position = light_position,
             view_position = camera_position,
             light_color = light_color,
+            material_tint = scene.materials[i].tint,
         }
 
         draw_count += 1

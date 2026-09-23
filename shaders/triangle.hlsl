@@ -9,6 +9,8 @@ cbuffer SceneConstants : register(b0)
     float    _pad1;
     float3   light_color;
     float    _pad2;
+    float3 material_tint;
+    float  _pad3;
 };
 
 Texture2D    g_texture : register(t0);
@@ -51,7 +53,7 @@ PSInput VSMain(VSInput input)
 
 float4 PSMain(PSInput input) : SV_TARGET
 {
-    float3 albedo = g_texture.Sample(g_sampler, input.texcoord).rgb;
+    float3 albedo = g_texture.Sample(g_sampler, input.texcoord).rgb * material_tint;
 
     float3 N = normalize(input.normal);
     float3 L = normalize(light_position - input.world_pos);
