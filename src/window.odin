@@ -8,6 +8,9 @@ WINDOW_TITLE :: "DX12 Renderer"
 WINDOW_WIDTH :: 1280
 WINDOW_HEIGHT :: 720
 
+g_client_width: u32 = WINDOW_WIDTH
+g_client_height: u32 = WINDOW_HEIGHT
+
 g_hwnd: win32.HWND
 g_running: bool
 
@@ -129,6 +132,9 @@ wparam: win32.WPARAM, lparam: win32.LPARAM) -> win32.LRESULT{
             }
         case win32.WM_KILLFOCUS:
             window_unlock_cursor()
+        case win32.WM_SIZE:
+            g_client_width = u32(u64(lparam) & 0xffff)
+            g_client_height = u32((u64(lparam) >> 16) & 0xffff)
         case win32.WM_KEYDOWN:
             if wparam == win32.VK_ESCAPE{
                 win32.PostQuitMessage(0)

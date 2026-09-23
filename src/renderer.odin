@@ -38,6 +38,9 @@ Renderer :: struct {
     swap_chain: ^dxgi.ISwapChain3,
     command_queue: ^d3d12.ICommandQueue,
 
+    width: u32,
+    height: u32,
+
     rtv_heap: ^d3d12.IDescriptorHeap,
     rtv_descriptor_size: u32,
     render_targets: [FRAME_COUNT]^d3d12.IResource,
@@ -46,7 +49,7 @@ Renderer :: struct {
     command_list: ^d3d12.IGraphicsCommandList,
 
     fence: ^d3d12.IFence,
-    fence_values: [FRAME_COUNT]u64,
+    fence_value: u64,
     fence_event: win32.HANDLE,
 
     root_signature: ^d3d12.IRootSignature,
@@ -86,6 +89,9 @@ dx_check:: proc(hr: win32.HRESULT, loc := #caller_location){
 
 renderer_init :: proc() {
     r := &g_renderer
+
+    r.width = WINDOW_WIDTH
+    r.height = WINDOW_HEIGHT
 
     // DEBUG LAYER
     when ODIN_DEBUG {
@@ -129,8 +135,8 @@ renderer_init :: proc() {
     // SWAP CHAIN
     sc_desc := dxgi.SWAP_CHAIN_DESC1{
         BufferCount = FRAME_COUNT,
-        Width = WINDOW_WIDTH,
-        Height = WINDOW_HEIGHT,
+        Width = r.width,
+        Height = r.height,
         Format = .R8G8B8A8_UNORM,
         BufferUsage = {.RENDER_TARGET_OUTPUT},
         SwapEffect = .FLIP_DISCARD,
@@ -192,7 +198,6 @@ renderer_init :: proc() {
 
     // FENCE
     dx_check(r.device->CreateFence(0, {}, d3d12.IFence_UUID, (^rawptr)(&r.fence)))
-    r.fence_values[r.frame_index] = 1
 
     r.fence_event = win32.CreateEventW(nil, false, false, nil)
     if r.fence_event == nil{
@@ -544,21 +549,23 @@ renderer_load_assets :: proc(){
 renderer_create_depth_buffer :: proc(){
     r := &g_renderer
 
-    dsv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{
-        NumDescriptors = 1,
-        Type = .DSV,
-        Flags = {},
+    if r.dsv_heap == nil {
+        dsv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{
+            NumDescriptors = 1,
+            Type = .DSV,
+            Flags = {},
+        }
+        dx_check(r.device->CreateDescriptorHeap(
+            &dsv_heap_desc,
+            d3d12.IDescriptorHeap_UUID,
+            (^rawptr)(&r.dsv_heap),
+        ))
     }
-    dx_check(r.device->CreateDescriptorHeap(
-        &dsv_heap_desc,
-        d3d12.IDescriptorHeap_UUID,
-        (^rawptr)(&r.dsv_heap),
-    ))
 
     depth_desc := d3d12.RESOURCE_DESC{
         Dimension = .TEXTURE2D,
-        Width = WINDOW_WIDTH,
-        Height = WINDOW_HEIGHT,
+        Width = u64(r.width),
+        Height = r.height,
         DepthOrArraySize = 1,
         MipLevels = 1,
         Format = .D32_FLOAT,
@@ -597,6 +604,53 @@ renderer_create_depth_buffer :: proc(){
         dsv_handle,
     )
 
+}
+
+renderer_resize:: proc(width, height: u32){
+    r := &g_renderer
+
+    if width == 0 || height == 0 || (width == r.width && height == r.height){
+        return
+    }
+
+    renderer_wait_for_gpu()
+
+    for i in 0..<FRAME_COUNT{
+        r.render_targets[i]->Release()
+    }
+    r.depth_buffer->Release()
+
+    dx_check(r.swap_chain->ResizeBuffers(
+        FRAME_COUNT,
+        width,
+        height,
+        .R8G8B8A8_UNORM,
+        {},
+    ))
+
+    r.width = width
+    r.height = height
+    r.frame_index = r.swap_chain->GetCurrentBackBufferIndex()
+
+    rtv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+    r.rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
+
+    for i in 0..<FRAME_COUNT{
+        dx_check(r.swap_chain->GetBuffer(
+            u32(i),
+            d3d12.IResource_UUID,
+            (^rawptr)(&r.render_targets[i]),
+        ))
+        r.device->CreateRenderTargetView(r.render_targets[i], nil, rtv_handle)
+        rtv_handle.ptr += uint(r.rtv_descriptor_size)
+    }
+
+    renderer_create_depth_buffer()
+
+    r.viewport.Width = f32(width)
+    r.viewport.Height = f32(height)
+    r.scissor_rect.right = i32(width)
+    r.scissor_rect.bottom = i32(height)
 }
 
 renderer_load_texture :: proc(){
@@ -761,7 +815,7 @@ renderer_render_frame :: proc(){
 
     proj := perspective_lh(
         alg.to_radians(f32(45)),
-        f32(WINDOW_WIDTH) / f32(WINDOW_HEIGHT),
+        f32(r.width) / f32(r.height),
         0.1,
         100.0,
     )
@@ -854,15 +908,15 @@ renderer_render_frame :: proc(){
 renderer_wait_for_gpu :: proc(){
     r:= &g_renderer
 
-    dx_check(r.command_queue->Signal(r.fence, r.fence_values[r.frame_index]))
+    r.fence_value += 1
+    dx_check(r.command_queue->Signal(r.fence, r.fence_value))
 
-    if r.fence ->GetCompletedValue() < r.fence_values[r.frame_index]{
-        dx_check(r.fence->SetEventOnCompletion(r.fence_values[r.frame_index], r.fence_event))
+    if r.fence ->GetCompletedValue() < r.fence_value{
+        dx_check(r.fence->SetEventOnCompletion(r.fence_value, r.fence_event))
         win32.WaitForSingleObject(r.fence_event, win32.INFINITE)
     }
 
     r.frame_index = r.swap_chain->GetCurrentBackBufferIndex()
-    r.fence_values[r.frame_index] += 1
 }
 
 renderer_destroy :: proc(){
