@@ -7,6 +7,7 @@ main :: proc(){
     window_create()
     window_lock_cursor()
     camera_init()
+    scene_init()
 
     renderer_init()
     renderer_create_depth_buffer()
@@ -33,6 +34,7 @@ main :: proc(){
 
         renderer_resize(g_client_width, g_client_height)
         camera_update(&g_camera, dt)
-        renderer_render_frame(dt)
+        scene_update(&g_scene, dt)
+        renderer_render_frame(&g_scene, dt)
     }
 }

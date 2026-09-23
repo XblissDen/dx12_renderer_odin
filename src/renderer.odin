@@ -13,7 +13,6 @@ import "core:image"
 import "core:image/png"
 
 FRAME_COUNT :: 2
-OBJECT_COUNT :: 3
 
 Vertex :: struct {
     position:   [3]f32,
@@ -508,7 +507,7 @@ renderer_load_assets :: proc(){
     }
 
     // CONSTANT BUFFER
-    cb_size := u64(size_of(SceneConstants)) * u64(OBJECT_COUNT)
+    cb_size := u64(size_of(SceneConstants)) * u64(MAX_ENTITIES)
 
     cb_heap_props := d3d12.HEAP_PROPERTIES{ Type = .UPLOAD }
     cb_desc := d3d12.RESOURCE_DESC{
@@ -802,7 +801,7 @@ renderer_load_texture :: proc(){
 
 }
 
-renderer_render_frame :: proc(dt: f32){
+renderer_render_frame :: proc(scene: ^Scene, dt: f32){
     r := &g_renderer
 
     allocator := r.command_allocators[r.frame_index]
@@ -823,22 +822,26 @@ renderer_render_frame :: proc(dt: f32){
     light_x := math.cos(r.rotation_angle) * 2.0
     light_z := math.sin(r.rotation_angle) * 2.0
 
-    positions := [OBJECT_COUNT]alg.Vector3f32{
-        {-2, 0, 0},
-        { 0, 0, 0},
-        { 2, 0, 0},
-    }
-    rotation := alg.matrix4_rotate_f32(r.rotation_angle, {0 , 1, 0})
+    draw_count := 0
 
-    for i in 0..<OBJECT_COUNT{
-        r.cb_mapped_data[i] = SceneConstants{
-            model = alg.transpose(alg.matrix4_translate_f32(positions[i]) * rotation),
+    for i in 0..<scene.entity_count{
+        if !scene.has_transform[i] || !scene.has_mesh_renderer[i]{
+            continue
+        }
+
+        transform := scene.transforms[i]
+        rotation := alg.matrix4_rotate_f32(transform.rotation, {0, 1, 0})
+
+        r.cb_mapped_data[draw_count] = SceneConstants{
+            model = alg.transpose(alg.matrix4_translate_f32(transform.position) * rotation),
             view = view,
             projection = proj,
             light_position = {light_x, 1.5, light_z},
             view_position = g_camera.position,
             light_color = {1.0, 1.0, 1.0}
         }
+
+        draw_count += 1
     }
 
     //r.cb_mapped_data.model      = alg.MATRIX4F32_IDENTITY
@@ -894,7 +897,7 @@ renderer_render_frame :: proc(dt: f32){
     r.command_list->IASetIndexBuffer(&r.index_buffer_view)
     
     //r.command_list->DrawInstanced(3, 1, 0, 0)
-    for i in 0..<OBJECT_COUNT{
+    for i in 0..<draw_count{
         cb_offset := u64(i) * u64(size_of(SceneConstants))
 
         r.command_list->SetGraphicsRootConstantBufferView(
