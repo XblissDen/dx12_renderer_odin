@@ -74,8 +74,6 @@ Renderer :: struct {
     texture: ^d3d12.IResource,
     srv_heap: ^d3d12.IDescriptorHeap,
 
-    rotation_angle: f32,
-
     frame_index: u32,
 }
 
@@ -801,14 +799,12 @@ renderer_load_texture :: proc(){
 
 }
 
-renderer_render_frame :: proc(scene: ^Scene, dt: f32){
+renderer_render_frame :: proc(scene: ^Scene){
     r := &g_renderer
 
     allocator := r.command_allocators[r.frame_index]
     dx_check(allocator->Reset())
     dx_check(r.command_list->Reset(allocator, nil))
-
-    r.rotation_angle += 0.6 * dt
 
     view := camera_view_matrix(&g_camera)
 
@@ -819,8 +815,20 @@ renderer_render_frame :: proc(scene: ^Scene, dt: f32){
         100.0,
     )
 
-    light_x := math.cos(r.rotation_angle) * 2.0
-    light_z := math.sin(r.rotation_angle) * 2.0
+    light_position: alg.Vector3f32
+    light_color: [3]f32
+    light_found := false
+
+    for i in 0..<scene.entity_count{
+        if scene.has_transform[i] && scene.has_point_light[i]{
+            light_position = scene.transforms[i].position
+            light_color = scene.point_lights[i].color
+            light_found = true
+            break
+        }
+    }
+
+    assert(light_found)
 
     draw_count := 0
 
@@ -836,9 +844,9 @@ renderer_render_frame :: proc(scene: ^Scene, dt: f32){
             model = alg.transpose(alg.matrix4_translate_f32(transform.position) * rotation),
             view = view,
             projection = proj,
-            light_position = {light_x, 1.5, light_z},
+            light_position = light_position,
             view_position = g_camera.position,
-            light_color = {1.0, 1.0, 1.0}
+            light_color = light_color,
         }
 
         draw_count += 1

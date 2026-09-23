@@ -1,6 +1,7 @@
 package main
 
 import alg "core:math/linalg"
+import "core:math"
 
 MAX_ENTITIES :: 16
 
@@ -12,6 +13,13 @@ Transform :: struct{
     rotation_speed: f32,
 }
 
+PointLight :: struct{
+    color: [3]f32,
+    orbit_radius: f32,
+    orbit_angle: f32,
+    orbit_speed: f32,
+}
+
 Scene :: struct{
     entity_count: int,
 
@@ -19,6 +27,9 @@ Scene :: struct{
     has_transform: [MAX_ENTITIES]bool,
 
     has_mesh_renderer: [MAX_ENTITIES]bool,
+
+    point_lights: [MAX_ENTITIES]PointLight,
+    has_point_light: [MAX_ENTITIES]bool,
 }
 
 g_scene: Scene
@@ -41,6 +52,12 @@ scene_add_mesh_renderer:: proc(scene: ^Scene, entity: Entity){
     scene.has_mesh_renderer[int(entity)] = true
 }
 
+scene_add_point_light :: proc(scene: ^Scene, entity: Entity, light: PointLight){
+    index := int(entity)
+    scene.point_lights[index] = light
+    scene.has_point_light[index] = true
+}
+
 scene_init :: proc(){
     positions := [3]alg.Vector3f32{
         {-2, 0, 0},
@@ -54,12 +71,29 @@ scene_init :: proc(){
         scene_add_transform(&g_scene, entity, Transform{position = position, rotation_speed = 0.6})
         scene_add_mesh_renderer(&g_scene, entity)
     }
+
+    light_entity := scene_create_entity(&g_scene)
+
+    scene_add_transform(&g_scene, light_entity, Transform{position = {2, 1.5, 0},})
+    scene_add_point_light(&g_scene, light_entity, PointLight{
+        color = {1, 1, 1},
+        orbit_radius = 2.0,
+        orbit_speed = 0.6,
+    })
 }
 
 scene_update :: proc(scene: ^Scene, dt: f32){
     for i in 0..<scene.entity_count{
         if scene.has_transform[i]{
             scene.transforms[i].rotation += scene.transforms[i]. rotation_speed * dt
+        }
+
+        if scene.has_transform[i] && scene.has_point_light[i]{
+            light := &scene.point_lights[i]
+            light.orbit_angle += light.orbit_speed * dt
+
+            scene.transforms[i].position.x = math.cos(light.orbit_angle) * light.orbit_radius
+            scene.transforms[i].position.z = math.sin(light.orbit_angle) * light.orbit_radius
         }
     }
 }
