@@ -33,6 +33,6 @@ main :: proc(){
 
         renderer_resize(g_client_width, g_client_height)
         camera_update(&g_camera, dt)
-        renderer_render_frame()
+        renderer_render_frame(dt)
     }
 }

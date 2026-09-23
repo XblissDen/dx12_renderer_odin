@@ -38,6 +38,10 @@ camera_right :: proc(c: ^Camera) -> linalg.Vector3f32 {
 }
 
 camera_update :: proc(c: ^Camera, dt: f32) {
+    if !g_cursor_locked{
+        return
+    }
+    
     forward := camera_forward(c)
     right   := camera_right(c)
 

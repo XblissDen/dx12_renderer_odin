@@ -801,14 +801,14 @@ renderer_load_texture :: proc(){
 
 }
 
-renderer_render_frame :: proc(){
+renderer_render_frame :: proc(dt: f32){
     r := &g_renderer
 
     allocator := r.command_allocators[r.frame_index]
     dx_check(allocator->Reset())
     dx_check(r.command_list->Reset(allocator, nil))
 
-    r.rotation_angle += 0.01
+    r.rotation_angle += 0.6 * dt
     model := alg.matrix4_rotate_f32(r.rotation_angle, {0 , 1, 0})
 
     view := camera_view_matrix(&g_camera)
