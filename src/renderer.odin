@@ -24,7 +24,7 @@ GpuPointLight :: struct {
     position: [3]f32,
     _pad0: f32,
     color: [3]f32,
-    _pad1: f32,
+    intensity: f32,
 }
 
 GpuMesh :: struct {
@@ -849,6 +849,7 @@ renderer_render_frame :: proc(scene: ^Scene){
             gpu_lights[light_count] = GpuPointLight{
                 position = scene.transforms[i].position,
                 color = scene.point_lights[i].color,
+                intensity = scene.point_lights[i].intensity,
             }
             light_count += 1
         }

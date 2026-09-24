@@ -28,6 +28,7 @@ Transform :: struct{
 
 PointLight :: struct{
     color: [3]f32,
+    intensity: f32,
     orbit_radius: f32,
     orbit_angle: f32,
     orbit_speed: f32,
@@ -144,6 +145,7 @@ scene_init :: proc(){
     scene_add_transform(&g_scene, light_entity, Transform{position = {2, 1.5, 0},})
     scene_add_point_light(&g_scene, light_entity, PointLight{
         color = {0.9, 0.55, 0.4},
+        intensity = 3.0,
         orbit_radius = 2.0,
         orbit_speed = 0.6,
     })
@@ -156,6 +158,7 @@ scene_init :: proc(){
 
     scene_add_point_light(&g_scene, second_light_entity, PointLight{
         color = {0.3, 0.55, 1.0},
+        intensity = 3.0,
         orbit_radius = 2.0,
         orbit_angle = math.PI,
         orbit_speed = 0.6,

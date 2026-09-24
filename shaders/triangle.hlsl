@@ -5,7 +5,7 @@ struct GpuPointLight
     float3 position;
     float  _pad0;
     float3 color;
-    float  _pad1;
+    float  intensity;
 };
 
 cbuffer SceneConstants : register(b0)
@@ -75,7 +75,13 @@ float4 PSMain(PSInput input) : SV_TARGET
 
     for (uint i = 0; i < light_count; ++i)
     {
-        float3 L = normalize(lights[i].position - input.world_pos);
+        float3 to_light = lights[i].position - input.world_pos;
+        float distance_squared = dot(to_light, to_light);
+
+        // The minimum keeps normalization well-defined at the light's position.
+        float3 L = to_light * rsqrt(max(distance_squared, 0.0001f));
+        float attenuation = lights[i].intensity / (1.0f + distance_squared);
+
         float diffuse = max(dot(N, L), 0.0f);
 
         float3 R = reflect(-L, N);
@@ -85,7 +91,7 @@ float4 PSMain(PSInput input) : SV_TARGET
             specular = pow(max(dot(V, R), 0.0f), 32.0f) * 0.5f;
         }
 
-        result += (diffuse + specular) * lights[i].color * albedo;
+        result += (diffuse + specular) * lights[i].color * albedo * attenuation;
     }
     return float4(result, 1.0f);
 }
