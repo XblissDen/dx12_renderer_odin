@@ -20,6 +20,15 @@ Vertex :: struct {
     texcoord:   [2]f32,
 }
 
+GpuMesh :: struct {
+    vertex_buffer: ^d3d12.IResource,
+    vertex_buffer_view: d3d12.VERTEX_BUFFER_VIEW,
+
+    index_buffer: ^d3d12.IResource,
+    index_buffer_view: d3d12.INDEX_BUFFER_VIEW,
+    index_count: u32,
+}
+
 SceneConstants :: struct #align(256){
     model:          alg.Matrix4f32,
     view:           alg.Matrix4f32,
@@ -57,9 +66,6 @@ Renderer :: struct {
     root_signature: ^d3d12.IRootSignature,
     pipeline_state: ^d3d12.IPipelineState,
 
-    vertex_buffer: ^d3d12.IResource,
-    vertex_buffer_view: d3d12.VERTEX_BUFFER_VIEW,
-
     viewport: d3d12.VIEWPORT,
     scissor_rect: d3d12.RECT,
 
@@ -69,9 +75,7 @@ Renderer :: struct {
     depth_buffer: ^d3d12.IResource,
     dsv_heap: ^d3d12.IDescriptorHeap,
 
-    index_buffer: ^d3d12.IResource,
-    index_buffer_view: d3d12.INDEX_BUFFER_VIEW,
-    index_count: u32,
+    meshes: [MESH_COUNT]GpuMesh,
 
     textures: [TEXTURE_COUNT]^d3d12.IResource,
     srv_heap: ^d3d12.IDescriptorHeap,
@@ -385,126 +389,18 @@ renderer_load_assets :: proc(){
         (^rawptr)(&r.pipeline_state),
     ))
 
-    // Geometry
-    /*vertices := []Vertex {
-        // Front (normal: 0, 0, -1)
-        { position = {-0.5,  0.5, -0.5}, normal = {0, 0, -1}, texcoord = {0, 0} },
-        { position = { 0.5,  0.5, -0.5}, normal = {0, 0, -1}, texcoord = {1, 0} },
-        { position = { 0.5, -0.5, -0.5}, normal = {0, 0, -1}, texcoord = {1, 1} },
-        { position = {-0.5, -0.5, -0.5}, normal = {0, 0, -1}, texcoord = {0, 1} },
-        // Back (normal: 0, 0, 1)
-        { position = { 0.5,  0.5,  0.5}, normal = {0, 0, 1}, texcoord = {0, 0} },
-        { position = {-0.5,  0.5,  0.5}, normal = {0, 0, 1}, texcoord = {1, 0} },
-        { position = {-0.5, -0.5,  0.5}, normal = {0, 0, 1}, texcoord = {1, 1} },
-        { position = { 0.5, -0.5,  0.5}, normal = {0, 0, 1}, texcoord = {0, 1} },
-        // Left (normal: -1, 0, 0)
-        { position = {-0.5,  0.5,  0.5}, normal = {-1, 0, 0}, texcoord = {0, 0} },
-        { position = {-0.5,  0.5, -0.5}, normal = {-1, 0, 0}, texcoord = {1, 0} },
-        { position = {-0.5, -0.5, -0.5}, normal = {-1, 0, 0}, texcoord = {1, 1} },
-        { position = {-0.5, -0.5,  0.5}, normal = {-1, 0, 0}, texcoord = {0, 1} },
-        // Right (normal: 1, 0, 0)
-        { position = { 0.5,  0.5, -0.5}, normal = {1, 0, 0}, texcoord = {0, 0} },
-        { position = { 0.5,  0.5,  0.5}, normal = {1, 0, 0}, texcoord = {1, 0} },
-        { position = { 0.5, -0.5,  0.5}, normal = {1, 0, 0}, texcoord = {1, 1} },
-        { position = { 0.5, -0.5, -0.5}, normal = {1, 0, 0}, texcoord = {0, 1} },
-        // Top (normal: 0, 1, 0)
-        { position = {-0.5,  0.5,  0.5}, normal = {0, 1, 0}, texcoord = {0, 0} },
-        { position = { 0.5,  0.5,  0.5}, normal = {0, 1, 0}, texcoord = {1, 0} },
-        { position = { 0.5,  0.5, -0.5}, normal = {0, 1, 0}, texcoord = {1, 1} },
-        { position = {-0.5,  0.5, -0.5}, normal = {0, 1, 0}, texcoord = {0, 1} },
-        // Bottom (normal: 0, -1, 0)
-        { position = {-0.5, -0.5, -0.5}, normal = {0, -1, 0}, texcoord = {0, 0} },
-        { position = { 0.5, -0.5, -0.5}, normal = {0, -1, 0}, texcoord = {1, 0} },
-        { position = { 0.5, -0.5,  0.5}, normal = {0, -1, 0}, texcoord = {1, 1} },
-        { position = {-0.5, -0.5,  0.5}, normal = {0, -1, 0}, texcoord = {0, 1} },
+    mesh_paths := [MESH_COUNT]string{
+        "models/cube.obj",
+        "models/pyramid.obj",
     }
 
-    indices := []u32 {
-        0,  1,  2,   0,  2,  3, // front
-        4,  5,  6,   4,  6,  7, // back
-        8,  9, 10,   8, 10, 11, // left
-        12, 13, 14,  12, 14, 15, // right
-        16, 17, 18,  16, 18, 19, // top
-        20, 21, 22,  20, 22, 23, // bottom
-    }*/
+    for i in 0..<MESH_COUNT {
+        mesh, ok := mesh_load_obj(mesh_paths[i])
+        if !ok {
+            fmt.panicf("Failed to load mesh: %s", mesh_paths[i])
+        }
 
-    mesh, mesh_ok := mesh_load_obj("models/cube.obj")
-    if !mesh_ok{
-        panic("Failed to load mesh")
-    }
-
-    vertices := mesh.vertices
-    indices := mesh.indices
-    r.index_count = u32(len(indices))
-
-    vb_size := u64(len(vertices) * size_of(Vertex))
-
-    heap_props := d3d12.HEAP_PROPERTIES { Type = .UPLOAD}
-    buf_desc := d3d12.RESOURCE_DESC{
-        Dimension = .BUFFER,
-        Width = vb_size,
-        Height = 1,
-        DepthOrArraySize = 1,
-        MipLevels = 1,
-        SampleDesc = {Count = 1},
-        Layout = .ROW_MAJOR,
-    }
-
-    dx_check(r.device->CreateCommittedResource(
-        &heap_props,
-        {},
-        &buf_desc,
-        { .VERTEX_AND_CONSTANT_BUFFER, .INDEX_BUFFER },
-        nil,
-        d3d12.IResource_UUID,
-        (^rawptr)(&r.vertex_buffer),
-    ))
-
-    mapped: rawptr
-    read_range := d3d12.RANGE {Begin = 0, End = 0}
-    dx_check(r.vertex_buffer->Map(0, &read_range, &mapped))
-    runtime.mem_copy(mapped, raw_data(vertices), int(vb_size))
-    r.vertex_buffer->Unmap(0, nil)
-
-    r.vertex_buffer_view = d3d12.VERTEX_BUFFER_VIEW {
-        BufferLocation = r.vertex_buffer->GetGPUVirtualAddress(),
-        StrideInBytes  = size_of(Vertex),
-        SizeInBytes    = u32(vb_size),
-    }
-
-    // INDEX BUFFER
-    ib_size := u64(len(indices) * size_of(u32))
-
-    ib_heap_props := d3d12.HEAP_PROPERTIES { Type = .UPLOAD }
-    ib_desc := d3d12.RESOURCE_DESC {
-        Dimension        = .BUFFER,
-        Width            = ib_size,
-        Height           = 1,
-        DepthOrArraySize = 1,
-        MipLevels        = 1,
-        SampleDesc       = { Count = 1 },
-        Layout           = .ROW_MAJOR,
-    }
-
-    dx_check(r.device->CreateCommittedResource(
-        &ib_heap_props,
-        {},
-        &ib_desc,
-        { .VERTEX_AND_CONSTANT_BUFFER },
-        nil,
-        d3d12.IResource_UUID,
-        (^rawptr)(&r.index_buffer),
-    ))
-
-    ib_mapped: rawptr
-    dx_check(r.index_buffer->Map(0, nil, &ib_mapped))
-    runtime.mem_copy(ib_mapped, raw_data(indices), int(ib_size))
-    r.index_buffer->Unmap(0, nil)
-
-    r.index_buffer_view = d3d12.INDEX_BUFFER_VIEW {
-        BufferLocation = r.index_buffer->GetGPUVirtualAddress(),
-        Format         = .R32_UINT,
-        SizeInBytes    = u32(ib_size),
+        renderer_upload_mesh(&r.meshes[i], mesh)
     }
 
     // CONSTANT BUFFER
@@ -531,7 +427,7 @@ renderer_load_assets :: proc(){
         (^rawptr)(&r.constant_buffer),
     ))
 
-    read_range = d3d12.RANGE {Begin = 0, End = 0}
+    read_range := d3d12.RANGE {Begin = 0, End = 0}
     dx_check(r.constant_buffer->Map(0, &read_range, (^rawptr)(&r.cb_mapped_data)))
 
     // ── 6. Viewport & Scissor ─────────────────────────────────────────────────
@@ -545,6 +441,78 @@ renderer_load_assets :: proc(){
         right  = WINDOW_WIDTH,
         bottom = WINDOW_HEIGHT,
     }
+}
+
+renderer_upload_mesh :: proc(gpu: ^GpuMesh, mesh: MeshData) {
+    r := &g_renderer
+
+    vb_size := u64(len(mesh.vertices) * size_of(Vertex))
+
+    heap_props := d3d12.HEAP_PROPERTIES{Type = .UPLOAD}
+    vb_desc := d3d12.RESOURCE_DESC{
+        Dimension = .BUFFER,
+        Width = vb_size,
+        Height = 1,
+        DepthOrArraySize = 1,
+        MipLevels = 1,
+        SampleDesc = {Count = 1},
+        Layout = .ROW_MAJOR,
+    }
+
+    dx_check(r.device->CreateCommittedResource(
+        &heap_props,
+        {},
+        &vb_desc,
+        {.VERTEX_AND_CONSTANT_BUFFER, .INDEX_BUFFER},
+        nil,
+        d3d12.IResource_UUID,
+        (^rawptr)(&gpu.vertex_buffer),
+    ))
+
+    mapped: rawptr
+    write_range := d3d12.RANGE{Begin = 0, End = 0}
+    dx_check(gpu.vertex_buffer->Map(0, &write_range, &mapped))
+    runtime.mem_copy(mapped, raw_data(mesh.vertices), int(vb_size))
+    gpu.vertex_buffer->Unmap(0, nil)
+
+    gpu.vertex_buffer_view = d3d12.VERTEX_BUFFER_VIEW{
+        BufferLocation = gpu.vertex_buffer->GetGPUVirtualAddress(),
+        StrideInBytes = size_of(Vertex),
+        SizeInBytes = u32(vb_size),
+    }
+
+    ib_size := u64(len(mesh.indices) * size_of(u32))
+    ib_desc := d3d12.RESOURCE_DESC{
+        Dimension = .BUFFER,
+        Width = ib_size,
+        Height = 1,
+        DepthOrArraySize = 1,
+        MipLevels = 1,
+        SampleDesc = {Count = 1},
+        Layout = .ROW_MAJOR,
+    }
+
+    dx_check(r.device->CreateCommittedResource(
+        &heap_props,
+        {},
+        &ib_desc,
+        {.VERTEX_AND_CONSTANT_BUFFER},
+        nil,
+        d3d12.IResource_UUID,
+        (^rawptr)(&gpu.index_buffer),
+    ))
+
+    dx_check(gpu.index_buffer->Map(0, &write_range, &mapped))
+    runtime.mem_copy(mapped, raw_data(mesh.indices), int(ib_size))
+    gpu.index_buffer->Unmap(0, nil)
+
+    gpu.index_buffer_view = d3d12.INDEX_BUFFER_VIEW{
+        BufferLocation = gpu.index_buffer->GetGPUVirtualAddress(),
+        Format = .R32_UINT,
+        SizeInBytes = u32(ib_size),
+    }
+
+    gpu.index_count = u32(len(mesh.indices))
 }
 
 renderer_create_depth_buffer :: proc(){
@@ -879,6 +847,7 @@ renderer_render_frame :: proc(scene: ^Scene){
 
     draw_count := 0
     draw_textures: [MAX_ENTITIES]Texture_Asset
+    draw_meshes: [MAX_ENTITIES]Mesh_Asset
 
     for i in 0..<scene.entity_count{
         if !scene.has_transform[i] || !scene.has_mesh_renderer[i] || !scene.has_material[i]{
@@ -899,6 +868,7 @@ renderer_render_frame :: proc(scene: ^Scene){
         }
 
         draw_textures[draw_count] = scene.materials[i].texture
+        draw_meshes[draw_count] = scene.mesh_renderers[i].mesh
 
         draw_count += 1
     }
@@ -952,8 +922,6 @@ renderer_render_frame :: proc(scene: ^Scene){
 
     // Geometry
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
-    r.command_list->IASetVertexBuffers(0, 1, &r.vertex_buffer_view)
-    r.command_list->IASetIndexBuffer(&r.index_buffer_view)
     
     //r.command_list->DrawInstanced(3, 1, 0, 0)
     for i in 0..<draw_count{
@@ -973,7 +941,13 @@ renderer_render_frame :: proc(scene: ^Scene){
 
         r.command_list->SetGraphicsRootDescriptorTable(1, srv_gpu_handle)
 
-        r.command_list->DrawIndexedInstanced(r.index_count, 1, 0, 0, 0)
+        mesh_index := int(draw_meshes[i])
+        assert(mesh_index >= 0 && mesh_index < MESH_COUNT)
+
+        gpu_mesh := &r.meshes[mesh_index]
+        r.command_list->IASetVertexBuffers(0, 1, &gpu_mesh.vertex_buffer_view)
+        r.command_list->IASetIndexBuffer(&gpu_mesh.index_buffer_view)
+        r.command_list->DrawIndexedInstanced(gpu_mesh.index_count, 1, 0, 0, 0)
     }
 
 
@@ -1020,15 +994,18 @@ renderer_destroy :: proc(){
     r.swap_chain->Release()
     r.command_queue->Release()
 
-    r.vertex_buffer->Release()
     r.pipeline_state->Release()
     r.root_signature->Release()
 
     r.constant_buffer->Release()
 
-    r.index_buffer->Release()
     r.depth_buffer->Release()
     r.dsv_heap->Release()
+
+    for mesh in r.meshes {
+        mesh.vertex_buffer->Release()
+        mesh.index_buffer->Release()
+    }
 
     for texture in r.textures{
         texture->Release()

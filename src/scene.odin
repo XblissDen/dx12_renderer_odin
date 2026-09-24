@@ -5,10 +5,16 @@ import "core:math"
 
 MAX_ENTITIES :: 16
 TEXTURE_COUNT :: 2
+MESH_COUNT :: 2
 
 Texture_Asset :: enum u32{
     Portrait,
     Checkerboard,
+}
+
+Mesh_Asset :: enum u32 {
+    Cube, 
+    Pyramid,
 }
 
 Entity :: distinct int
@@ -31,12 +37,17 @@ Material :: struct{
     texture: Texture_Asset,
 }
 
+MeshRenderer :: struct {
+    mesh: Mesh_Asset,
+}
+
 Scene :: struct{
     entity_count: int,
 
     transforms: [MAX_ENTITIES]Transform,
     has_transform: [MAX_ENTITIES]bool,
 
+    mesh_renderers: [MAX_ENTITIES]MeshRenderer,
     has_mesh_renderer: [MAX_ENTITIES]bool,
 
     point_lights: [MAX_ENTITIES]PointLight,
@@ -65,8 +76,10 @@ scene_add_transform :: proc(scene: ^Scene, entity: Entity, transform: Transform)
     scene.has_transform[index] = true
 }
 
-scene_add_mesh_renderer:: proc(scene: ^Scene, entity: Entity){
-    scene.has_mesh_renderer[int(entity)] = true
+scene_add_mesh_renderer :: proc(scene: ^Scene, entity: Entity, mesh_renderer: MeshRenderer) {
+    index := int(entity)
+    scene.mesh_renderers[index] = mesh_renderer
+    scene.has_mesh_renderer[index] = true
 }
 
 scene_add_point_light :: proc(scene: ^Scene, entity: Entity, light: PointLight){
@@ -106,11 +119,19 @@ scene_init :: proc(){
         .Portrait,
     }
 
+    meshes := [3]Mesh_Asset{
+        .Cube,
+        .Pyramid,
+        .Cube,
+    }
+
     for i in 0..<len(positions){
         entity := scene_create_entity(&g_scene)
 
         scene_add_transform(&g_scene, entity, Transform{position = positions[i], rotation_speed = 0.6})
-        scene_add_mesh_renderer(&g_scene, entity)
+        scene_add_mesh_renderer(&g_scene, entity, MeshRenderer{
+            mesh = meshes[i],
+        })
         scene_add_material(&g_scene, entity, Material{
             tint = tints[i],
             texture = textures[i],
