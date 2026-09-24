@@ -48,7 +48,8 @@ SceneConstants :: struct #align(256) {
     _pad1: f32,
 
     light_count: u32,
-    _pad2: [3]u32,
+    unlit: u32,
+    _pad2: [2]u32,
 
     lights: [MAX_LIGHTS]GpuPointLight,
 }
@@ -866,14 +867,24 @@ renderer_render_frame :: proc(scene: ^Scene){
 
         transform := scene.transforms[i]
         rotation := alg.matrix4_rotate_f32(transform.rotation, {0, 1, 0})
+        scale := alg.matrix4_scale_f32({
+            transform.scale,
+            transform.scale,
+            transform.scale,
+        })
+        unlit: u32 = 0
+        if scene.materials[i].unlit{
+            unlit = 1
+        }
 
         r.cb_mapped_data[draw_count] = SceneConstants{
-            model = alg.transpose(alg.matrix4_translate_f32(transform.position) * rotation),
+            model = alg.transpose(alg.matrix4_translate_f32(transform.position) * rotation * scale),
             view = view,
             projection = proj,
             view_position = camera_position,
             material_tint = scene.materials[i].tint,
             light_count = u32(light_count),
+            unlit = unlit,
             lights = gpu_lights,
         }
 

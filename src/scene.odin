@@ -24,6 +24,7 @@ Transform :: struct{
     position: alg.Vector3f32,
     rotation: f32,
     rotation_speed: f32,
+    scale: f32,
 }
 
 PointLight :: struct{
@@ -37,6 +38,7 @@ PointLight :: struct{
 Material :: struct{
     tint: [3]f32,
     texture: Texture_Asset,
+    unlit: bool,
 }
 
 MeshRenderer :: struct {
@@ -130,7 +132,7 @@ scene_init :: proc(){
     for i in 0..<len(positions){
         entity := scene_create_entity(&g_scene)
 
-        scene_add_transform(&g_scene, entity, Transform{position = positions[i], rotation_speed = 0.6})
+        scene_add_transform(&g_scene, entity, Transform{position = positions[i], rotation_speed = 0.6, scale = 1.0,})
         scene_add_mesh_renderer(&g_scene, entity, MeshRenderer{
             mesh = meshes[i],
         })
@@ -142,18 +144,27 @@ scene_init :: proc(){
 
     light_entity := scene_create_entity(&g_scene)
 
-    scene_add_transform(&g_scene, light_entity, Transform{position = {2, 1.5, 0},})
+    scene_add_transform(&g_scene, light_entity, Transform{position = {2, 1.5, 0}, scale = 0.2,})
     scene_add_point_light(&g_scene, light_entity, PointLight{
         color = {0.9, 0.55, 0.4},
         intensity = 3.0,
         orbit_radius = 2.0,
         orbit_speed = 0.6,
     })
+    scene_add_mesh_renderer(&g_scene, light_entity, MeshRenderer{
+    mesh = .Cube,
+    })
+    scene_add_material(&g_scene, light_entity, Material{
+        tint = g_scene.point_lights[int(light_entity)].color,
+        texture = .Checkerboard,
+        unlit = true,
+    })
 
     second_light_entity := scene_create_entity(&g_scene)
 
     scene_add_transform(&g_scene, second_light_entity, Transform{
         position = {-2, 1.5, 0},
+        scale = 0.2,
     })
 
     scene_add_point_light(&g_scene, second_light_entity, PointLight{
@@ -164,10 +175,20 @@ scene_init :: proc(){
         orbit_speed = 0.6,
     })
 
+    scene_add_mesh_renderer(&g_scene, second_light_entity, MeshRenderer{
+    mesh = .Cube,
+    })
+    scene_add_material(&g_scene, second_light_entity, Material{
+        tint = g_scene.point_lights[int(second_light_entity)].color,
+        texture = .Checkerboard,
+        unlit = true,
+    })
+
     camera_entity := scene_create_entity(&g_scene)
 
     scene_add_transform(&g_scene, camera_entity, Transform{
         position = {0, 0, -3},
+        scale = 1.0,
     })
 
     scene_add_camera(&g_scene, camera_entity, Camera{

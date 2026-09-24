@@ -21,7 +21,8 @@ cbuffer SceneConstants : register(b0)
     float  _pad1;
 
     uint  light_count;
-    uint3 _pad2;
+    uint  unlit;
+    uint2 _pad2;
 
     GpuPointLight lights[MAX_LIGHTS];
 };
@@ -66,6 +67,10 @@ PSInput VSMain(VSInput input)
 
 float4 PSMain(PSInput input) : SV_TARGET
 {
+    if (unlit != 0)
+    {
+        return float4(material_tint, 1.0f);
+    }
     float3 albedo = g_texture.Sample(g_sampler, input.texcoord).rgb * material_tint;
 
     float3 N = normalize(input.normal);
