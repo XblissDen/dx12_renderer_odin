@@ -73,8 +73,9 @@ Renderer :: struct {
     index_buffer_view: d3d12.INDEX_BUFFER_VIEW,
     index_count: u32,
 
-    texture: ^d3d12.IResource,
+    textures: [TEXTURE_COUNT]^d3d12.IResource,
     srv_heap: ^d3d12.IDescriptorHeap,
+    srv_descriptor_size: u32,
 
     frame_index: u32,
 }
@@ -653,7 +654,28 @@ renderer_resize:: proc(width, height: u32){
     r.scissor_rect.bottom = i32(height)
 }
 
-renderer_load_texture :: proc(){
+renderer_load_textures :: proc(){
+    r := &g_renderer
+
+    srv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{
+        NumDescriptors = TEXTURE_COUNT,
+        Type = .CBV_SRV_UAV,
+        Flags = {.SHADER_VISIBLE},
+    }
+
+    dx_check(r.device->CreateDescriptorHeap(
+        &srv_heap_desc,
+        d3d12.IDescriptorHeap_UUID,
+        (^rawptr)(&r.srv_heap),
+    ))
+
+    r.srv_descriptor_size = r.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV)
+
+    renderer_load_texture(int(Texture_Asset.Portrait))
+    renderer_load_texture(int(Texture_Asset.Checkerboard))
+}
+
+renderer_load_texture :: proc(index: int){
     r := &g_renderer
 
     // LOADING PNG
@@ -674,17 +696,25 @@ renderer_load_texture :: proc(){
     height := u64(img.height)
     pixels := img.pixels.buf[:]
 
-    srv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{
-        NumDescriptors = 1,
-        Type = .CBV_SRV_UAV,
-        Flags = {.SHADER_VISIBLE}
-    }
+    if index == int(Texture_Asset.Checkerboard) {
+        for y in 0..<int(img.height) {
+            for x in 0..<int(img.width) {
+                pixel := (y * int(img.width) + x) * 4
+                light_square := ((x / 32 + y / 32) % 2) == 0
 
-    dx_check(r.device->CreateDescriptorHeap(
-        &srv_heap_desc,
-        d3d12.IDescriptorHeap_UUID,
-        (^rawptr)(&r.srv_heap),
-    ))
+                if light_square {
+                    pixels[pixel + 0] = 240
+                    pixels[pixel + 1] = 240
+                    pixels[pixel + 2] = 240
+                } else {
+                    pixels[pixel + 0] = 35
+                    pixels[pixel + 1] = 55
+                    pixels[pixel + 2] = 100
+                }
+                pixels[pixel + 3] = 255
+            }
+        }
+    }
 
     tex_desc := d3d12.RESOURCE_DESC{
         Dimension = .TEXTURE2D,
@@ -705,7 +735,7 @@ renderer_load_texture :: proc(){
         { .COPY_DEST },
         nil,
         d3d12.IResource_UUID,
-        (^rawptr)(&r.texture),
+        (^rawptr)(&r.textures[index]),
     ))
 
     // UPLOAD BUFFER
@@ -764,7 +794,7 @@ renderer_load_texture :: proc(){
     }
 
     dst_location := d3d12.TEXTURE_COPY_LOCATION{
-        pResource = r.texture,
+        pResource = r.textures[index],
         Type = .SUBRESOURCE_INDEX,
         SubresourceIndex = 0,
     }
@@ -772,7 +802,7 @@ renderer_load_texture :: proc(){
     // Transition: COPY_DEST → SHADER_RESOURCE
     copy_barrier := d3d12.RESOURCE_BARRIER { Type = .TRANSITION }
     copy_barrier.Transition = {
-        pResource   = r.texture,
+        pResource   = r.textures[index],
         StateBefore = { .COPY_DEST },
         StateAfter  = { .PIXEL_SHADER_RESOURCE },
         Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
@@ -797,7 +827,9 @@ renderer_load_texture :: proc(){
 
     srv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv_handle)
-    r.device->CreateShaderResourceView(r.texture, &srv_desc, srv_handle)
+    srv_handle.ptr += uint(index) * uint(r.srv_descriptor_size)
+
+    r.device->CreateShaderResourceView(r.textures[index], &srv_desc, srv_handle)
 
 }
 
@@ -846,6 +878,7 @@ renderer_render_frame :: proc(scene: ^Scene){
     assert(light_found)
 
     draw_count := 0
+    draw_textures: [MAX_ENTITIES]Texture_Asset
 
     for i in 0..<scene.entity_count{
         if !scene.has_transform[i] || !scene.has_mesh_renderer[i] || !scene.has_material[i]{
@@ -864,6 +897,8 @@ renderer_render_frame :: proc(scene: ^Scene){
             light_color = light_color,
             material_tint = scene.materials[i].tint,
         }
+
+        draw_textures[draw_count] = scene.materials[i].texture
 
         draw_count += 1
     }
@@ -907,9 +942,9 @@ renderer_render_frame :: proc(scene: ^Scene){
     r.command_list->SetDescriptorHeaps(u32(len(heaps)), raw_data(heaps))
 
     // SRV slot 1
-    srv_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
-    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&srv_gpu_handle)
-    r.command_list->SetGraphicsRootDescriptorTable(1, srv_gpu_handle)
+    //srv_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
+    //r.srv_heap->GetGPUDescriptorHandleForHeapStart(&srv_gpu_handle)
+    //r.command_list->SetGraphicsRootDescriptorTable(1, srv_gpu_handle)
 
     // viewport, scissor
     r.command_list->RSSetViewports(1, &r.viewport)
@@ -928,6 +963,15 @@ renderer_render_frame :: proc(scene: ^Scene){
             0,
             r.constant_buffer->GetGPUVirtualAddress() + cb_offset,
         )
+
+        texture_index := int(draw_textures[i])
+        assert(texture_index >= 0 && texture_index < TEXTURE_COUNT)
+
+        srv_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
+        r.srv_heap->GetGPUDescriptorHandleForHeapStart(&srv_gpu_handle)
+        srv_gpu_handle.ptr += u64(texture_index) * u64(r.srv_descriptor_size)
+
+        r.command_list->SetGraphicsRootDescriptorTable(1, srv_gpu_handle)
 
         r.command_list->DrawIndexedInstanced(r.index_count, 1, 0, 0, 0)
     }
@@ -986,7 +1030,9 @@ renderer_destroy :: proc(){
     r.depth_buffer->Release()
     r.dsv_heap->Release()
 
-    r.texture->Release()
+    for texture in r.textures{
+        texture->Release()
+    }
     r.srv_heap->Release()
 
     r.device->Release()

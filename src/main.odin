@@ -11,7 +11,7 @@ main :: proc(){
     renderer_init()
     renderer_create_depth_buffer()
     renderer_load_assets()
-    renderer_load_texture()
+    renderer_load_textures()
     defer renderer_destroy()
 
     last_time := time.now()

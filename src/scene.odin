@@ -4,6 +4,12 @@ import alg "core:math/linalg"
 import "core:math"
 
 MAX_ENTITIES :: 16
+TEXTURE_COUNT :: 2
+
+Texture_Asset :: enum u32{
+    Portrait,
+    Checkerboard,
+}
 
 Entity :: distinct int
 
@@ -22,6 +28,7 @@ PointLight :: struct{
 
 Material :: struct{
     tint: [3]f32,
+    texture: Texture_Asset,
 }
 
 Scene :: struct{
@@ -93,6 +100,12 @@ scene_init :: proc(){
         {0.35, 0.55, 1.0},
     }
 
+    textures := [3]Texture_Asset{
+        .Portrait,
+        .Checkerboard,
+        .Portrait,
+    }
+
     for i in 0..<len(positions){
         entity := scene_create_entity(&g_scene)
 
@@ -100,6 +113,7 @@ scene_init :: proc(){
         scene_add_mesh_renderer(&g_scene, entity)
         scene_add_material(&g_scene, entity, Material{
             tint = tints[i],
+            texture = textures[i],
         })
     }
 
