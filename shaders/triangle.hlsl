@@ -1,16 +1,29 @@
+#define MAX_LIGHTS 4
+
+struct GpuPointLight
+{
+    float3 position;
+    float  _pad0;
+    float3 color;
+    float  _pad1;
+};
+
 cbuffer SceneConstants : register(b0)
 {
     float4x4 model;
     float4x4 view;
     float4x4 projection;
-    float3   light_position;
-    float    _pad0;
-    float3   view_position;
-    float    _pad1;
-    float3   light_color;
-    float    _pad2;
+
+    float3 view_position;
+    float  _pad0;
+
     float3 material_tint;
-    float  _pad3;
+    float  _pad1;
+
+    uint  light_count;
+    uint3 _pad2;
+
+    GpuPointLight lights[MAX_LIGHTS];
 };
 
 Texture2D    g_texture : register(t0);
@@ -56,21 +69,23 @@ float4 PSMain(PSInput input) : SV_TARGET
     float3 albedo = g_texture.Sample(g_sampler, input.texcoord).rgb * material_tint;
 
     float3 N = normalize(input.normal);
-    float3 L = normalize(light_position - input.world_pos);
     float3 V = normalize(view_position - input.world_pos);
-    float3 R = reflect(-L, N);
 
-    // Ambient — минимальная базовая подсветка
-    float3 ambient = 0.1f * light_color;
+    float3 result = 0.1f * albedo;
 
-    // Diffuse — прямой свет от источника
-    float diff = max(dot(N, L), 0.0f);
-    float3 diffuse = diff * light_color;
+    for (uint i = 0; i < light_count; ++i)
+    {
+        float3 L = normalize(lights[i].position - input.world_pos);
+        float diffuse = max(dot(N, L), 0.0f);
 
-    // Specular — блик
-    float spec = pow(max(dot(V, R), 0.0f), 32.0f); // 32 — "shininess"
-    float3 specular = spec * light_color * 0.5f;
+        float3 R = reflect(-L, N);
+        float specular = 0.0f;
+        if (diffuse > 0.0f)
+        {
+            specular = pow(max(dot(V, R), 0.0f), 32.0f) * 0.5f;
+        }
 
-    float3 result = (ambient + diffuse + specular) * albedo;
+        result += (diffuse + specular) * lights[i].color * albedo;
+    }
     return float4(result, 1.0f);
 }

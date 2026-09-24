@@ -20,6 +20,13 @@ Vertex :: struct {
     texcoord:   [2]f32,
 }
 
+GpuPointLight :: struct {
+    position: [3]f32,
+    _pad0: f32,
+    color: [3]f32,
+    _pad1: f32,
+}
+
 GpuMesh :: struct {
     vertex_buffer: ^d3d12.IResource,
     vertex_buffer_view: d3d12.VERTEX_BUFFER_VIEW,
@@ -29,19 +36,21 @@ GpuMesh :: struct {
     index_count: u32,
 }
 
-SceneConstants :: struct #align(256){
-    model:          alg.Matrix4f32,
-    view:           alg.Matrix4f32,
-    projection:     alg.Matrix4f32,
+SceneConstants :: struct #align(256) {
+    model: alg.Matrix4f32,
+    view: alg.Matrix4f32,
+    projection: alg.Matrix4f32,
 
-    light_position: [3]f32,
-    _pad0:          f32,
-    view_position:  [3]f32,
-    _pad1:          f32,
-    light_color:    [3]f32,
-    _pad2:          f32,
+    view_position: [3]f32,
+    _pad0: f32,
+
     material_tint: [3]f32,
-    _pad3: f32,
+    _pad1: f32,
+
+    light_count: u32,
+    _pad2: [3]u32,
+
+    lights: [MAX_LIGHTS]GpuPointLight,
 }
 
 Renderer :: struct {
@@ -830,20 +839,20 @@ renderer_render_frame :: proc(scene: ^Scene){
         100.0,
     )
 
-    light_position: alg.Vector3f32
-    light_color: [3]f32
-    light_found := false
+    gpu_lights: [MAX_LIGHTS]GpuPointLight
+    light_count := 0
 
-    for i in 0..<scene.entity_count{
-        if scene.has_transform[i] && scene.has_point_light[i]{
-            light_position = scene.transforms[i].position
-            light_color = scene.point_lights[i].color
-            light_found = true
-            break
+    for i in 0..<scene.entity_count {
+        if scene.has_transform[i] && scene.has_point_light[i] {
+            assert(light_count < MAX_LIGHTS)
+
+            gpu_lights[light_count] = GpuPointLight{
+                position = scene.transforms[i].position,
+                color = scene.point_lights[i].color,
+            }
+            light_count += 1
         }
     }
-
-    assert(light_found)
 
     draw_count := 0
     draw_textures: [MAX_ENTITIES]Texture_Asset
@@ -861,10 +870,10 @@ renderer_render_frame :: proc(scene: ^Scene){
             model = alg.transpose(alg.matrix4_translate_f32(transform.position) * rotation),
             view = view,
             projection = proj,
-            light_position = light_position,
             view_position = camera_position,
-            light_color = light_color,
             material_tint = scene.materials[i].tint,
+            light_count = u32(light_count),
+            lights = gpu_lights,
         }
 
         draw_textures[draw_count] = scene.materials[i].texture

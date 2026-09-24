@@ -6,6 +6,7 @@ import "core:math"
 MAX_ENTITIES :: 16
 TEXTURE_COUNT :: 2
 MESH_COUNT :: 2
+MAX_LIGHTS :: 4
 
 Texture_Asset :: enum u32{
     Portrait,
@@ -108,9 +109,9 @@ scene_init :: proc(){
     }
 
     tints := [3][3]f32{
-        {1.0, 0.35, 0.35},
-        {0.35, 1.0, 0.35},
-        {0.35, 0.55, 1.0},
+        {1.0, 1.0, 1.0},
+        {1.0, 1.0, 1.0},
+        {1.0, 1.0, 1.0},
     }
 
     textures := [3]Texture_Asset{
@@ -142,8 +143,21 @@ scene_init :: proc(){
 
     scene_add_transform(&g_scene, light_entity, Transform{position = {2, 1.5, 0},})
     scene_add_point_light(&g_scene, light_entity, PointLight{
-        color = {1, 1, 1},
+        color = {0.9, 0.55, 0.4},
         orbit_radius = 2.0,
+        orbit_speed = 0.6,
+    })
+
+    second_light_entity := scene_create_entity(&g_scene)
+
+    scene_add_transform(&g_scene, second_light_entity, Transform{
+        position = {-2, 1.5, 0},
+    })
+
+    scene_add_point_light(&g_scene, second_light_entity, PointLight{
+        color = {0.3, 0.55, 1.0},
+        orbit_radius = 2.0,
+        orbit_angle = math.PI,
         orbit_speed = 0.6,
     })
 
