@@ -14,7 +14,7 @@ import "core:image/png"
 
 FRAME_COUNT :: 2
 
-SHADOW_MAP_SIZE :: 1024
+SHADOW_MAP_SIZE :: 2048
 SHADOW_SRV_INDEX  :: TEXTURE_COUNT
 
 Vertex :: struct {

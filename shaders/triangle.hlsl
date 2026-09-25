@@ -123,11 +123,29 @@ float4 PSMain(PSInput input) : SV_TARGET
             shadow_ndc.z >= 0.0f &&
             shadow_ndc.z <= 1.0f)
         {
-            sun_visibility = g_shadow_map.SampleCmpLevelZero(
-                g_shadow_sampler,
-                shadow_uv,
-                shadow_ndc.z - 0.001f
-            );
+            uint shadow_width, shadow_height;
+            g_shadow_map.GetDimensions(shadow_width, shadow_height);
+            float2 texel_size = 1.0f / float2(shadow_width, shadow_height);
+
+            float shadow_bias = 0.001f;
+
+            sun_visibility = 0.0f;
+
+            for (int y = -1; y <= 1; ++y)
+            {
+                for (int x = -1; x <= 1; ++x)
+                {
+                    float2 sample_uv = shadow_uv + float2(x, y) * texel_size;
+
+                    sun_visibility += g_shadow_map.SampleCmpLevelZero(
+                        g_shadow_sampler,
+                        sample_uv,
+                        shadow_ndc.z - shadow_bias
+                    );
+                }
+            }
+
+            sun_visibility /= 9.0f;
         }
     }
 
