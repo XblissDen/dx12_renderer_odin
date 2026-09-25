@@ -30,10 +30,15 @@ cbuffer SceneConstants : register(b0)
     float  _sun_pad0;
     float3 sun_color;
     float  sun_intensity;
+
+    float4 _sun_matrix_pad;
+    float4x4 sun_view_projection;
 };
 
 Texture2D    g_texture : register(t0);
 SamplerState g_sampler : register(s0);
+Texture2D<float> g_shadow_map : register(t1);
+SamplerComparisonState g_shadow_sampler : register(s1);
 
 struct VSInput
 {
@@ -48,6 +53,7 @@ struct PSInput
     float3 world_pos    : TEXCOORD0;
     float3 normal       : NORMAL;
     float2 texcoord     : TEXCOORD1;
+    float4 shadow_position : TEXCOORD2;
 };
 
 PSInput VSMain(VSInput input)
@@ -56,18 +62,23 @@ PSInput VSMain(VSInput input)
 
     float4 world_pos = mul(float4(input.position, 1.0f), model);
     output.world_pos = world_pos.xyz;
+    output.shadow_position = mul(world_pos, sun_view_projection);
 
     float4 pos = world_pos;
     pos = mul(pos, view);
     pos = mul(pos, projection);
     output.position = pos;
 
-    // Нормаль трансформируем матрицей model
-    // (упрощение — для неравномерного масштаба нужна inverse-transpose, но нам пока хватит)
     output.normal = mul(input.normal, (float3x3)model);
     output.texcoord = input.texcoord;
 
     return output;
+}
+
+float4 VSShadow(VSInput input) : SV_POSITION
+{
+    float4 world_pos = mul(float4(input.position, 1.0f), model);
+    return mul(world_pos, sun_view_projection);
 }
 
 float4 PSMain(PSInput input) : SV_TARGET
@@ -95,7 +106,34 @@ float4 PSMain(PSInput input) : SV_TARGET
         sun_specular = pow(max(dot(V, sun_R), 0.0f), 32.0f) * 0.5f;
     }
 
-    result += (sun_diffuse + sun_specular) * sun_color * sun_intensity * albedo;
+    float sun_visibility = 1.0f;
+
+    if (input.shadow_position.w > 0.0f)
+    {
+        float3 shadow_ndc =
+            input.shadow_position.xyz / input.shadow_position.w;
+
+        float2 shadow_uv = float2(
+            shadow_ndc.x * 0.5f + 0.5f,
+            0.5f - shadow_ndc.y * 0.5f
+        );
+
+        if (all(shadow_uv >= 0.0f) &&
+            all(shadow_uv <= 1.0f) &&
+            shadow_ndc.z >= 0.0f &&
+            shadow_ndc.z <= 1.0f)
+        {
+            sun_visibility = g_shadow_map.SampleCmpLevelZero(
+                g_shadow_sampler,
+                shadow_uv,
+                shadow_ndc.z - 0.001f
+            );
+        }
+    }
+
+    result += sun_visibility *
+            (sun_diffuse + sun_specular) *
+            sun_color * sun_intensity * albedo;
 
     // point light
     for (uint i = 0; i < light_count; ++i)

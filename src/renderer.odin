@@ -14,6 +14,9 @@ import "core:image/png"
 
 FRAME_COUNT :: 2
 
+SHADOW_MAP_SIZE :: 1024
+SHADOW_SRV_INDEX  :: TEXTURE_COUNT
+
 Vertex :: struct {
     position:   [3]f32,
     normal:     [3]f32,
@@ -57,6 +60,9 @@ SceneConstants :: struct #align(256) {
     _sun_pad0: f32,
     sun_color: [3]f32,
     sun_intensity: f32,
+
+    _sun_matrix_pad: [4]f32,
+    sun_view_projection : alg.Matrix4f32,
 }
 
 Renderer :: struct {
@@ -95,6 +101,10 @@ Renderer :: struct {
     textures: [TEXTURE_COUNT]^d3d12.IResource,
     srv_heap: ^d3d12.IDescriptorHeap,
     srv_descriptor_size: u32,
+
+    shadow_map: ^d3d12.IResource,
+    shadow_dsv_heap: ^d3d12.IDescriptorHeap,
+    shadow_pipeline_state: ^d3d12.IPipelineState,
 
     frame_index: u32,
 }
@@ -251,6 +261,21 @@ renderer_load_assets :: proc(){
     srv_param.ShaderVisibility = .PIXEL
     srv_param.DescriptorTable = { NumDescriptorRanges = 1, pDescriptorRanges = &srv_range}
 
+    shadow_range := d3d12.DESCRIPTOR_RANGE{
+        RangeType = .SRV,
+        NumDescriptors = 1,
+        BaseShaderRegister = 1,
+        OffsetInDescriptorsFromTableStart = 0,
+    }
+
+    shadow_param := d3d12.ROOT_PARAMETER{}
+    shadow_param.ParameterType = .DESCRIPTOR_TABLE
+    shadow_param.ShaderVisibility = .PIXEL
+    shadow_param.DescriptorTable = {
+        NumDescriptorRanges = 1,
+        pDescriptorRanges = &shadow_range,
+    }
+
     static_sampler := d3d12.STATIC_SAMPLER_DESC{
         Filter = .MIN_MAG_MIP_LINEAR,
         AddressU = .WRAP,
@@ -260,13 +285,25 @@ renderer_load_assets :: proc(){
         ShaderVisibility = .PIXEL,
     }
 
-    params := []d3d12.ROOT_PARAMETER{cbv_param, srv_param}
+    shadow_sampler := d3d12.STATIC_SAMPLER_DESC{
+        Filter = .COMPARISON_MIN_MAG_LINEAR_MIP_POINT,
+        AddressU = .BORDER,
+        AddressV = .BORDER,
+        AddressW = .BORDER,
+        ComparisonFunc = .LESS_EQUAL,
+        BorderColor = .OPAQUE_WHITE,
+        ShaderRegister = 1,
+        ShaderVisibility = .PIXEL,
+    }
+
+    params := []d3d12.ROOT_PARAMETER{cbv_param, srv_param, shadow_param}
+    samplers := []d3d12.STATIC_SAMPLER_DESC{static_sampler, shadow_sampler}
 
     rs_desc := d3d12.ROOT_SIGNATURE_DESC{
         NumParameters = u32(len(params)),
         pParameters = raw_data(params),
-        NumStaticSamplers = 1,
-        pStaticSamplers = &static_sampler,
+        NumStaticSamplers = u32(len(samplers)),
+        pStaticSamplers = raw_data(samplers),
         Flags = { .ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT },
     }
 
@@ -319,6 +356,21 @@ renderer_load_assets :: proc(){
     }
     dx_check(hr)
     defer ps->Release()
+
+    shadow_vs, shadow_errors: ^d3d12.IBlob
+
+    hr = d3dc.CompileFromFile(
+        shader_path, nil, nil,
+        "VSShadow", "vs_5_1",
+        compile_flags, 0,
+        &shadow_vs, &shadow_errors,
+    )
+    if shadow_errors != nil {
+        fmt.println("Shadow VS errors:", cstring(shadow_errors->GetBufferPointer()))
+        shadow_errors->Release()
+    }
+    dx_check(hr)
+    defer shadow_vs->Release()
 
     // INPUT LAYOUT
     input_layout := []d3d12.INPUT_ELEMENT_DESC {
@@ -402,6 +454,23 @@ renderer_load_assets :: proc(){
         &pso_desc,
         d3d12.IPipelineState_UUID,
         (^rawptr)(&r.pipeline_state),
+    ))
+
+    shadow_pso_desc := pso_desc
+    shadow_pso_desc.VS = {
+        pShaderBytecode = shadow_vs->GetBufferPointer(),
+        BytecodeLength = shadow_vs->GetBufferSize(),
+    }
+    shadow_pso_desc.PS = {}
+    shadow_pso_desc.NumRenderTargets = 0
+    shadow_pso_desc.RTVFormats[0] = .UNKNOWN
+    shadow_pso_desc.RasterizerState.DepthBias = 100
+    shadow_pso_desc.RasterizerState.SlopeScaledDepthBias = 1.0
+
+    dx_check(r.device->CreateGraphicsPipelineState(
+        &shadow_pso_desc,
+        d3d12.IPipelineState_UUID,
+        (^rawptr)(&r.shadow_pipeline_state),
     ))
 
     mesh_paths := [MESH_COUNT]string{
@@ -641,7 +710,7 @@ renderer_load_textures :: proc(){
     r := &g_renderer
 
     srv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{
-        NumDescriptors = TEXTURE_COUNT,
+        NumDescriptors = TEXTURE_COUNT + 1,
         Type = .CBV_SRV_UAV,
         Flags = {.SHADER_VISIBLE},
     }
@@ -656,6 +725,65 @@ renderer_load_textures :: proc(){
 
     renderer_load_texture(int(Texture_Asset.Portrait))
     renderer_load_texture(int(Texture_Asset.Checkerboard))
+}
+
+renderer_create_shadow_map :: proc() {
+    r := &g_renderer
+
+    heap_props := d3d12.HEAP_PROPERTIES{Type = .DEFAULT}
+    shadow_desc := d3d12.RESOURCE_DESC{
+        Dimension = .TEXTURE2D,
+        Width = SHADOW_MAP_SIZE,
+        Height = SHADOW_MAP_SIZE,
+        DepthOrArraySize = 1,
+        MipLevels = 1,
+        Format = .R32_TYPELESS,
+        SampleDesc = {Count = 1},
+        Flags = {.ALLOW_DEPTH_STENCIL},
+    }
+
+    clear_value := d3d12.CLEAR_VALUE{Format = .D32_FLOAT}
+    clear_value.DepthStencil = {Depth = 1.0, Stencil = 0}
+
+    dx_check(r.device->CreateCommittedResource(
+        &heap_props,
+        {},
+        &shadow_desc,
+        {.PIXEL_SHADER_RESOURCE},
+        &clear_value,
+        d3d12.IResource_UUID,
+        (^rawptr)(&r.shadow_map),
+    ))
+
+    dsv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{
+        NumDescriptors = 1,
+        Type = .DSV,
+    }
+    dx_check(r.device->CreateDescriptorHeap(
+        &dsv_heap_desc,
+        d3d12.IDescriptorHeap_UUID,
+        (^rawptr)(&r.shadow_dsv_heap),
+    ))
+
+    shadow_dsv := d3d12.DEPTH_STENCIL_VIEW_DESC{
+        Format = .D32_FLOAT,
+        ViewDimension = .TEXTURE2D,
+    }
+    dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+    r.shadow_dsv_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle)
+    r.device->CreateDepthStencilView(r.shadow_map, &shadow_dsv, dsv_handle)
+
+    shadow_srv := d3d12.SHADER_RESOURCE_VIEW_DESC{
+        Format = .R32_FLOAT,
+        ViewDimension = .TEXTURE2D,
+        Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
+    }
+    shadow_srv.Texture2D = {MipLevels = 1}
+
+    srv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+    r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv_handle)
+    srv_handle.ptr += uint(SHADOW_SRV_INDEX) * uint(r.srv_descriptor_size)
+    r.device->CreateShaderResourceView(r.shadow_map, &shadow_srv, srv_handle)
 }
 
 renderer_load_texture :: proc(index: int){
@@ -874,6 +1002,11 @@ renderer_render_frame :: proc(scene: ^Scene){
 
     assert(sun_found)
 
+    sun_eye := -sun.direction * 12.0
+    sun_view := look_at_lh(sun_eye, {0,0,0}, {0, 1, 0})
+    sun_projection := orthographic_lh(-8, 8, -8, 8, 0.1, 30.0)
+    sun_view_projection := sun_view * sun_projection
+
     draw_count := 0
     draw_textures: [MAX_ENTITIES]Texture_Asset
     draw_meshes: [MAX_ENTITIES]Mesh_Asset
@@ -907,6 +1040,7 @@ renderer_render_frame :: proc(scene: ^Scene){
             sun_direction = sun.direction,
             sun_color = sun.color,
             sun_intensity = sun.intensity,
+            sun_view_projection = sun_view_projection,
         }
 
         draw_textures[draw_count] = scene.materials[i].texture
@@ -915,9 +1049,65 @@ renderer_render_frame :: proc(scene: ^Scene){
         draw_count += 1
     }
 
-    //r.cb_mapped_data.model      = alg.MATRIX4F32_IDENTITY
-    //r.cb_mapped_data.view       = alg.MATRIX4F32_IDENTITY
-    //r.cb_mapped_data.projection = alg.MATRIX4F32_IDENTITY
+    shadow_barrier := d3d12.RESOURCE_BARRIER {Type = .TRANSITION}
+    shadow_barrier.Transition = {
+        pResource = r.shadow_map,
+        StateBefore = {.PIXEL_SHADER_RESOURCE},
+        StateAfter = {.DEPTH_WRITE},
+        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+    }
+    r.command_list->ResourceBarrier(1, &shadow_barrier)
+
+    shadow_dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+    r.shadow_dsv_heap->GetCPUDescriptorHandleForHeapStart(&shadow_dsv_handle)
+
+    r.command_list->OMSetRenderTargets(0, nil, false, &shadow_dsv_handle)
+    r.command_list->ClearDepthStencilView(
+        shadow_dsv_handle, {.DEPTH}, 1.0, 0, 0, nil,
+    )
+
+    shadow_viewport := d3d12.VIEWPORT{
+        Width = SHADOW_MAP_SIZE,
+        Height = SHADOW_MAP_SIZE,
+        MinDepth = 0,
+        MaxDepth = 1,
+    }
+
+    shadow_scissor := d3d12.RECT{
+        right = SHADOW_MAP_SIZE,
+        bottom = SHADOW_MAP_SIZE,
+    }
+
+    r.command_list->RSSetViewports(1, &shadow_viewport)
+    r.command_list->RSSetScissorRects(1, &shadow_scissor)
+    r.command_list->SetGraphicsRootSignature(r.root_signature)
+    r.command_list->SetPipelineState(r.shadow_pipeline_state)
+    r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
+
+    for i in 0..<draw_count {
+        // Light-marker cubes are debugging visuals, not shadow casters.
+        if r.cb_mapped_data[i].unlit != 0 {
+            continue
+        }
+
+        cb_offset := u64(i) * u64(size_of(SceneConstants))
+        r.command_list->SetGraphicsRootConstantBufferView(
+            0,
+            r.constant_buffer->GetGPUVirtualAddress() + cb_offset,
+        )
+
+        mesh_index := int(draw_meshes[i])
+        assert(mesh_index >= 0 && mesh_index < MESH_COUNT)
+        gpu_mesh := &r.meshes[mesh_index]
+
+        r.command_list->IASetVertexBuffers(0, 1, &gpu_mesh.vertex_buffer_view)
+        r.command_list->IASetIndexBuffer(&gpu_mesh.index_buffer_view)
+        r.command_list->DrawIndexedInstanced(gpu_mesh.index_count, 1, 0, 0, 0)
+    }
+
+    shadow_barrier.Transition.StateBefore = {.DEPTH_WRITE}
+    shadow_barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
+    r.command_list->ResourceBarrier(1, &shadow_barrier)
 
     barrier := d3d12.RESOURCE_BARRIER{
         Type = .TRANSITION,
@@ -949,14 +1139,14 @@ renderer_render_frame :: proc(scene: ^Scene){
     r.command_list->SetGraphicsRootSignature(r.root_signature)
     r.command_list->SetPipelineState(r.pipeline_state)
 
-    // Привязываем heap с текстурой — обязательно до draw call
+    // heap + texture bind
     heaps := []^d3d12.IDescriptorHeap{ r.srv_heap }
     r.command_list->SetDescriptorHeaps(u32(len(heaps)), raw_data(heaps))
 
-    // SRV slot 1
-    //srv_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
-    //r.srv_heap->GetGPUDescriptorHandleForHeapStart(&srv_gpu_handle)
-    //r.command_list->SetGraphicsRootDescriptorTable(1, srv_gpu_handle)
+    shadow_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
+    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&shadow_gpu_handle)
+    shadow_gpu_handle.ptr += u64(SHADOW_SRV_INDEX) * u64(r.srv_descriptor_size)
+    r.command_list->SetGraphicsRootDescriptorTable(2, shadow_gpu_handle)
 
     // viewport, scissor
     r.command_list->RSSetViewports(1, &r.viewport)
@@ -1054,6 +1244,10 @@ renderer_destroy :: proc(){
     }
     r.srv_heap->Release()
 
+    r.shadow_pipeline_state->Release()
+    r.shadow_map->Release()
+    r.shadow_dsv_heap->Release()
+
     r.device->Release()
 }
 
@@ -1078,5 +1272,17 @@ look_at_lh :: proc(eye, centre, up: alg.Vector3f32) -> alg.Matrix4f32 {
         r.y, u.y, f.y, 0,
         r.z, u.z, f.z, 0,
         -alg.dot(r, eye), -alg.dot(u, eye), -alg.dot(f, eye), 1,
+    }
+}
+
+orthographic_lh :: proc(left, right, bottom, top, near, far: f32) -> alg.Matrix4f32 {
+    return {
+        2 / (right - left), 0, 0, 0,
+        0, 2 / (top - bottom), 0, 0,
+        0, 0, 1 / (far - near), 0,
+        -(right + left) / (right - left),
+        -(top + bottom) / (top - bottom),
+        -near / (far - near),
+        1,
     }
 }

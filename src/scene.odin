@@ -178,7 +178,7 @@ scene_init :: proc(){
     sun_entity := scene_create_entity(&g_scene)
 
     scene_add_directional_light(&g_scene, sun_entity, DirectionalLight{
-        direction = alg.normalize(alg.Vector3f32{0.6, -1.0, 0.4}),
+        direction = alg.normalize(alg.Vector3f32{0.6, -0.5, 0.4}),
         color = {1.0, 0.95, 0.85},
         intensity = 0.8,
     })
