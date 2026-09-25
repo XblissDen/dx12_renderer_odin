@@ -35,6 +35,12 @@ PointLight :: struct{
     orbit_speed: f32,
 }
 
+DirectionalLight :: struct{
+    direction: alg.Vector3f32,
+    color: [3]f32,
+    intensity: f32,
+}
+
 Material :: struct{
     tint: [3]f32,
     texture: Texture_Asset,
@@ -62,6 +68,9 @@ Scene :: struct{
 
     materials: [MAX_ENTITIES]Material,
     has_material: [MAX_ENTITIES]bool,
+
+    directional_lights: [MAX_ENTITIES]DirectionalLight,
+    has_directional_light: [MAX_ENTITIES]bool,
 }
 
 g_scene: Scene
@@ -90,6 +99,16 @@ scene_add_point_light :: proc(scene: ^Scene, entity: Entity, light: PointLight){
     index := int(entity)
     scene.point_lights[index] = light
     scene.has_point_light[index] = true
+}
+
+scene_add_directional_light :: proc(
+    scene: ^Scene,
+    entity: Entity,
+    light: DirectionalLight,
+) {
+    index := int(entity)
+    scene.directional_lights[index] = light
+    scene.has_directional_light[index] = true
 }
 
 scene_add_camera :: proc(scene: ^Scene, entity: Entity, camera: Camera){
@@ -141,6 +160,28 @@ scene_init :: proc(){
             texture = textures[i],
         })
     }
+
+    ground_entity := scene_create_entity(&g_scene)
+
+    scene_add_transform(&g_scene, ground_entity, Transform{
+        position = {0, -4.5, 0},
+        scale = 8.0,
+    })
+    scene_add_mesh_renderer(&g_scene, ground_entity, MeshRenderer{
+        mesh = .Cube,
+    })
+    scene_add_material(&g_scene, ground_entity, Material{
+        tint = {0.65, 0.65, 0.65},
+        texture = .Checkerboard,
+    })
+
+    sun_entity := scene_create_entity(&g_scene)
+
+    scene_add_directional_light(&g_scene, sun_entity, DirectionalLight{
+        direction = alg.normalize(alg.Vector3f32{0.6, -1.0, 0.4}),
+        color = {1.0, 0.95, 0.85},
+        intensity = 0.8,
+    })
 
     light_entity := scene_create_entity(&g_scene)
 

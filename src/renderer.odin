@@ -52,6 +52,11 @@ SceneConstants :: struct #align(256) {
     _pad2: [2]u32,
 
     lights: [MAX_LIGHTS]GpuPointLight,
+
+    sun_direction: [3]f32,
+    _sun_pad0: f32,
+    sun_color: [3]f32,
+    sun_intensity: f32,
 }
 
 Renderer :: struct {
@@ -856,6 +861,19 @@ renderer_render_frame :: proc(scene: ^Scene){
         }
     }
 
+    sun: DirectionalLight
+    sun_found := false
+
+    for i in 0..<scene.entity_count {
+        if scene.has_directional_light[i] {
+            sun = scene.directional_lights[i]
+            sun_found = true
+            break
+        }
+    }
+
+    assert(sun_found)
+
     draw_count := 0
     draw_textures: [MAX_ENTITIES]Texture_Asset
     draw_meshes: [MAX_ENTITIES]Mesh_Asset
@@ -886,6 +904,9 @@ renderer_render_frame :: proc(scene: ^Scene){
             light_count = u32(light_count),
             unlit = unlit,
             lights = gpu_lights,
+            sun_direction = sun.direction,
+            sun_color = sun.color,
+            sun_intensity = sun.intensity,
         }
 
         draw_textures[draw_count] = scene.materials[i].texture

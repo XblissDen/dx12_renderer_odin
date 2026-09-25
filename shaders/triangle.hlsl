@@ -25,6 +25,11 @@ cbuffer SceneConstants : register(b0)
     uint2 _pad2;
 
     GpuPointLight lights[MAX_LIGHTS];
+
+    float3 sun_direction;
+    float  _sun_pad0;
+    float3 sun_color;
+    float  sun_intensity;
 };
 
 Texture2D    g_texture : register(t0);
@@ -76,8 +81,23 @@ float4 PSMain(PSInput input) : SV_TARGET
     float3 N = normalize(input.normal);
     float3 V = normalize(view_position - input.world_pos);
 
+    // ambient light
     float3 result = 0.1f * albedo;
 
+    // directional light
+    float3 sun_L = normalize(-sun_direction);
+    float sun_diffuse = max(dot(N, sun_L), 0.0f);
+
+    float sun_specular = 0.0f;
+    if (sun_diffuse > 0.0f)
+    {
+        float3 sun_R = reflect(-sun_L, N);
+        sun_specular = pow(max(dot(V, sun_R), 0.0f), 32.0f) * 0.5f;
+    }
+
+    result += (sun_diffuse + sun_specular) * sun_color * sun_intensity * albedo;
+
+    // point light
     for (uint i = 0; i < light_count; ++i)
     {
         float3 to_light = lights[i].position - input.world_pos;
