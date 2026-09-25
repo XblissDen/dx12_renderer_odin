@@ -45,6 +45,8 @@ Material :: struct{
     tint: [3]f32,
     texture: Texture_Asset,
     unlit: bool,
+    roughness: f32,
+    metallic: f32,
 }
 
 MeshRenderer :: struct {
@@ -148,6 +150,9 @@ scene_init :: proc(){
         .Cube,
     }
 
+    roughnesses := [3]f32{0.85, 0.28, 0.15}
+    metallics   := [3]f32{0.0, 0.75, 0.0}
+
     for i in 0..<len(positions){
         entity := scene_create_entity(&g_scene)
 
@@ -158,6 +163,8 @@ scene_init :: proc(){
         scene_add_material(&g_scene, entity, Material{
             tint = tints[i],
             texture = textures[i],
+            roughness = roughnesses[i],
+            metallic = metallics[i],
         })
     }
 
@@ -173,6 +180,8 @@ scene_init :: proc(){
     scene_add_material(&g_scene, ground_entity, Material{
         tint = {0.65, 0.65, 0.65},
         texture = .Checkerboard,
+        roughness = 0.9,
+        metallic = 0.0,
     })
 
     sun_entity := scene_create_entity(&g_scene)

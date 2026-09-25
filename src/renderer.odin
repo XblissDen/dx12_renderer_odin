@@ -52,7 +52,8 @@ SceneConstants :: struct #align(256) {
 
     light_count: u32,
     unlit: u32,
-    _pad2: [2]u32,
+    roughness: f32,
+    metallic: f32,
 
     lights: [MAX_LIGHTS]GpuPointLight,
 
@@ -1041,6 +1042,8 @@ renderer_render_frame :: proc(scene: ^Scene){
             sun_color = sun.color,
             sun_intensity = sun.intensity,
             sun_view_projection = sun_view_projection,
+            roughness = scene.materials[i].roughness,
+            metallic = scene.materials[i].metallic,
         }
 
         draw_textures[draw_count] = scene.materials[i].texture

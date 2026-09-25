@@ -22,7 +22,8 @@ cbuffer SceneConstants : register(b0)
 
     uint  light_count;
     uint  unlit;
-    uint2 _pad2;
+    float roughness;
+    float metallic;
 
     GpuPointLight lights[MAX_LIGHTS];
 
@@ -81,30 +82,89 @@ float4 VSShadow(VSInput input) : SV_POSITION
     return mul(world_pos, sun_view_projection);
 }
 
+static const float PI = 3.14159265f;
+
+float3 FresnelSchlick(float cos_theta, float3 F0)
+{
+    return F0 + (1.0f - F0) * pow(1.0f - saturate(cos_theta), 5.0f);
+}
+
+float DistributionGGX(float3 N, float3 H, float material_roughness)
+{
+    float a = material_roughness * material_roughness;
+    float a2 = a * a;
+    float NdotH = max(dot(N, H), 0.0f);
+
+    float denominator = NdotH * NdotH * (a2 - 1.0f) + 1.0f;
+    return a2 / max(PI * denominator * denominator, 0.000000001f);
+}
+
+float GeometrySchlickGGX(float NdotV, float material_roughness)
+{
+    float r = material_roughness + 1.0f;
+    float k = (r * r) / 8.0f;
+
+    return NdotV / (NdotV * (1.0f - k) + k);
+}
+
+float GeometrySmith(float3 N, float3 V, float3 L, float material_roughness)
+{
+    float NdotV = max(dot(N, V), 0.0f);
+    float NdotL = max(dot(N, L), 0.0f);
+
+    return GeometrySchlickGGX(NdotV, material_roughness) *
+           GeometrySchlickGGX(NdotL, material_roughness);
+}
+
+float3 EvaluateDirectLight(
+    float3 N,
+    float3 V,
+    float3 L,
+    float3 albedo,
+    float material_roughness,
+    float material_metallic,
+    float3 radiance
+)
+{
+    float NdotL = max(dot(N, L), 0.0f);
+    float NdotV = max(dot(N, V), 0.0f);
+
+    float3 halfway = V + L;
+    float3 H = halfway * rsqrt(max(dot(halfway, halfway), 0.00000001f));
+
+    float3 F0 = lerp(float3(0.04f, 0.04f, 0.04f), albedo, material_metallic);
+
+    float3 F = FresnelSchlick(max(dot(H, V), 0.0f), F0);
+    float D = DistributionGGX(N, H, material_roughness);
+    float G = GeometrySmith(N, V, L, material_roughness);
+
+    float3 specular = (D * G * F) / max(4.0f * NdotV * NdotL, 0.0001f);
+    float3 diffuse = (1.0f - F) * (1.0f - material_metallic) * albedo / PI;
+
+    return (diffuse + specular) * radiance * NdotL * step(0.00001f, NdotV);
+}
+
 float4 PSMain(PSInput input) : SV_TARGET
 {
     if (unlit != 0)
     {
-        return float4(material_tint, 1.0f);
+        float3 marker_color = pow(saturate(material_tint), 1.0f / 2.2f);
+        return float4(marker_color, 1.0f);
     }
-    float3 albedo = g_texture.Sample(g_sampler, input.texcoord).rgb * material_tint;
+
+    // Our texture SRV is UNORM, so decode its sRGB-style image values manually.
+    float3 texture_color = g_texture.Sample(g_sampler, input.texcoord).rgb;
+    float3 albedo = pow(saturate(texture_color), 2.2f) * material_tint;
+
+    float material_roughness = clamp(roughness, 0.08f, 1.0f);
+    float material_metallic = saturate(metallic);
 
     float3 N = normalize(input.normal);
     float3 V = normalize(view_position - input.world_pos);
-
-    // ambient light
-    float3 result = 0.1f * albedo;
-
-    // directional light
     float3 sun_L = normalize(-sun_direction);
-    float sun_diffuse = max(dot(N, sun_L), 0.0f);
 
-    float sun_specular = 0.0f;
-    if (sun_diffuse > 0.0f)
-    {
-        float3 sun_R = reflect(-sun_L, N);
-        sun_specular = pow(max(dot(V, sun_R), 0.0f), 32.0f) * 0.5f;
-    }
+    // A small placeholder for indirect/environment lighting.
+    float3 result = 0.03f * albedo;
 
     float sun_visibility = 1.0f;
 
@@ -149,30 +209,32 @@ float4 PSMain(PSInput input) : SV_TARGET
         }
     }
 
-    result += sun_visibility *
-            (sun_diffuse + sun_specular) *
-            sun_color * sun_intensity * albedo;
+    float3 sun_radiance = sun_color * sun_intensity * sun_visibility;
+    result += EvaluateDirectLight(
+        N, V, sun_L, albedo,
+        material_roughness, material_metallic,
+        sun_radiance
+    );
 
-    // point light
     for (uint i = 0; i < light_count; ++i)
     {
         float3 to_light = lights[i].position - input.world_pos;
         float distance_squared = dot(to_light, to_light);
-
-        // The minimum keeps normalization well-defined at the light's position.
         float3 L = to_light * rsqrt(max(distance_squared, 0.0001f));
+
         float attenuation = lights[i].intensity / (1.0f + distance_squared);
+        float3 radiance = lights[i].color * attenuation;
 
-        float diffuse = max(dot(N, L), 0.0f);
-
-        float3 R = reflect(-L, N);
-        float specular = 0.0f;
-        if (diffuse > 0.0f)
-        {
-            specular = pow(max(dot(V, R), 0.0f), 32.0f) * 0.5f;
-        }
-
-        result += (diffuse + specular) * lights[i].color * albedo * attenuation;
+        result += EvaluateDirectLight(
+            N, V, L, albedo,
+            material_roughness, material_metallic,
+            radiance
+        );
     }
+
+    // Simple tone mapping, followed by conversion for the UNORM back buffer.
+    result = result / (result + 1.0f);
+    result = pow(saturate(result), 1.0f / 2.2f);
+
     return float4(result, 1.0f);
 }
