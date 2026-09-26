@@ -148,7 +148,7 @@ float4 PSMain(PSInput input) : SV_TARGET
 {
     if (unlit != 0)
     {
-        return float4(material_tint, 1.0f);
+        return float4(material_tint * 4.0f, 1.0f);
     }
 
     // Our texture SRV is UNORM, so decode its sRGB-style image values manually.

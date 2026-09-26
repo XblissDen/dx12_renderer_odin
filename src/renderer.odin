@@ -18,6 +18,9 @@ SHADOW_MAP_SIZE :: 2048
 SHADOW_SRV_INDEX  :: TEXTURE_COUNT
 HDR_SRV_INDEX  :: TEXTURE_COUNT + 1
 
+BLOOM_TARGET_COUNT :: 2
+BLOOM_SRV_START :: HDR_SRV_INDEX + 1
+
 Vertex :: struct {
     position:   [3]f32,
     normal:     [3]f32,
@@ -112,6 +115,12 @@ Renderer :: struct {
 
     hdr_pipeline_state: ^d3d12.IPipelineState,
     post_pipeline_state: ^d3d12.IPipelineState,
+
+    bloom_targets: [BLOOM_TARGET_COUNT]^d3d12.IResource,
+    bloom_rtv_heap: ^d3d12.IDescriptorHeap,
+
+    // Extract, horizontal blur, vertical blur.
+    bloom_pipeline_states: [3]^d3d12.IPipelineState,
 
     frame_index: u32,
 }
@@ -414,6 +423,37 @@ renderer_load_assets :: proc(){
     dx_check(hr)
     defer post_ps->Release()
 
+    // BLOOM
+    bloom_entries := [3]cstring{
+        "PSExtract",
+        "PSBlurHorizontal",
+        "PSBlurVertical",
+    }
+    bloom_ps: [3]^d3d12.IBlob
+
+    for i in 0..<len(bloom_entries) {
+        bloom_errors: ^d3d12.IBlob
+
+        hr = d3dc.CompileFromFile(
+            post_shader_path, nil, nil,
+            bloom_entries[i], "ps_5_1",
+            compile_flags, 0,
+            &bloom_ps[i], &bloom_errors,
+        )
+        if bloom_errors != nil {
+            fmt.println("Bloom shader compiler messages:",
+                cstring(bloom_errors->GetBufferPointer()))
+            bloom_errors->Release()
+        }
+        dx_check(hr)
+    }
+
+    defer {
+        for shader in bloom_ps {
+            shader->Release()
+        }
+    }
+
     // INPUT LAYOUT
     input_layout := []d3d12.INPUT_ELEMENT_DESC {
         {
@@ -540,6 +580,21 @@ renderer_load_assets :: proc(){
         d3d12.IPipelineState_UUID,
         (^rawptr)(&r.post_pipeline_state),
     ))
+
+    for i in 0..<len(bloom_ps) {
+        bloom_pso_desc := post_pso_desc
+        bloom_pso_desc.PS = {
+            pShaderBytecode = bloom_ps[i]->GetBufferPointer(),
+            BytecodeLength = bloom_ps[i]->GetBufferSize(),
+        }
+        bloom_pso_desc.RTVFormats[0] = .R16G16B16A16_FLOAT
+
+        dx_check(r.device->CreateGraphicsPipelineState(
+            &bloom_pso_desc,
+            d3d12.IPipelineState_UUID,
+            (^rawptr)(&r.bloom_pipeline_states[i]),
+        ))
+    }
 
     mesh_paths := [MESH_COUNT]string{
         "models/cube.obj",
@@ -737,6 +792,9 @@ renderer_resize:: proc(width, height: u32){
     renderer_wait_for_gpu()
 
     r.hdr_texture->Release()
+    for target in r.bloom_targets {
+        target->Release()
+    }
 
     for i in 0..<FRAME_COUNT{
         r.render_targets[i]->Release()
@@ -776,13 +834,14 @@ renderer_resize:: proc(width, height: u32){
     r.scissor_rect.bottom = i32(height)
 
     renderer_create_hdr_target()
+    renderer_create_bloom_targets()
 }
 
 renderer_load_textures :: proc(){
     r := &g_renderer
 
     srv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{
-        NumDescriptors = TEXTURE_COUNT + 2,
+        NumDescriptors = TEXTURE_COUNT + 4,
         Type = .CBV_SRV_UAV,
         Flags = {.SHADER_VISIBLE},
     }
@@ -915,6 +974,71 @@ renderer_create_hdr_target :: proc() {
     r.srv_heap->GetCPUDescriptorHandleForHeapStart(&hdr_srv)
     hdr_srv.ptr += uint(HDR_SRV_INDEX) * uint(r.srv_descriptor_size)
     r.device->CreateShaderResourceView(r.hdr_texture, &hdr_srv_desc, hdr_srv)
+}
+
+renderer_create_bloom_targets :: proc() {
+    r := &g_renderer
+
+    if r.bloom_rtv_heap == nil {
+        rtv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{
+            NumDescriptors = BLOOM_TARGET_COUNT,
+            Type = .RTV,
+        }
+        dx_check(r.device->CreateDescriptorHeap(
+            &rtv_heap_desc,
+            d3d12.IDescriptorHeap_UUID,
+            (^rawptr)(&r.bloom_rtv_heap),
+        ))
+    }
+
+    heap_props := d3d12.HEAP_PROPERTIES{Type = .DEFAULT}
+    desc := d3d12.RESOURCE_DESC{
+        Dimension = .TEXTURE2D,
+        Width = u64(r.width),
+        Height = r.height,
+        DepthOrArraySize = 1,
+        MipLevels = 1,
+        Format = .R16G16B16A16_FLOAT,
+        SampleDesc = {Count = 1},
+        Flags = {.ALLOW_RENDER_TARGET},
+    }
+
+    clear_value := d3d12.CLEAR_VALUE{
+        Format = .R16G16B16A16_FLOAT,
+    }
+    clear_value.Color = {0, 0, 0, 1}
+
+    rtv_increment := r.device->GetDescriptorHandleIncrementSize(.RTV)
+
+    for i in 0..<BLOOM_TARGET_COUNT {
+        dx_check(r.device->CreateCommittedResource(
+            &heap_props,
+            {},
+            &desc,
+            {.PIXEL_SHADER_RESOURCE},
+            &clear_value,
+            d3d12.IResource_UUID,
+            (^rawptr)(&r.bloom_targets[i]),
+        ))
+
+        rtv: d3d12.CPU_DESCRIPTOR_HANDLE
+        r.bloom_rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv)
+        rtv.ptr += uint(i) * uint(rtv_increment)
+        r.device->CreateRenderTargetView(r.bloom_targets[i], nil, rtv)
+
+        srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
+            Format = .R16G16B16A16_FLOAT,
+            ViewDimension = .TEXTURE2D,
+            Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
+        }
+        srv_desc.Texture2D = {MipLevels = 1}
+
+        srv: d3d12.CPU_DESCRIPTOR_HANDLE
+        r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv)
+        srv.ptr += uint(BLOOM_SRV_START + i) *
+                   uint(r.srv_descriptor_size)
+        r.device->CreateShaderResourceView(r.bloom_targets[i], &srv_desc, srv)
+    }
 }
 
 renderer_load_texture :: proc(index: int){
@@ -1320,6 +1444,21 @@ renderer_render_frame :: proc(scene: ^Scene){
     hdr_barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
     r.command_list->ResourceBarrier(1, &hdr_barrier)
 
+    // HDR -> bright areas in bloom target 0.
+    renderer_bloom_pass(
+        0, HDR_SRV_INDEX, r.bloom_pipeline_states[0],
+    )
+
+    // Target 0 -> horizontal blur in target 1.
+    renderer_bloom_pass(
+        1, BLOOM_SRV_START, r.bloom_pipeline_states[1],
+    )
+
+    // Target 1 -> vertical blur back in target 0.
+    renderer_bloom_pass(
+        0, BLOOM_SRV_START + 1, r.bloom_pipeline_states[2],
+    )
+
     // Now acquire the swap-chain back buffer for the post-process pass.
     back_buffer_barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
     back_buffer_barrier.Transition = {
@@ -1344,6 +1483,12 @@ renderer_render_frame :: proc(scene: ^Scene){
     hdr_gpu_handle.ptr += u64(HDR_SRV_INDEX) * u64(r.srv_descriptor_size)
     r.command_list->SetGraphicsRootDescriptorTable(1, hdr_gpu_handle)
 
+    bloom_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
+    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&bloom_gpu_handle)
+    bloom_gpu_handle.ptr += u64(BLOOM_SRV_START) *
+                            u64(r.srv_descriptor_size)
+    r.command_list->SetGraphicsRootDescriptorTable(2, bloom_gpu_handle)
+
     r.command_list->RSSetViewports(1, &r.viewport)
     r.command_list->RSSetScissorRects(1, &r.scissor_rect)
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
@@ -1362,6 +1507,49 @@ renderer_render_frame :: proc(scene: ^Scene){
     dx_check(r.swap_chain->Present(1, {}))
 
     renderer_wait_for_gpu()
+}
+
+renderer_bloom_pass :: proc(
+    target_index: int,
+    source_srv_index: int,
+    pso: ^d3d12.IPipelineState,
+) {
+    r := &g_renderer
+    assert(target_index >= 0 && target_index < BLOOM_TARGET_COUNT)
+
+    target := r.bloom_targets[target_index]
+
+    barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
+    barrier.Transition = {
+        pResource = target,
+        StateBefore = {.PIXEL_SHADER_RESOURCE},
+        StateAfter = {.RENDER_TARGET},
+        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+    }
+    r.command_list->ResourceBarrier(1, &barrier)
+
+    rtv: d3d12.CPU_DESCRIPTOR_HANDLE
+    r.bloom_rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv)
+    rtv_increment := r.device->GetDescriptorHandleIncrementSize(.RTV)
+    rtv.ptr += uint(target_index) * uint(rtv_increment)
+
+    r.command_list->OMSetRenderTargets(1, &rtv, false, nil)
+    r.command_list->SetGraphicsRootSignature(r.root_signature)
+    r.command_list->SetPipelineState(pso)
+
+    source: d3d12.GPU_DESCRIPTOR_HANDLE
+    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&source)
+    source.ptr += u64(source_srv_index) * u64(r.srv_descriptor_size)
+    r.command_list->SetGraphicsRootDescriptorTable(1, source)
+
+    r.command_list->RSSetViewports(1, &r.viewport)
+    r.command_list->RSSetScissorRects(1, &r.scissor_rect)
+    r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
+    r.command_list->DrawInstanced(3, 1, 0, 0)
+
+    barrier.Transition.StateBefore = {.RENDER_TARGET}
+    barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
+    r.command_list->ResourceBarrier(1, &barrier)
 }
 
 renderer_wait_for_gpu :: proc(){
@@ -1392,7 +1580,7 @@ renderer_destroy :: proc(){
     r.rtv_heap->Release()
     r.swap_chain->Release()
     r.command_queue->Release()
-    
+
     r.root_signature->Release()
 
     r.constant_buffer->Release()
@@ -1418,6 +1606,15 @@ renderer_destroy :: proc(){
     r.hdr_rtv_heap->Release()
     r.hdr_pipeline_state->Release()
     r.post_pipeline_state->Release()
+
+    for target in r.bloom_targets {
+        target->Release()
+    }
+    r.bloom_rtv_heap->Release()
+
+    for pso in r.bloom_pipeline_states {
+        pso->Release()
+    }
 
     r.device->Release()
 }

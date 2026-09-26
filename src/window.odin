@@ -5,8 +5,8 @@ import win32 "core:sys/windows"
 
 WINDOW_CLASS :: "DX12WindowClass"
 WINDOW_TITLE :: "DX12 Renderer"
-WINDOW_WIDTH :: 1280
-WINDOW_HEIGHT :: 720
+WINDOW_WIDTH :: 1920
+WINDOW_HEIGHT :: 1080
 
 g_client_width: u32 = WINDOW_WIDTH
 g_client_height: u32 = WINDOW_HEIGHT
