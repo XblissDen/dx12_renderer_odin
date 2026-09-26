@@ -148,8 +148,7 @@ float4 PSMain(PSInput input) : SV_TARGET
 {
     if (unlit != 0)
     {
-        float3 marker_color = pow(saturate(material_tint), 1.0f / 2.2f);
-        return float4(marker_color, 1.0f);
+        return float4(material_tint, 1.0f);
     }
 
     // Our texture SRV is UNORM, so decode its sRGB-style image values manually.
@@ -231,10 +230,6 @@ float4 PSMain(PSInput input) : SV_TARGET
             radiance
         );
     }
-
-    // Simple tone mapping, followed by conversion for the UNORM back buffer.
-    result = result / (result + 1.0f);
-    result = pow(saturate(result), 1.0f / 2.2f);
 
     return float4(result, 1.0f);
 }

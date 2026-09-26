@@ -13,6 +13,7 @@ main :: proc(){
     renderer_load_assets()
     renderer_load_textures()
     renderer_create_shadow_map()
+    renderer_create_hdr_target()
     defer renderer_destroy()
 
     last_time := time.now()

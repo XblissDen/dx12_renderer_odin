@@ -16,6 +16,7 @@ FRAME_COUNT :: 2
 
 SHADOW_MAP_SIZE :: 2048
 SHADOW_SRV_INDEX  :: TEXTURE_COUNT
+HDR_SRV_INDEX  :: TEXTURE_COUNT + 1
 
 Vertex :: struct {
     position:   [3]f32,
@@ -86,7 +87,6 @@ Renderer :: struct {
     fence_event: win32.HANDLE,
 
     root_signature: ^d3d12.IRootSignature,
-    pipeline_state: ^d3d12.IPipelineState,
 
     viewport: d3d12.VIEWPORT,
     scissor_rect: d3d12.RECT,
@@ -106,6 +106,12 @@ Renderer :: struct {
     shadow_map: ^d3d12.IResource,
     shadow_dsv_heap: ^d3d12.IDescriptorHeap,
     shadow_pipeline_state: ^d3d12.IPipelineState,
+
+    hdr_texture: ^d3d12.IResource,
+    hdr_rtv_heap: ^d3d12.IDescriptorHeap,
+
+    hdr_pipeline_state: ^d3d12.IPipelineState,
+    post_pipeline_state: ^d3d12.IPipelineState,
 
     frame_index: u32,
 }
@@ -330,7 +336,7 @@ renderer_load_assets :: proc(){
     vs, ps: ^d3d12.IBlob
     vs_errors, ps_errors: ^d3d12.IBlob
 
-    shader_path := win32.utf8_to_wstring("shaders/triangle.hlsl")
+    shader_path := win32.utf8_to_wstring("shaders/scene.hlsl")
 
     hr := d3dc.CompileFromFile(
         shader_path, nil, nil,
@@ -358,6 +364,7 @@ renderer_load_assets :: proc(){
     dx_check(hr)
     defer ps->Release()
 
+    // SHADOW 
     shadow_vs, shadow_errors: ^d3d12.IBlob
 
     hr = d3dc.CompileFromFile(
@@ -372,6 +379,40 @@ renderer_load_assets :: proc(){
     }
     dx_check(hr)
     defer shadow_vs->Release()
+
+    // POST PROCESS
+    post_shader_path := win32.utf8_to_wstring("shaders/post_process.hlsl")
+
+    post_vs, post_ps: ^d3d12.IBlob
+    post_vs_errors, post_ps_errors: ^d3d12.IBlob
+
+    hr = d3dc.CompileFromFile(
+        post_shader_path, nil, nil,
+        "VSMain", "vs_5_1",
+        compile_flags, 0,
+        &post_vs, &post_vs_errors,
+    )
+    if post_vs_errors != nil {
+        fmt.println("Post VS compiler messages:",
+            cstring(post_vs_errors->GetBufferPointer()))
+        post_vs_errors->Release()
+    }
+    dx_check(hr)
+    defer post_vs->Release()
+
+    hr = d3dc.CompileFromFile(
+        post_shader_path, nil, nil,
+        "PSMain", "ps_5_1",
+        compile_flags, 0,
+        &post_ps, &post_ps_errors,
+    )
+    if post_ps_errors != nil {
+        fmt.println("Post PS compiler messages:",
+            cstring(post_ps_errors->GetBufferPointer()))
+        post_ps_errors->Release()
+    }
+    dx_check(hr)
+    defer post_ps->Release()
 
     // INPUT LAYOUT
     input_layout := []d3d12.INPUT_ELEMENT_DESC {
@@ -451,12 +492,6 @@ renderer_load_assets :: proc(){
     }
     pso_desc.RTVFormats[0] = .R8G8B8A8_UNORM
 
-    dx_check(r.device->CreateGraphicsPipelineState(
-        &pso_desc,
-        d3d12.IPipelineState_UUID,
-        (^rawptr)(&r.pipeline_state),
-    ))
-
     shadow_pso_desc := pso_desc
     shadow_pso_desc.VS = {
         pShaderBytecode = shadow_vs->GetBufferPointer(),
@@ -472,6 +507,38 @@ renderer_load_assets :: proc(){
         &shadow_pso_desc,
         d3d12.IPipelineState_UUID,
         (^rawptr)(&r.shadow_pipeline_state),
+    ))
+
+    // Same scene shaders and depth test, but a floating-point color target.
+    hdr_pso_desc := pso_desc
+    hdr_pso_desc.RTVFormats[0] = .R16G16B16A16_FLOAT
+
+    dx_check(r.device->CreateGraphicsPipelineState(
+        &hdr_pso_desc,
+        d3d12.IPipelineState_UUID,
+        (^rawptr)(&r.hdr_pipeline_state),
+    ))
+
+    // Full-screen triangle: no input layout or depth test.
+    post_pso_desc := pso_desc
+    post_pso_desc.VS = {
+        pShaderBytecode = post_vs->GetBufferPointer(),
+        BytecodeLength = post_vs->GetBufferSize(),
+    }
+    post_pso_desc.PS = {
+        pShaderBytecode = post_ps->GetBufferPointer(),
+        BytecodeLength = post_ps->GetBufferSize(),
+    }
+    post_pso_desc.InputLayout = {}
+    post_pso_desc.DepthStencilState.DepthEnable = false
+    post_pso_desc.DepthStencilState.DepthWriteMask = .ZERO
+    post_pso_desc.DSVFormat = .UNKNOWN
+    post_pso_desc.RasterizerState.CullMode = .NONE
+
+    dx_check(r.device->CreateGraphicsPipelineState(
+        &post_pso_desc,
+        d3d12.IPipelineState_UUID,
+        (^rawptr)(&r.post_pipeline_state),
     ))
 
     mesh_paths := [MESH_COUNT]string{
@@ -669,6 +736,8 @@ renderer_resize:: proc(width, height: u32){
 
     renderer_wait_for_gpu()
 
+    r.hdr_texture->Release()
+
     for i in 0..<FRAME_COUNT{
         r.render_targets[i]->Release()
     }
@@ -705,13 +774,15 @@ renderer_resize:: proc(width, height: u32){
     r.viewport.Height = f32(height)
     r.scissor_rect.right = i32(width)
     r.scissor_rect.bottom = i32(height)
+
+    renderer_create_hdr_target()
 }
 
 renderer_load_textures :: proc(){
     r := &g_renderer
 
     srv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{
-        NumDescriptors = TEXTURE_COUNT + 1,
+        NumDescriptors = TEXTURE_COUNT + 2,
         Type = .CBV_SRV_UAV,
         Flags = {.SHADER_VISIBLE},
     }
@@ -785,6 +856,65 @@ renderer_create_shadow_map :: proc() {
     r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv_handle)
     srv_handle.ptr += uint(SHADOW_SRV_INDEX) * uint(r.srv_descriptor_size)
     r.device->CreateShaderResourceView(r.shadow_map, &shadow_srv, srv_handle)
+}
+
+renderer_create_hdr_target :: proc() {
+    r := &g_renderer
+
+    if r.hdr_rtv_heap == nil {
+        rtv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{
+            NumDescriptors = 1,
+            Type = .RTV,
+        }
+        dx_check(r.device->CreateDescriptorHeap(
+            &rtv_heap_desc,
+            d3d12.IDescriptorHeap_UUID,
+            (^rawptr)(&r.hdr_rtv_heap),
+        ))
+    }
+
+    heap_props := d3d12.HEAP_PROPERTIES{Type = .DEFAULT}
+    hdr_desc := d3d12.RESOURCE_DESC{
+        Dimension = .TEXTURE2D,
+        Width = u64(r.width),
+        Height = r.height,
+        DepthOrArraySize = 1,
+        MipLevels = 1,
+        Format = .R16G16B16A16_FLOAT,
+        SampleDesc = {Count = 1},
+        Flags = {.ALLOW_RENDER_TARGET},
+    }
+
+    clear_value := d3d12.CLEAR_VALUE{
+        Format = .R16G16B16A16_FLOAT,
+    }
+    clear_value.Color = {0.1, 0.1, 0.2, 1.0}
+
+    dx_check(r.device->CreateCommittedResource(
+        &heap_props,
+        {},
+        &hdr_desc,
+        {.PIXEL_SHADER_RESOURCE},
+        &clear_value,
+        d3d12.IResource_UUID,
+        (^rawptr)(&r.hdr_texture),
+    ))
+
+    hdr_rtv: d3d12.CPU_DESCRIPTOR_HANDLE
+    r.hdr_rtv_heap->GetCPUDescriptorHandleForHeapStart(&hdr_rtv)
+    r.device->CreateRenderTargetView(r.hdr_texture, nil, hdr_rtv)
+
+    hdr_srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
+        Format = .R16G16B16A16_FLOAT,
+        ViewDimension = .TEXTURE2D,
+        Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
+    }
+    hdr_srv_desc.Texture2D = {MipLevels = 1}
+
+    hdr_srv: d3d12.CPU_DESCRIPTOR_HANDLE
+    r.srv_heap->GetCPUDescriptorHandleForHeapStart(&hdr_srv)
+    hdr_srv.ptr += uint(HDR_SRV_INDEX) * uint(r.srv_descriptor_size)
+    r.device->CreateShaderResourceView(r.hdr_texture, &hdr_srv_desc, hdr_srv)
 }
 
 renderer_load_texture :: proc(index: int){
@@ -1052,6 +1182,7 @@ renderer_render_frame :: proc(scene: ^Scene){
         draw_count += 1
     }
 
+    // SHADOW PASS
     shadow_barrier := d3d12.RESOURCE_BARRIER {Type = .TRANSITION}
     shadow_barrier.Transition = {
         pResource = r.shadow_map,
@@ -1112,35 +1243,34 @@ renderer_render_frame :: proc(scene: ^Scene){
     shadow_barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
     r.command_list->ResourceBarrier(1, &shadow_barrier)
 
-    barrier := d3d12.RESOURCE_BARRIER{
-        Type = .TRANSITION,
-        Flags = {},
-    }
+    // HDR PASS
 
-    barrier.Transition = {
-        pResource = r.render_targets[r.frame_index],
-        StateBefore = d3d12.RESOURCE_STATE_PRESENT,
+    hdr_barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
+    hdr_barrier.Transition = {
+        pResource = r.hdr_texture,
+        StateBefore = {.PIXEL_SHADER_RESOURCE},
         StateAfter = {.RENDER_TARGET},
         Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
     }
-    r.command_list->ResourceBarrier(1, &barrier)
+    r.command_list->ResourceBarrier(1, &hdr_barrier)
 
-    rtv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
-    rtv_handle.ptr += uint(r.frame_index * r.rtv_descriptor_size)
+    hdr_rtv: d3d12.CPU_DESCRIPTOR_HANDLE
+    r.hdr_rtv_heap->GetCPUDescriptorHandleForHeapStart(&hdr_rtv)
 
-    clear_color := [4]f32{0.1, 0.1, 0.2, 1.0}
-
-    dsv_handle : d3d12.CPU_DESCRIPTOR_HANDLE
+    dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
     r.dsv_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle)
 
-    r.command_list->OMSetRenderTargets(1, &rtv_handle, false, &dsv_handle)
-    r.command_list->ClearRenderTargetView(rtv_handle, &clear_color, 0, nil)
-    r.command_list->ClearDepthStencilView(dsv_handle, { .DEPTH }, 1.0, 0, 0, nil)
+    r.command_list->OMSetRenderTargets(1, &hdr_rtv, false, &dsv_handle)
+
+    clear_color := [4]f32{0.1, 0.1, 0.2, 1.0}
+    r.command_list->ClearRenderTargetView(hdr_rtv, &clear_color, 0, nil)
+    r.command_list->ClearDepthStencilView(
+        dsv_handle, {.DEPTH}, 1.0, 0, 0, nil,
+    )
 
     // Pipeline
     r.command_list->SetGraphicsRootSignature(r.root_signature)
-    r.command_list->SetPipelineState(r.pipeline_state)
+    r.command_list->SetPipelineState(r.hdr_pipeline_state)
 
     // heap + texture bind
     heaps := []^d3d12.IDescriptorHeap{ r.srv_heap }
@@ -1185,10 +1315,44 @@ renderer_render_frame :: proc(scene: ^Scene){
         r.command_list->DrawIndexedInstanced(gpu_mesh.index_count, 1, 0, 0, 0)
     }
 
+    // Scene render target becomes a shader input.
+    hdr_barrier.Transition.StateBefore = {.RENDER_TARGET}
+    hdr_barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
+    r.command_list->ResourceBarrier(1, &hdr_barrier)
 
-    barrier.Transition.StateBefore = {.RENDER_TARGET}
-    barrier.Transition.StateAfter = d3d12.RESOURCE_STATE_PRESENT
-    r.command_list->ResourceBarrier(1, &barrier)
+    // Now acquire the swap-chain back buffer for the post-process pass.
+    back_buffer_barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
+    back_buffer_barrier.Transition = {
+        pResource = r.render_targets[r.frame_index],
+        StateBefore = d3d12.RESOURCE_STATE_PRESENT,
+        StateAfter = {.RENDER_TARGET},
+        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+    }
+    r.command_list->ResourceBarrier(1, &back_buffer_barrier)
+
+    rtv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+    r.rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
+    rtv_handle.ptr += uint(r.frame_index * r.rtv_descriptor_size)
+
+    r.command_list->OMSetRenderTargets(1, &rtv_handle, false, nil)
+
+    r.command_list->SetGraphicsRootSignature(r.root_signature)
+    r.command_list->SetPipelineState(r.post_pipeline_state)
+
+    hdr_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
+    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&hdr_gpu_handle)
+    hdr_gpu_handle.ptr += u64(HDR_SRV_INDEX) * u64(r.srv_descriptor_size)
+    r.command_list->SetGraphicsRootDescriptorTable(1, hdr_gpu_handle)
+
+    r.command_list->RSSetViewports(1, &r.viewport)
+    r.command_list->RSSetScissorRects(1, &r.scissor_rect)
+    r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
+    r.command_list->DrawInstanced(3, 1, 0, 0)
+
+    // Presentable again.
+    back_buffer_barrier.Transition.StateBefore = {.RENDER_TARGET}
+    back_buffer_barrier.Transition.StateAfter = d3d12.RESOURCE_STATE_PRESENT
+    r.command_list->ResourceBarrier(1, &back_buffer_barrier)
 
     dx_check(r.command_list->Close())
 
@@ -1228,8 +1392,7 @@ renderer_destroy :: proc(){
     r.rtv_heap->Release()
     r.swap_chain->Release()
     r.command_queue->Release()
-
-    r.pipeline_state->Release()
+    
     r.root_signature->Release()
 
     r.constant_buffer->Release()
@@ -1250,6 +1413,11 @@ renderer_destroy :: proc(){
     r.shadow_pipeline_state->Release()
     r.shadow_map->Release()
     r.shadow_dsv_heap->Release()
+
+    r.hdr_texture->Release()
+    r.hdr_rtv_heap->Release()
+    r.hdr_pipeline_state->Release()
+    r.post_pipeline_state->Release()
 
     r.device->Release()
 }
