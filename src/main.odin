@@ -25,6 +25,15 @@ main :: proc(){
             break
         }
 
+        renderer_apply_post_steps(
+            g_exposure_steps,
+            g_threshold_steps,
+            g_bloom_steps,
+        )
+        g_exposure_steps = 0
+        g_threshold_steps = 0
+        g_bloom_steps = 0
+
         now := time.now()
         dt := f32(time.duration_seconds(time.diff(last_time, now)))
         last_time = now

@@ -2,6 +2,14 @@ Texture2D<float4> g_hdr_texture : register(t0);
 Texture2D<float4> g_bloom_texture : register(t1);
 SamplerState g_sampler : register(s0);
 
+cbuffer PostConstants : register(b1)
+{
+    float exposure;
+    float bloom_threshold;
+    float bloom_strength;
+    float _pad0;
+};
+
 struct VSOutput
 {
     float4 position : SV_POSITION;
@@ -13,9 +21,9 @@ float4 PSExtract(VSOutput input) : SV_TARGET
     float3 color = g_hdr_texture.Sample(g_sampler, input.uv).rgb;
     float luminance = dot(color, float3(0.2126f, 0.7152f, 0.0722f));
 
-    // Retain only the energy above a brightness threshold of 1.
-    float weight = max(luminance - 1.0f, 0.0f) /
-                   max(luminance, 0.0001f);
+    // Retain only the energy above a brightness threshold
+    float weight = max(luminance - bloom_threshold, 0.0f) /
+               max(luminance, 0.0001f);
 
     return float4(color * weight, 1.0f);
 }
@@ -88,9 +96,10 @@ float4 PSMain(VSOutput input) : SV_TARGET
     float3 hdr_color = g_hdr_texture.Sample(g_sampler, input.uv).rgb;
     float3 bloom_color = g_bloom_texture.Sample(g_sampler, input.uv).rgb;
 
-    hdr_color += bloom_color * 0.6f;
+    hdr_color += bloom_color * bloom_strength;
 
-    float3 mapped = hdr_color / (hdr_color + 1.0f);
+    float3 exposed_color = hdr_color * exposure;
+    float3 mapped = exposed_color / (exposed_color + 1.0f);
     float3 display_color = pow(saturate(mapped), 1.0f / 2.2f);
 
     return float4(display_color, 1.0f);

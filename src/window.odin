@@ -18,6 +18,10 @@ g_mouse_delta_x: i32
 g_mouse_delta_y: i32
 g_cursor_locked: bool
 
+g_exposure_steps: i32
+g_threshold_steps: i32
+g_bloom_steps: i32
+
 window_create :: proc(){
     hinstance := win32.HINSTANCE(win32.GetModuleHandleW(nil))
 
@@ -145,6 +149,16 @@ wparam: win32.WPARAM, lparam: win32.LPARAM) -> win32.LRESULT{
                     } else{
                         window_lock_cursor()
                     }
+                }
+            } else if (u64(lparam) & (u64(1) << 30)) == 0 {
+                // One adjustment per physical press, ignoring key auto-repeat.
+                switch wparam {
+                    case win32.WPARAM('1'): g_exposure_steps -= 1
+                    case win32.WPARAM('2'): g_exposure_steps += 1
+                    case win32.WPARAM('3'): g_threshold_steps -= 1
+                    case win32.WPARAM('4'): g_threshold_steps += 1
+                    case win32.WPARAM('5'): g_bloom_steps -= 1
+                    case win32.WPARAM('6'): g_bloom_steps += 1
                 }
             }
         case win32.WM_DESTROY:

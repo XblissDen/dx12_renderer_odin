@@ -70,6 +70,13 @@ SceneConstants :: struct #align(256) {
     sun_view_projection : alg.Matrix4f32,
 }
 
+PostConstants :: struct #align(256) {
+    exposure: f32,
+    bloom_threshold: f32,
+    bloom_strength: f32,
+    _pad0: f32,
+}
+
 Renderer :: struct {
     device: ^d3d12.IDevice,
     swap_chain: ^dxgi.ISwapChain3,
@@ -122,6 +129,13 @@ Renderer :: struct {
     // Extract, horizontal blur, vertical blur.
     bloom_pipeline_states: [3]^d3d12.IPipelineState,
 
+    post_constant_buffer: ^d3d12.IResource,
+    post_cb_mapped_data: ^PostConstants,
+
+    post_exposure: f32,
+    post_threshold: f32,
+    post_strength: f32,
+
     frame_index: u32,
 }
 
@@ -138,6 +152,10 @@ renderer_init :: proc() {
 
     r.width = WINDOW_WIDTH
     r.height = WINDOW_HEIGHT
+
+    r.post_exposure = 1.0
+    r.post_threshold = 1.0
+    r.post_strength = 0.6
 
     // DEBUG LAYER
     when ODIN_DEBUG {
@@ -292,6 +310,11 @@ renderer_load_assets :: proc(){
         pDescriptorRanges = &shadow_range,
     }
 
+    post_cbv_param := d3d12.ROOT_PARAMETER{}
+    post_cbv_param.ParameterType = .CBV
+    post_cbv_param.ShaderVisibility = .PIXEL
+    post_cbv_param.Descriptor = {ShaderRegister = 1}
+
     static_sampler := d3d12.STATIC_SAMPLER_DESC{
         Filter = .MIN_MAG_MIP_LINEAR,
         AddressU = .WRAP,
@@ -312,7 +335,12 @@ renderer_load_assets :: proc(){
         ShaderVisibility = .PIXEL,
     }
 
-    params := []d3d12.ROOT_PARAMETER{cbv_param, srv_param, shadow_param}
+    params := []d3d12.ROOT_PARAMETER{
+        cbv_param,
+        srv_param,
+        shadow_param,
+        post_cbv_param,
+    }
     samplers := []d3d12.STATIC_SAMPLER_DESC{static_sampler, shadow_sampler}
 
     rs_desc := d3d12.ROOT_SIGNATURE_DESC{
@@ -636,6 +664,25 @@ renderer_load_assets :: proc(){
 
     read_range := d3d12.RANGE {Begin = 0, End = 0}
     dx_check(r.constant_buffer->Map(0, &read_range, (^rawptr)(&r.cb_mapped_data)))
+
+    post_cb_desc := cb_desc
+    post_cb_desc.Width = u64(size_of(PostConstants))
+
+    dx_check(r.device->CreateCommittedResource(
+        &cb_heap_props,
+        {},
+        &post_cb_desc,
+        {.VERTEX_AND_CONSTANT_BUFFER},
+        nil,
+        d3d12.IResource_UUID,
+        (^rawptr)(&r.post_constant_buffer),
+    ))
+
+    dx_check(r.post_constant_buffer->Map(
+        0,
+        &read_range,
+        (^rawptr)(&r.post_cb_mapped_data),
+    ))
 
     // ── 6. Viewport & Scissor ─────────────────────────────────────────────────
     r.viewport = d3d12.VIEWPORT {
@@ -1206,6 +1253,10 @@ renderer_render_frame :: proc(scene: ^Scene){
     dx_check(allocator->Reset())
     dx_check(r.command_list->Reset(allocator, nil))
 
+    r.post_cb_mapped_data.exposure = r.post_exposure
+    r.post_cb_mapped_data.bloom_threshold = r.post_threshold
+    r.post_cb_mapped_data.bloom_strength = r.post_strength
+
     camera_index := -1
 
     for i in 0..<scene.entity_count{
@@ -1476,6 +1527,10 @@ renderer_render_frame :: proc(scene: ^Scene){
     r.command_list->OMSetRenderTargets(1, &rtv_handle, false, nil)
 
     r.command_list->SetGraphicsRootSignature(r.root_signature)
+    r.command_list->SetGraphicsRootConstantBufferView(
+        3,
+        r.post_constant_buffer->GetGPUVirtualAddress(),
+    )
     r.command_list->SetPipelineState(r.post_pipeline_state)
 
     hdr_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
@@ -1509,6 +1564,33 @@ renderer_render_frame :: proc(scene: ^Scene){
     renderer_wait_for_gpu()
 }
 
+renderer_update_post_title :: proc() {
+    r := &g_renderer
+
+    title := fmt.tprintf(
+        "DX12 Renderer | [1/2] Exposure %.2f | [3/4] Threshold %.2f | [5/6] Bloom %.2f",
+        r.post_exposure,
+        r.post_threshold,
+        r.post_strength,
+    )
+    win32.SetWindowTextW(g_hwnd, win32.utf8_to_wstring(title))
+}
+
+renderer_apply_post_steps :: proc(
+    exposure_steps, threshold_steps, bloom_steps: i32,
+) {
+    if exposure_steps == 0 && threshold_steps == 0 && bloom_steps == 0 {
+        return
+    }
+
+    r := &g_renderer
+    r.post_exposure = clamp(r.post_exposure + f32(exposure_steps) * 0.1, 0.1, 5.0)
+    r.post_threshold = clamp(r.post_threshold + f32(threshold_steps) * 0.1, 0.1, 5.0)
+    r.post_strength = clamp(r.post_strength + f32(bloom_steps) * 0.1, 0.0, 2.0)
+
+    renderer_update_post_title()
+}
+
 renderer_bloom_pass :: proc(
     target_index: int,
     source_srv_index: int,
@@ -1535,6 +1617,10 @@ renderer_bloom_pass :: proc(
 
     r.command_list->OMSetRenderTargets(1, &rtv, false, nil)
     r.command_list->SetGraphicsRootSignature(r.root_signature)
+    r.command_list->SetGraphicsRootConstantBufferView(
+        3,
+        r.post_constant_buffer->GetGPUVirtualAddress(),
+    )
     r.command_list->SetPipelineState(pso)
 
     source: d3d12.GPU_DESCRIPTOR_HANDLE
@@ -1615,6 +1701,8 @@ renderer_destroy :: proc(){
     for pso in r.bloom_pipeline_states {
         pso->Release()
     }
+
+    r.post_constant_buffer->Release()
 
     r.device->Release()
 }
