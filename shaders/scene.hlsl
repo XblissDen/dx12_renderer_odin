@@ -40,6 +40,7 @@ Texture2D    g_texture : register(t0);
 SamplerState g_sampler : register(s0);
 Texture2D<float> g_shadow_map : register(t1);
 SamplerComparisonState g_shadow_sampler : register(s1);
+Texture2D<float4> g_irradiance : register(t3);
 
 struct VSInput
 {
@@ -162,8 +163,30 @@ float4 PSMain(PSInput input) : SV_TARGET
     float3 V = normalize(view_position - input.world_pos);
     float3 sun_L = normalize(-sun_direction);
 
-    // A small placeholder for indirect/environment lighting.
-    float3 result = 0.03f * albedo;
+    // indirect/environment lighting.
+    float2 normal_uv = float2(
+        atan2(N.z, N.x) / (2.0f * 3.14159265f) + 0.5f,
+        acos(clamp(N.y, -1.0f, 1.0f)) / 3.14159265f
+    );
+
+    float3 incoming_diffuse = g_irradiance.SampleLevel(
+        g_sampler, normal_uv, 0
+    ).rgb;
+
+    float3 ambient_F0 = lerp(
+        float3(0.04f, 0.04f, 0.04f),
+        albedo,
+        material_metallic
+    );
+    float3 ambient_F = FresnelSchlick(
+        max(dot(N, V), 0.0f),
+        ambient_F0
+    );
+    float3 ambient_kD = (1.0f - ambient_F) * (1.0f - material_metallic);
+
+    float3 result = ambient_kD * albedo * incoming_diffuse;
+
+    // Existing sun shadowing and direct-light loops follow unchanged.
 
     float sun_visibility = 1.0f;
 

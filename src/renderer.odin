@@ -25,6 +25,10 @@ BLOOM_SRV_START :: HDR_SRV_INDEX + 1
 
 ENVIRONMENT_SRV_INDEX :: BLOOM_SRV_START + BLOOM_TARGET_COUNT
 
+IRRADIANCE_WIDTH :: 64
+IRRADIANCE_HEIGHT :: 32
+IRRADIANCE_SRV_INDEX :: ENVIRONMENT_SRV_INDEX + 1
+
 GPU_PASS_COUNT :: 6
 GPU_TIMESTAMP_COUNT :: GPU_PASS_COUNT * 2
 
@@ -176,6 +180,10 @@ Renderer :: struct {
 
     sky_constant_buffer: ^d3d12.IResource,
     sky_cb_mapped_data: ^SkyConstants,
+
+    irradiance_texture: ^d3d12.IResource,
+    irradiance_rtv_heap: ^d3d12.IDescriptorHeap,
+    irradiance_pipeline_state: ^d3d12.IPipelineState,
 
     frame_index: u32,
 }
@@ -394,6 +402,34 @@ renderer_load_assets :: proc(){
     sky_cbv_param.ShaderVisibility = .PIXEL
     sky_cbv_param.Descriptor = {ShaderRegister = 2}
 
+    environment_range := d3d12.DESCRIPTOR_RANGE{
+        RangeType = .SRV,
+        NumDescriptors = 1,
+        BaseShaderRegister = 2,
+        OffsetInDescriptorsFromTableStart = 0,
+    }
+    environment_param := d3d12.ROOT_PARAMETER{}
+    environment_param.ParameterType = .DESCRIPTOR_TABLE
+    environment_param.ShaderVisibility = .PIXEL
+    environment_param.DescriptorTable = {
+        NumDescriptorRanges = 1,
+        pDescriptorRanges = &environment_range,
+    }
+
+    irradiance_range := d3d12.DESCRIPTOR_RANGE{
+        RangeType = .SRV,
+        NumDescriptors = 1,
+        BaseShaderRegister = 3,
+        OffsetInDescriptorsFromTableStart = 0,
+    }
+    irradiance_param := d3d12.ROOT_PARAMETER{}
+    irradiance_param.ParameterType = .DESCRIPTOR_TABLE
+    irradiance_param.ShaderVisibility = .PIXEL
+    irradiance_param.DescriptorTable = {
+        NumDescriptorRanges = 1,
+        pDescriptorRanges = &irradiance_range,
+    }
+
     static_sampler := d3d12.STATIC_SAMPLER_DESC{
         Filter = .MIN_MAG_MIP_LINEAR,
         AddressU = .WRAP,
@@ -420,6 +456,8 @@ renderer_load_assets :: proc(){
         shadow_param,
         post_cbv_param,
         sky_cbv_param,
+        environment_param, // Root slot 5 -> t2
+        irradiance_param,  // Root slot 6 -> t3
     }
     samplers := []d3d12.STATIC_SAMPLER_DESC{static_sampler, shadow_sampler}
 
@@ -547,6 +585,23 @@ renderer_load_assets :: proc(){
     }
     dx_check(hr)
     defer sky_ps->Release()
+
+    irradiance_path := win32.utf8_to_wstring("shaders/irradiance.hlsl")
+    irradiance_ps, irradiance_errors: ^d3d12.IBlob
+
+    hr = d3dc.CompileFromFile(
+        irradiance_path, nil, nil,
+        "PSMain", "ps_5_1",
+        compile_flags, 0,
+        &irradiance_ps, &irradiance_errors,
+    )
+    if irradiance_errors != nil {
+        fmt.println("Irradiance PS compiler messages:",
+            cstring(irradiance_errors->GetBufferPointer()))
+        irradiance_errors->Release()
+    }
+    dx_check(hr)
+    defer irradiance_ps->Release()
 
     // BLOOM
     bloom_entries := [3]cstring{
@@ -717,6 +772,19 @@ renderer_load_assets :: proc(){
         &sky_pso_desc,
         d3d12.IPipelineState_UUID,
         (^rawptr)(&r.sky_pipeline_state),
+    ))
+
+    irradiance_pso_desc := post_pso_desc
+    irradiance_pso_desc.PS = {
+        pShaderBytecode = irradiance_ps->GetBufferPointer(),
+        BytecodeLength = irradiance_ps->GetBufferSize(),
+    }
+    irradiance_pso_desc.RTVFormats[0] = .R16G16B16A16_FLOAT
+
+    dx_check(r.device->CreateGraphicsPipelineState(
+        &irradiance_pso_desc,
+        d3d12.IPipelineState_UUID,
+        (^rawptr)(&r.irradiance_pipeline_state),
     ))
 
     for i in 0..<len(bloom_ps) {
@@ -1017,7 +1085,7 @@ renderer_load_textures :: proc(){
     r := &g_renderer
 
     srv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{
-        NumDescriptors = TEXTURE_COUNT + 5,
+        NumDescriptors = TEXTURE_COUNT + 6,
         Type = .CBV_SRV_UAV,
         Flags = {.SHADER_VISIBLE},
     }
@@ -1150,6 +1218,122 @@ renderer_create_hdr_target :: proc() {
     r.srv_heap->GetCPUDescriptorHandleForHeapStart(&hdr_srv)
     hdr_srv.ptr += uint(HDR_SRV_INDEX) * uint(r.srv_descriptor_size)
     r.device->CreateShaderResourceView(r.hdr_texture, &hdr_srv_desc, hdr_srv)
+}
+
+renderer_create_irradiance_map :: proc() {
+    r := &g_renderer
+
+    rtv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{
+        NumDescriptors = 1,
+        Type = .RTV,
+    }
+    dx_check(r.device->CreateDescriptorHeap(
+        &rtv_heap_desc,
+        d3d12.IDescriptorHeap_UUID,
+        (^rawptr)(&r.irradiance_rtv_heap),
+    ))
+
+    desc := d3d12.RESOURCE_DESC{
+        Dimension = .TEXTURE2D,
+        Width = IRRADIANCE_WIDTH,
+        Height = IRRADIANCE_HEIGHT,
+        DepthOrArraySize = 1,
+        MipLevels = 1,
+        Format = .R16G16B16A16_FLOAT,
+        SampleDesc = {Count = 1},
+        Flags = {.ALLOW_RENDER_TARGET},
+    }
+
+    clear_value := d3d12.CLEAR_VALUE{
+        Format = .R16G16B16A16_FLOAT,
+    }
+    clear_value.Color = {0, 0, 0, 1}
+    heap_props := d3d12.HEAP_PROPERTIES{Type = .DEFAULT}
+
+    dx_check(r.device->CreateCommittedResource(
+        &heap_props,
+        {},
+        &desc,
+        {.PIXEL_SHADER_RESOURCE},
+        &clear_value,
+        d3d12.IResource_UUID,
+        (^rawptr)(&r.irradiance_texture),
+    ))
+
+    rtv: d3d12.CPU_DESCRIPTOR_HANDLE
+    r.irradiance_rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv)
+    r.device->CreateRenderTargetView(r.irradiance_texture, nil, rtv)
+
+    srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
+        Format = .R16G16B16A16_FLOAT,
+        ViewDimension = .TEXTURE2D,
+        Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
+    }
+    srv_desc.Texture2D = {MipLevels = 1}
+
+    srv: d3d12.CPU_DESCRIPTOR_HANDLE
+    r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv)
+    srv.ptr += uint(IRRADIANCE_SRV_INDEX) *
+               uint(r.srv_descriptor_size)
+    r.device->CreateShaderResourceView(r.irradiance_texture, &srv_desc, srv)
+}
+
+renderer_generate_irradiance :: proc() {
+    r := &g_renderer
+
+    // The environment upload has completed before this procedure runs.
+    dx_check(r.command_allocators[0]->Reset())
+    dx_check(r.command_list->Reset(r.command_allocators[0], nil))
+
+    barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
+    barrier.Transition = {
+        pResource = r.irradiance_texture,
+        StateBefore = {.PIXEL_SHADER_RESOURCE},
+        StateAfter = {.RENDER_TARGET},
+        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+    }
+    r.command_list->ResourceBarrier(1, &barrier)
+
+    rtv: d3d12.CPU_DESCRIPTOR_HANDLE
+    r.irradiance_rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv)
+    r.command_list->OMSetRenderTargets(1, &rtv, false, nil)
+
+    viewport := d3d12.VIEWPORT{
+        Width = IRRADIANCE_WIDTH,
+        Height = IRRADIANCE_HEIGHT,
+        MinDepth = 0,
+        MaxDepth = 1,
+    }
+    scissor := d3d12.RECT{
+        right = IRRADIANCE_WIDTH,
+        bottom = IRRADIANCE_HEIGHT,
+    }
+    r.command_list->RSSetViewports(1, &viewport)
+    r.command_list->RSSetScissorRects(1, &scissor)
+
+    r.command_list->SetGraphicsRootSignature(r.root_signature)
+    r.command_list->SetPipelineState(r.irradiance_pipeline_state)
+
+    heaps := []^d3d12.IDescriptorHeap{r.srv_heap}
+    r.command_list->SetDescriptorHeaps(1, raw_data(heaps))
+
+    environment_srv: d3d12.GPU_DESCRIPTOR_HANDLE
+    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&environment_srv)
+    environment_srv.ptr += u64(ENVIRONMENT_SRV_INDEX) *
+                           u64(r.srv_descriptor_size)
+    r.command_list->SetGraphicsRootDescriptorTable(5, environment_srv)
+
+    r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
+    r.command_list->DrawInstanced(3, 1, 0, 0)
+
+    barrier.Transition.StateBefore = {.RENDER_TARGET}
+    barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
+    r.command_list->ResourceBarrier(1, &barrier)
+
+    dx_check(r.command_list->Close())
+    lists := []^d3d12.ICommandList{r.command_list}
+    r.command_queue->ExecuteCommandLists(u32(len(lists)), raw_data(lists))
+    renderer_wait_for_gpu()
 }
 
 renderer_create_bloom_targets :: proc() {
@@ -1765,6 +1949,12 @@ renderer_render_frame :: proc(scene: ^Scene){
     shadow_gpu_handle.ptr += u64(SHADOW_SRV_INDEX) * u64(r.srv_descriptor_size)
     r.command_list->SetGraphicsRootDescriptorTable(2, shadow_gpu_handle)
 
+    irradiance_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
+    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&irradiance_gpu_handle)
+    irradiance_gpu_handle.ptr += u64(IRRADIANCE_SRV_INDEX) *
+                                u64(r.srv_descriptor_size)
+    r.command_list->SetGraphicsRootDescriptorTable(6, irradiance_gpu_handle)
+
     // viewport, scissor
     r.command_list->RSSetViewports(1, &r.viewport)
     r.command_list->RSSetScissorRects(1, &r.scissor_rect)
@@ -2090,6 +2280,10 @@ renderer_destroy :: proc(){
     r.environment_texture->Release()
     r.sky_pipeline_state->Release()
     r.sky_constant_buffer->Release()
+
+    r.irradiance_texture->Release()
+    r.irradiance_rtv_heap->Release()
+    r.irradiance_pipeline_state->Release()
 
     r.device->Release()
 }
