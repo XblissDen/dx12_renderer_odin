@@ -18,6 +18,8 @@ main :: proc(){
     defer renderer_destroy()
 
     last_time := time.now()
+    elapsed_for_fps: f32
+    frames_for_fps: i32
 
     for g_running{
         window_process_messages()
@@ -46,5 +48,18 @@ main :: proc(){
         renderer_resize(g_client_width, g_client_height)
         scene_update(&g_scene, dt)
         renderer_render_frame(&g_scene)
+
+        elapsed_for_fps += dt
+        frames_for_fps += 1
+
+        if elapsed_for_fps >= 1.0 {
+            g_renderer.fps = f32(frames_for_fps) / elapsed_for_fps
+            g_renderer.frame_ms = elapsed_for_fps * 1000.0 / f32(frames_for_fps)
+
+            renderer_update_post_title()
+
+            elapsed_for_fps = 0
+            frames_for_fps = 0
+        }
     }
 }

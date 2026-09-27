@@ -21,6 +21,18 @@ HDR_SRV_INDEX  :: TEXTURE_COUNT + 1
 BLOOM_TARGET_COUNT :: 2
 BLOOM_SRV_START :: HDR_SRV_INDEX + 1
 
+GPU_PASS_COUNT :: 6
+GPU_TIMESTAMP_COUNT :: GPU_PASS_COUNT * 2
+
+GPU_Pass :: enum u32{
+    Shadow,
+    Scene,
+    Bloom_Extract,
+    Bloom_Horizontal,
+    Bloom_Vertical,
+    Post_Process,
+}
+
 Vertex :: struct {
     position:   [3]f32,
     normal:     [3]f32,
@@ -135,6 +147,14 @@ Renderer :: struct {
     post_exposure: f32,
     post_threshold: f32,
     post_strength: f32,
+
+    timestamp_heap: ^d3d12.IQueryHeap,
+    timestamp_readback: ^d3d12.IResource,
+    timestamp_frequency: u64,
+
+    gpu_pass_ms: [GPU_PASS_COUNT]f32,
+    fps: f32,
+    frame_ms: f32,
 
     frame_index: u32,
 }
@@ -267,6 +287,39 @@ renderer_init :: proc() {
     if r.fence_event == nil{
         panic("Failed to create fence event")
     }
+
+    dx_check(r.command_queue->GetTimestampFrequency(&r.timestamp_frequency))
+
+    query_desc := d3d12.QUERY_HEAP_DESC{
+        Type = .TIMESTAMP,
+        Count = GPU_TIMESTAMP_COUNT,
+    }
+    dx_check(r.device->CreateQueryHeap(
+        &query_desc,
+        d3d12.IQueryHeap_UUID,
+        (^rawptr)(&r.timestamp_heap),
+    ))
+
+    readback_heap := d3d12.HEAP_PROPERTIES{Type = .READBACK}
+    readback_desc := d3d12.RESOURCE_DESC{
+        Dimension = .BUFFER,
+        Width = u64(GPU_TIMESTAMP_COUNT * size_of(u64)),
+        Height = 1,
+        DepthOrArraySize = 1,
+        MipLevels = 1,
+        SampleDesc = {Count = 1},
+        Layout = .ROW_MAJOR,
+    }
+
+    dx_check(r.device->CreateCommittedResource(
+        &readback_heap,
+        {},
+        &readback_desc,
+        {.COPY_DEST},
+        nil,
+        d3d12.IResource_UUID,
+        (^rawptr)(&r.timestamp_readback),
+    ))
 }
 
 renderer_load_assets :: proc(){
@@ -1358,6 +1411,7 @@ renderer_render_frame :: proc(scene: ^Scene){
     }
 
     // SHADOW PASS
+    renderer_begin_gpu_pass(.Shadow)
     shadow_barrier := d3d12.RESOURCE_BARRIER {Type = .TRANSITION}
     shadow_barrier.Transition = {
         pResource = r.shadow_map,
@@ -1418,8 +1472,10 @@ renderer_render_frame :: proc(scene: ^Scene){
     shadow_barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
     r.command_list->ResourceBarrier(1, &shadow_barrier)
 
-    // HDR PASS
+    renderer_end_gpu_pass(.Shadow)
 
+    // HDR PASS
+    renderer_begin_gpu_pass(.Scene)
     hdr_barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
     hdr_barrier.Transition = {
         pResource = r.hdr_texture,
@@ -1495,21 +1551,30 @@ renderer_render_frame :: proc(scene: ^Scene){
     hdr_barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
     r.command_list->ResourceBarrier(1, &hdr_barrier)
 
+    renderer_end_gpu_pass(.Scene)
+
+    renderer_begin_gpu_pass(.Bloom_Extract)
     // HDR -> bright areas in bloom target 0.
     renderer_bloom_pass(
         0, HDR_SRV_INDEX, r.bloom_pipeline_states[0],
     )
+    renderer_end_gpu_pass(.Bloom_Extract)
 
     // Target 0 -> horizontal blur in target 1.
+    renderer_begin_gpu_pass(.Bloom_Horizontal)
     renderer_bloom_pass(
         1, BLOOM_SRV_START, r.bloom_pipeline_states[1],
     )
+    renderer_end_gpu_pass(.Bloom_Horizontal)
 
     // Target 1 -> vertical blur back in target 0.
+    renderer_begin_gpu_pass(.Bloom_Vertical)
     renderer_bloom_pass(
         0, BLOOM_SRV_START + 1, r.bloom_pipeline_states[2],
     )
+    renderer_end_gpu_pass(.Bloom_Vertical)
 
+    renderer_begin_gpu_pass(.Post_Process)
     // Now acquire the swap-chain back buffer for the post-process pass.
     back_buffer_barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
     back_buffer_barrier.Transition = {
@@ -1554,6 +1619,17 @@ renderer_render_frame :: proc(scene: ^Scene){
     back_buffer_barrier.Transition.StateAfter = d3d12.RESOURCE_STATE_PRESENT
     r.command_list->ResourceBarrier(1, &back_buffer_barrier)
 
+    renderer_end_gpu_pass(.Post_Process)
+
+    r.command_list->ResolveQueryData(
+        r.timestamp_heap,
+        .TIMESTAMP,
+        0,
+        GPU_TIMESTAMP_COUNT,
+        r.timestamp_readback,
+        0,
+    )
+
     dx_check(r.command_list->Close())
 
     lists := []^d3d12.ICommandList{r.command_list}
@@ -1562,13 +1638,64 @@ renderer_render_frame :: proc(scene: ^Scene){
     dx_check(r.swap_chain->Present(1, {}))
 
     renderer_wait_for_gpu()
+
+    renderer_read_gpu_timings()
+}
+
+renderer_begin_gpu_pass :: proc(pass: GPU_Pass) {
+    r := &g_renderer
+    r.command_list->EndQuery(
+        r.timestamp_heap, .TIMESTAMP, u32(pass) * 2,
+    )
+}
+
+renderer_end_gpu_pass :: proc(pass: GPU_Pass) {
+    r := &g_renderer
+    r.command_list->EndQuery(
+        r.timestamp_heap, .TIMESTAMP, u32(pass) * 2 + 1,
+    )
+}
+
+renderer_read_gpu_timings :: proc() {
+    r := &g_renderer
+
+    read_range := d3d12.RANGE{
+        Begin = 0,
+        End = GPU_TIMESTAMP_COUNT * size_of(u64),
+    }
+    mapped: rawptr
+    dx_check(r.timestamp_readback->Map(0, &read_range, &mapped))
+
+    ticks := ([^]u64)(mapped)
+    for i in 0..<GPU_PASS_COUNT {
+        start_tick := ticks[i * 2]
+        end_tick := ticks[i * 2 + 1]
+
+        r.gpu_pass_ms[i] = f32(
+            f64(end_tick - start_tick) * 1000.0 /
+            f64(r.timestamp_frequency)
+        )
+    }
+
+    written_range := d3d12.RANGE{Begin = 0, End = 0}
+    r.timestamp_readback->Unmap(0, &written_range)
 }
 
 renderer_update_post_title :: proc() {
     r := &g_renderer
 
+    bloom_ms := r.gpu_pass_ms[2] +
+                r.gpu_pass_ms[3] +
+                r.gpu_pass_ms[4]
+
     title := fmt.tprintf(
-        "DX12 Renderer | [1/2] Exposure %.2f | [3/4] Threshold %.2f | [5/6] Bloom %.2f",
+        "DX12 | FPS %.0f Frame %.1f ms | GPU shadow %.2f scene %.2f bloom %.2f post %.2f ms | E %.1f T %.1f B %.1f [1-6]",
+        r.fps,
+        r.frame_ms,
+        r.gpu_pass_ms[0],
+        r.gpu_pass_ms[1],
+        bloom_ms,
+        r.gpu_pass_ms[5],
         r.post_exposure,
         r.post_threshold,
         r.post_strength,
@@ -1703,6 +1830,9 @@ renderer_destroy :: proc(){
     }
 
     r.post_constant_buffer->Release()
+
+    r.timestamp_readback->Release()
+    r.timestamp_heap->Release()
 
     r.device->Release()
 }
