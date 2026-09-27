@@ -15,6 +15,7 @@ main :: proc(){
     renderer_create_shadow_map()
     renderer_create_hdr_target()
     renderer_create_bloom_targets()
+    renderer_load_environment()
     defer renderer_destroy()
 
     last_time := time.now()

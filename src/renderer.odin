@@ -8,6 +8,8 @@ import dxgi "vendor:directx/dxgi"
 import d3dc "vendor:directx/d3d_compiler"
 import "core:math"
 import alg "core:math/linalg"
+import stbi "vendor:stb/image"
+import c "core:c"
 
 import "core:image"
 import "core:image/png"
@@ -20,6 +22,8 @@ HDR_SRV_INDEX  :: TEXTURE_COUNT + 1
 
 BLOOM_TARGET_COUNT :: 2
 BLOOM_SRV_START :: HDR_SRV_INDEX + 1
+
+ENVIRONMENT_SRV_INDEX :: BLOOM_SRV_START + BLOOM_TARGET_COUNT
 
 GPU_PASS_COUNT :: 6
 GPU_TIMESTAMP_COUNT :: GPU_PASS_COUNT * 2
@@ -89,6 +93,17 @@ PostConstants :: struct #align(256) {
     _pad0: f32,
 }
 
+SkyConstants :: struct #align(256) {
+    forward: [3]f32,
+    tan_half_fov: f32,
+
+    right: [3]f32,
+    aspect: f32,
+
+    up: [3]f32,
+    _pad0: f32,
+}
+
 Renderer :: struct {
     device: ^d3d12.IDevice,
     swap_chain: ^dxgi.ISwapChain3,
@@ -155,6 +170,12 @@ Renderer :: struct {
     gpu_pass_ms: [GPU_PASS_COUNT]f32,
     fps: f32,
     frame_ms: f32,
+
+    environment_texture: ^d3d12.IResource,
+    sky_pipeline_state: ^d3d12.IPipelineState,
+
+    sky_constant_buffer: ^d3d12.IResource,
+    sky_cb_mapped_data: ^SkyConstants,
 
     frame_index: u32,
 }
@@ -368,6 +389,11 @@ renderer_load_assets :: proc(){
     post_cbv_param.ShaderVisibility = .PIXEL
     post_cbv_param.Descriptor = {ShaderRegister = 1}
 
+    sky_cbv_param := d3d12.ROOT_PARAMETER{}
+    sky_cbv_param.ParameterType = .CBV
+    sky_cbv_param.ShaderVisibility = .PIXEL
+    sky_cbv_param.Descriptor = {ShaderRegister = 2}
+
     static_sampler := d3d12.STATIC_SAMPLER_DESC{
         Filter = .MIN_MAG_MIP_LINEAR,
         AddressU = .WRAP,
@@ -393,6 +419,7 @@ renderer_load_assets :: proc(){
         srv_param,
         shadow_param,
         post_cbv_param,
+        sky_cbv_param,
     }
     samplers := []d3d12.STATIC_SAMPLER_DESC{static_sampler, shadow_sampler}
 
@@ -503,6 +530,23 @@ renderer_load_assets :: proc(){
     }
     dx_check(hr)
     defer post_ps->Release()
+
+    sky_shader_path := win32.utf8_to_wstring("shaders/sky.hlsl")
+
+    sky_ps, sky_errors: ^d3d12.IBlob
+    hr = d3dc.CompileFromFile(
+        sky_shader_path, nil, nil,
+        "PSMain", "ps_5_1",
+        compile_flags, 0,
+        &sky_ps, &sky_errors,
+    )
+    if sky_errors != nil {
+        fmt.println("Sky PS compiler messages:",
+            cstring(sky_errors->GetBufferPointer()))
+        sky_errors->Release()
+    }
+    dx_check(hr)
+    defer sky_ps->Release()
 
     // BLOOM
     bloom_entries := [3]cstring{
@@ -662,6 +706,19 @@ renderer_load_assets :: proc(){
         (^rawptr)(&r.post_pipeline_state),
     ))
 
+    sky_pso_desc := post_pso_desc
+    sky_pso_desc.PS = {
+        pShaderBytecode = sky_ps->GetBufferPointer(),
+        BytecodeLength = sky_ps->GetBufferSize(),
+    }
+    sky_pso_desc.RTVFormats[0] = .R16G16B16A16_FLOAT
+
+    dx_check(r.device->CreateGraphicsPipelineState(
+        &sky_pso_desc,
+        d3d12.IPipelineState_UUID,
+        (^rawptr)(&r.sky_pipeline_state),
+    ))
+
     for i in 0..<len(bloom_ps) {
         bloom_pso_desc := post_pso_desc
         bloom_pso_desc.PS = {
@@ -735,6 +792,25 @@ renderer_load_assets :: proc(){
         0,
         &read_range,
         (^rawptr)(&r.post_cb_mapped_data),
+    ))
+
+    sky_cb_desc := post_cb_desc
+    sky_cb_desc.Width = u64(size_of(SkyConstants))
+
+    dx_check(r.device->CreateCommittedResource(
+        &cb_heap_props,
+        {},
+        &sky_cb_desc,
+        {.VERTEX_AND_CONSTANT_BUFFER},
+        nil,
+        d3d12.IResource_UUID,
+        (^rawptr)(&r.sky_constant_buffer),
+    ))
+
+    dx_check(r.sky_constant_buffer->Map(
+        0,
+        &read_range,
+        (^rawptr)(&r.sky_cb_mapped_data),
     ))
 
     // ── 6. Viewport & Scissor ─────────────────────────────────────────────────
@@ -941,7 +1017,7 @@ renderer_load_textures :: proc(){
     r := &g_renderer
 
     srv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{
-        NumDescriptors = TEXTURE_COUNT + 4,
+        NumDescriptors = TEXTURE_COUNT + 5,
         Type = .CBV_SRV_UAV,
         Flags = {.SHADER_VISIBLE},
     }
@@ -1299,6 +1375,144 @@ renderer_load_texture :: proc(index: int){
 
 }
 
+renderer_load_environment :: proc() {
+    r := &g_renderer
+
+    width, height, channels: c.int
+    pixels := stbi.loadf(
+        "textures/environment_4k_2.hdr",
+        &width, &height, &channels,
+        4, // Request RGBA floats.
+    )
+    if pixels == nil {
+        fmt.panicf("Failed to load environment HDR: %s",
+            stbi.failure_reason())
+    }
+    defer stbi.image_free(rawptr(pixels))
+
+    texture_desc := d3d12.RESOURCE_DESC{
+        Dimension = .TEXTURE2D,
+        Width = u64(width),
+        Height = u32(height),
+        DepthOrArraySize = 1,
+        MipLevels = 1,
+        Format = .R16G16B16A16_FLOAT,
+        SampleDesc = {Count = 1},
+    }
+    default_heap := d3d12.HEAP_PROPERTIES{Type = .DEFAULT}
+
+    dx_check(r.device->CreateCommittedResource(
+        &default_heap,
+        {},
+        &texture_desc,
+        {.COPY_DEST},
+        nil,
+        d3d12.IResource_UUID,
+        (^rawptr)(&r.environment_texture),
+    ))
+
+    // RGBA16F = 8 bytes per pixel; texture-copy rows require 256-byte alignment.
+    row_pitch := (u64(width) * 8 + 255) & ~u64(255)
+    upload_size := row_pitch * u64(height)
+
+    upload_desc := d3d12.RESOURCE_DESC{
+        Dimension = .BUFFER,
+        Width = upload_size,
+        Height = 1,
+        DepthOrArraySize = 1,
+        MipLevels = 1,
+        SampleDesc = {Count = 1},
+        Layout = .ROW_MAJOR,
+    }
+    upload_heap := d3d12.HEAP_PROPERTIES{Type = .UPLOAD}
+
+    upload_buffer: ^d3d12.IResource
+    dx_check(r.device->CreateCommittedResource(
+        &upload_heap,
+        {},
+        &upload_desc,
+        {.VERTEX_AND_CONSTANT_BUFFER},
+        nil,
+        d3d12.IResource_UUID,
+        (^rawptr)(&upload_buffer),
+    ))
+    defer upload_buffer->Release()
+
+    mapped: rawptr
+    dx_check(upload_buffer->Map(0, nil, &mapped))
+
+    for y in 0..<int(height) {
+        row_address := uintptr(mapped) + uintptr(u64(y) * row_pitch)
+        dst_row := ([^]f16)(rawptr(row_address))
+
+        for x in 0..<int(width) {
+            for channel in 0..<4 {
+                pixel_index := (y * int(width) + x) * 4 + channel
+                dst_row[x * 4 + channel] = f16(
+                    clamp(pixels[pixel_index], 0.0, 65504.0)
+                )
+            }
+        }
+    }
+    upload_buffer->Unmap(0, nil)
+
+    dx_check(r.command_allocators[0]->Reset())
+    dx_check(r.command_list->Reset(r.command_allocators[0], nil))
+
+    source := d3d12.TEXTURE_COPY_LOCATION{
+        pResource = upload_buffer,
+        Type = .PLACED_FOOTPRINT,
+    }
+    source.PlacedFootprint = {
+        Footprint = {
+            Format = .R16G16B16A16_FLOAT,
+            Width = u32(width),
+            Height = u32(height),
+            Depth = 1,
+            RowPitch = u32(row_pitch),
+        },
+    }
+
+    destination := d3d12.TEXTURE_COPY_LOCATION{
+        pResource = r.environment_texture,
+        Type = .SUBRESOURCE_INDEX,
+        SubresourceIndex = 0,
+    }
+
+    r.command_list->CopyTextureRegion(
+        &destination, 0, 0, 0, &source, nil,
+    )
+
+    barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
+    barrier.Transition = {
+        pResource = r.environment_texture,
+        StateBefore = {.COPY_DEST},
+        StateAfter = {.PIXEL_SHADER_RESOURCE},
+        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+    }
+    r.command_list->ResourceBarrier(1, &barrier)
+
+    dx_check(r.command_list->Close())
+    lists := []^d3d12.ICommandList{r.command_list}
+    r.command_queue->ExecuteCommandLists(u32(len(lists)), raw_data(lists))
+    renderer_wait_for_gpu()
+
+    srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
+        Format = .R16G16B16A16_FLOAT,
+        ViewDimension = .TEXTURE2D,
+        Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
+    }
+    srv_desc.Texture2D = {MipLevels = 1}
+
+    srv: d3d12.CPU_DESCRIPTOR_HANDLE
+    r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv)
+    srv.ptr += uint(ENVIRONMENT_SRV_INDEX) *
+               uint(r.srv_descriptor_size)
+    r.device->CreateShaderResourceView(
+        r.environment_texture, &srv_desc, srv,
+    )
+}
+
 renderer_render_frame :: proc(scene: ^Scene){
     r := &g_renderer
 
@@ -1323,6 +1537,20 @@ renderer_render_frame :: proc(scene: ^Scene){
 
     camera := &scene.cameras[camera_index]
     camera_position := scene.transforms[camera_index].position
+
+    forward := camera_forward(camera)
+    world_up := alg.Vector3f32{0, 1, 0}
+    right := alg.normalize(alg.cross(world_up, forward))
+    up := alg.cross(forward, right)
+
+    r.sky_cb_mapped_data.forward = forward
+    r.sky_cb_mapped_data.right = right
+    r.sky_cb_mapped_data.up = up
+    r.sky_cb_mapped_data.tan_half_fov = math.tan(
+        alg.to_radians(f32(45)) * 0.5,
+    )
+    r.sky_cb_mapped_data.aspect = f32(r.width) / f32(r.height)
+
     view := camera_view_matrix(camera, camera_position)
 
     proj := perspective_lh(
@@ -1488,13 +1716,38 @@ renderer_render_frame :: proc(scene: ^Scene){
     hdr_rtv: d3d12.CPU_DESCRIPTOR_HANDLE
     r.hdr_rtv_heap->GetCPUDescriptorHandleForHeapStart(&hdr_rtv)
 
-    dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.dsv_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle)
-
-    r.command_list->OMSetRenderTargets(1, &hdr_rtv, false, &dsv_handle)
+    // First fill the HDR target with the sky, without a depth buffer.
+    r.command_list->OMSetRenderTargets(1, &hdr_rtv, false, nil)
 
     clear_color := [4]f32{0.1, 0.1, 0.2, 1.0}
     r.command_list->ClearRenderTargetView(hdr_rtv, &clear_color, 0, nil)
+
+    r.command_list->SetGraphicsRootSignature(r.root_signature)
+    r.command_list->SetPipelineState(r.sky_pipeline_state)
+
+    sky_heaps := []^d3d12.IDescriptorHeap{r.srv_heap}
+    r.command_list->SetDescriptorHeaps(1, raw_data(sky_heaps))
+
+    r.command_list->SetGraphicsRootConstantBufferView(
+        4,
+        r.sky_constant_buffer->GetGPUVirtualAddress(),
+    )
+
+    sky_srv: d3d12.GPU_DESCRIPTOR_HANDLE
+    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&sky_srv)
+    sky_srv.ptr += u64(ENVIRONMENT_SRV_INDEX) *
+                u64(r.srv_descriptor_size)
+    r.command_list->SetGraphicsRootDescriptorTable(1, sky_srv)
+
+    r.command_list->RSSetViewports(1, &r.viewport)
+    r.command_list->RSSetScissorRects(1, &r.scissor_rect)
+    r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
+    r.command_list->DrawInstanced(3, 1, 0, 0)
+
+    // Now draw scene geometry over the sky, with depth enabled.
+    dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+    r.dsv_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle)
+    r.command_list->OMSetRenderTargets(1, &hdr_rtv, false, &dsv_handle)
     r.command_list->ClearDepthStencilView(
         dsv_handle, {.DEPTH}, 1.0, 0, 0, nil,
     )
@@ -1833,6 +2086,10 @@ renderer_destroy :: proc(){
 
     r.timestamp_readback->Release()
     r.timestamp_heap->Release()
+
+    r.environment_texture->Release()
+    r.sky_pipeline_state->Release()
+    r.sky_constant_buffer->Release()
 
     r.device->Release()
 }
