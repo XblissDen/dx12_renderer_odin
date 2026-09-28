@@ -29,6 +29,11 @@ IRRADIANCE_WIDTH :: 64
 IRRADIANCE_HEIGHT :: 32
 IRRADIANCE_SRV_INDEX :: ENVIRONMENT_SRV_INDEX + 1
 
+PREFILTER_WIDTH :: 512
+PREFILTER_HEIGHT :: 256
+PREFILTER_MIP_COUNT :: 5
+PREFILTER_SRV_INDEX :: IRRADIANCE_SRV_INDEX + 1
+
 GPU_PASS_COUNT :: 6
 GPU_TIMESTAMP_COUNT :: GPU_PASS_COUNT * 2
 
@@ -108,6 +113,11 @@ SkyConstants :: struct #align(256) {
     _pad0: f32,
 }
 
+PrefilterConstants :: struct #align(256) {
+    roughness: f32,
+    _pad0: [3]f32,
+}
+
 Renderer :: struct {
     device: ^d3d12.IDevice,
     swap_chain: ^dxgi.ISwapChain3,
@@ -184,6 +194,13 @@ Renderer :: struct {
     irradiance_texture: ^d3d12.IResource,
     irradiance_rtv_heap: ^d3d12.IDescriptorHeap,
     irradiance_pipeline_state: ^d3d12.IPipelineState,
+
+    prefilter_texture: ^d3d12.IResource,
+    prefilter_rtv_heap: ^d3d12.IDescriptorHeap,
+    prefilter_pipeline_state: ^d3d12.IPipelineState,
+
+    prefilter_constant_buffer: ^d3d12.IResource,
+    prefilter_cb_mapped_data: [^]PrefilterConstants,
 
     frame_index: u32,
 }
@@ -430,6 +447,25 @@ renderer_load_assets :: proc(){
         pDescriptorRanges = &irradiance_range,
     }
 
+    prefilter_range := d3d12.DESCRIPTOR_RANGE{
+        RangeType = .SRV,
+        NumDescriptors = 1,
+        BaseShaderRegister = 4,
+        OffsetInDescriptorsFromTableStart = 0,
+    }
+    prefilter_param := d3d12.ROOT_PARAMETER{}
+    prefilter_param.ParameterType = .DESCRIPTOR_TABLE
+    prefilter_param.ShaderVisibility = .PIXEL
+    prefilter_param.DescriptorTable = {
+        NumDescriptorRanges = 1,
+        pDescriptorRanges = &prefilter_range,
+    }
+
+    prefilter_cbv_param := d3d12.ROOT_PARAMETER{}
+    prefilter_cbv_param.ParameterType = .CBV
+    prefilter_cbv_param.ShaderVisibility = .PIXEL
+    prefilter_cbv_param.Descriptor = {ShaderRegister = 3}
+
     static_sampler := d3d12.STATIC_SAMPLER_DESC{
         Filter = .MIN_MAG_MIP_LINEAR,
         AddressU = .WRAP,
@@ -437,6 +473,7 @@ renderer_load_assets :: proc(){
         AddressW = .WRAP,
         ShaderRegister = 0,
         ShaderVisibility = .PIXEL,
+        MaxLOD = 16.0,
     }
 
     shadow_sampler := d3d12.STATIC_SAMPLER_DESC{
@@ -458,6 +495,8 @@ renderer_load_assets :: proc(){
         sky_cbv_param,
         environment_param, // Root slot 5 -> t2
         irradiance_param,  // Root slot 6 -> t3
+        prefilter_cbv_param, // Root slot 7 -> b3
+        prefilter_param,     // Root slot 8 -> t4
     }
     samplers := []d3d12.STATIC_SAMPLER_DESC{static_sampler, shadow_sampler}
 
@@ -602,6 +641,23 @@ renderer_load_assets :: proc(){
     }
     dx_check(hr)
     defer irradiance_ps->Release()
+
+    prefilter_path := win32.utf8_to_wstring("shaders/environment_prefilter.hlsl")
+    prefilter_ps, prefilter_errors: ^d3d12.IBlob
+
+    hr = d3dc.CompileFromFile(
+        prefilter_path, nil, nil,
+        "PSMain", "ps_5_1",
+        compile_flags, 0,
+        &prefilter_ps, &prefilter_errors,
+    )
+    if prefilter_errors != nil {
+        fmt.println("Prefilter PS compiler messages:",
+            cstring(prefilter_errors->GetBufferPointer()))
+        prefilter_errors->Release()
+    }
+    dx_check(hr)
+    defer prefilter_ps->Release()
 
     // BLOOM
     bloom_entries := [3]cstring{
@@ -785,6 +841,19 @@ renderer_load_assets :: proc(){
         &irradiance_pso_desc,
         d3d12.IPipelineState_UUID,
         (^rawptr)(&r.irradiance_pipeline_state),
+    ))
+
+    prefilter_pso_desc := post_pso_desc
+    prefilter_pso_desc.PS = {
+        pShaderBytecode = prefilter_ps->GetBufferPointer(),
+        BytecodeLength = prefilter_ps->GetBufferSize(),
+    }
+    prefilter_pso_desc.RTVFormats[0] = .R16G16B16A16_FLOAT
+
+    dx_check(r.device->CreateGraphicsPipelineState(
+        &prefilter_pso_desc,
+        d3d12.IPipelineState_UUID,
+        (^rawptr)(&r.prefilter_pipeline_state),
     ))
 
     for i in 0..<len(bloom_ps) {
@@ -1085,7 +1154,7 @@ renderer_load_textures :: proc(){
     r := &g_renderer
 
     srv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{
-        NumDescriptors = TEXTURE_COUNT + 6,
+        NumDescriptors = TEXTURE_COUNT + 7,
         Type = .CBV_SRV_UAV,
         Flags = {.SHADER_VISIBLE},
     }
@@ -1276,6 +1345,178 @@ renderer_create_irradiance_map :: proc() {
     srv.ptr += uint(IRRADIANCE_SRV_INDEX) *
                uint(r.srv_descriptor_size)
     r.device->CreateShaderResourceView(r.irradiance_texture, &srv_desc, srv)
+}
+
+// create the mipmapped texture
+renderer_create_prefiltered_environment :: proc() {
+    r := &g_renderer
+
+    rtv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{
+        NumDescriptors = PREFILTER_MIP_COUNT,
+        Type = .RTV,
+    }
+    dx_check(r.device->CreateDescriptorHeap(
+        &rtv_heap_desc,
+        d3d12.IDescriptorHeap_UUID,
+        (^rawptr)(&r.prefilter_rtv_heap),
+    ))
+
+    desc := d3d12.RESOURCE_DESC{
+        Dimension = .TEXTURE2D,
+        Width = PREFILTER_WIDTH,
+        Height = PREFILTER_HEIGHT,
+        DepthOrArraySize = 1,
+        MipLevels = PREFILTER_MIP_COUNT,
+        Format = .R16G16B16A16_FLOAT,
+        SampleDesc = {Count = 1},
+        Flags = {.ALLOW_RENDER_TARGET},
+    }
+
+    clear_value := d3d12.CLEAR_VALUE{
+        Format = .R16G16B16A16_FLOAT,
+    }
+    clear_value.Color = {0, 0, 0, 1}
+    heap_props := d3d12.HEAP_PROPERTIES{Type = .DEFAULT}
+
+    dx_check(r.device->CreateCommittedResource(
+        &heap_props,
+        {},
+        &desc,
+        {.PIXEL_SHADER_RESOURCE},
+        &clear_value,
+        d3d12.IResource_UUID,
+        (^rawptr)(&r.prefilter_texture),
+    ))
+
+    rtv_increment := r.device->GetDescriptorHandleIncrementSize(.RTV)
+    for mip in 0..<PREFILTER_MIP_COUNT {
+        rtv_desc := d3d12.RENDER_TARGET_VIEW_DESC{
+            Format = .R16G16B16A16_FLOAT,
+            ViewDimension = .TEXTURE2D,
+        }
+        rtv_desc.Texture2D = {MipSlice = u32(mip)}
+
+        rtv: d3d12.CPU_DESCRIPTOR_HANDLE
+        r.prefilter_rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv)
+        rtv.ptr += uint(mip) * uint(rtv_increment)
+        r.device->CreateRenderTargetView(r.prefilter_texture, &rtv_desc, rtv)
+    }
+
+    srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
+        Format = .R16G16B16A16_FLOAT,
+        ViewDimension = .TEXTURE2D,
+        Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
+    }
+    srv_desc.Texture2D = {MipLevels = PREFILTER_MIP_COUNT}
+
+    srv: d3d12.CPU_DESCRIPTOR_HANDLE
+    r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv)
+    srv.ptr += uint(PREFILTER_SRV_INDEX) * uint(r.srv_descriptor_size)
+    r.device->CreateShaderResourceView(r.prefilter_texture, &srv_desc, srv)
+
+    // One 256-byte constant-buffer slot for each mip's roughness.
+    cb_heap := d3d12.HEAP_PROPERTIES{Type = .UPLOAD}
+    cb_desc := d3d12.RESOURCE_DESC{
+        Dimension = .BUFFER,
+        Width = u64(size_of(PrefilterConstants) * PREFILTER_MIP_COUNT),
+        Height = 1,
+        DepthOrArraySize = 1,
+        MipLevels = 1,
+        SampleDesc = {Count = 1},
+        Layout = .ROW_MAJOR,
+    }
+
+    dx_check(r.device->CreateCommittedResource(
+        &cb_heap,
+        {},
+        &cb_desc,
+        {.VERTEX_AND_CONSTANT_BUFFER},
+        nil,
+        d3d12.IResource_UUID,
+        (^rawptr)(&r.prefilter_constant_buffer),
+    ))
+
+    read_range := d3d12.RANGE{Begin = 0, End = 0}
+    dx_check(r.prefilter_constant_buffer->Map(
+        0, &read_range, (^rawptr)(&r.prefilter_cb_mapped_data),
+    ))
+
+    for mip in 0..<PREFILTER_MIP_COUNT {
+        r.prefilter_cb_mapped_data[mip].roughness =
+            f32(mip) / f32(PREFILTER_MIP_COUNT - 1)
+    }
+}
+
+//render each mip at startup
+renderer_generate_prefiltered_environment :: proc() {
+    r := &g_renderer
+
+    dx_check(r.command_allocators[0]->Reset())
+    dx_check(r.command_list->Reset(r.command_allocators[0], nil))
+
+    barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
+    barrier.Transition = {
+        pResource = r.prefilter_texture,
+        StateBefore = {.PIXEL_SHADER_RESOURCE},
+        StateAfter = {.RENDER_TARGET},
+        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+    }
+    r.command_list->ResourceBarrier(1, &barrier)
+
+    r.command_list->SetGraphicsRootSignature(r.root_signature)
+    r.command_list->SetPipelineState(r.prefilter_pipeline_state)
+
+    heaps := []^d3d12.IDescriptorHeap{r.srv_heap}
+    r.command_list->SetDescriptorHeaps(1, raw_data(heaps))
+
+    environment_srv: d3d12.GPU_DESCRIPTOR_HANDLE
+    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&environment_srv)
+    environment_srv.ptr += u64(ENVIRONMENT_SRV_INDEX) *
+                           u64(r.srv_descriptor_size)
+    r.command_list->SetGraphicsRootDescriptorTable(5, environment_srv)
+    r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
+
+    rtv_increment := r.device->GetDescriptorHandleIncrementSize(.RTV)
+
+    for mip in 0..<PREFILTER_MIP_COUNT {
+        mip_width := u32(PREFILTER_WIDTH) >> u32(mip)
+        mip_height := u32(PREFILTER_HEIGHT) >> u32(mip)
+
+        rtv: d3d12.CPU_DESCRIPTOR_HANDLE
+        r.prefilter_rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv)
+        rtv.ptr += uint(mip) * uint(rtv_increment)
+        r.command_list->OMSetRenderTargets(1, &rtv, false, nil)
+
+        viewport := d3d12.VIEWPORT{
+            Width = f32(mip_width),
+            Height = f32(mip_height),
+            MinDepth = 0,
+            MaxDepth = 1,
+        }
+        scissor := d3d12.RECT{
+            right = i32(mip_width),
+            bottom = i32(mip_height),
+        }
+        r.command_list->RSSetViewports(1, &viewport)
+        r.command_list->RSSetScissorRects(1, &scissor)
+
+        cb_offset := u64(mip) * u64(size_of(PrefilterConstants))
+        r.command_list->SetGraphicsRootConstantBufferView(
+            7,
+            r.prefilter_constant_buffer->GetGPUVirtualAddress() + cb_offset,
+        )
+
+        r.command_list->DrawInstanced(3, 1, 0, 0)
+    }
+
+    barrier.Transition.StateBefore = {.RENDER_TARGET}
+    barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
+    r.command_list->ResourceBarrier(1, &barrier)
+
+    dx_check(r.command_list->Close())
+    lists := []^d3d12.ICommandList{r.command_list}
+    r.command_queue->ExecuteCommandLists(u32(len(lists)), raw_data(lists))
+    renderer_wait_for_gpu()
 }
 
 renderer_generate_irradiance :: proc() {
@@ -1955,6 +2196,12 @@ renderer_render_frame :: proc(scene: ^Scene){
                                 u64(r.srv_descriptor_size)
     r.command_list->SetGraphicsRootDescriptorTable(6, irradiance_gpu_handle)
 
+    prefilter_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
+    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&prefilter_gpu_handle)
+    prefilter_gpu_handle.ptr += u64(PREFILTER_SRV_INDEX) *
+                                u64(r.srv_descriptor_size)
+    r.command_list->SetGraphicsRootDescriptorTable(8, prefilter_gpu_handle)
+
     // viewport, scissor
     r.command_list->RSSetViewports(1, &r.viewport)
     r.command_list->RSSetScissorRects(1, &r.scissor_rect)
@@ -2284,6 +2531,11 @@ renderer_destroy :: proc(){
     r.irradiance_texture->Release()
     r.irradiance_rtv_heap->Release()
     r.irradiance_pipeline_state->Release()
+
+    r.prefilter_texture->Release()
+    r.prefilter_rtv_heap->Release()
+    r.prefilter_pipeline_state->Release()
+    r.prefilter_constant_buffer->Release()
 
     r.device->Release()
 }

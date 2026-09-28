@@ -16,8 +16,13 @@ main :: proc(){
     renderer_create_hdr_target()
     renderer_create_bloom_targets()
     renderer_load_environment()
+
     renderer_create_irradiance_map()
     renderer_generate_irradiance()
+
+    renderer_create_prefiltered_environment()
+    renderer_generate_prefiltered_environment()
+
     defer renderer_destroy()
 
     last_time := time.now()

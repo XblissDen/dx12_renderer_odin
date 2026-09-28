@@ -41,6 +41,7 @@ SamplerState g_sampler : register(s0);
 Texture2D<float> g_shadow_map : register(t1);
 SamplerComparisonState g_shadow_sampler : register(s1);
 Texture2D<float4> g_irradiance : register(t3);
+Texture2D<float4> g_prefiltered_environment : register(t4);
 
 struct VSInput
 {
@@ -145,6 +146,16 @@ float3 EvaluateDirectLight(
     return (diffuse + specular) * radiance * NdotL * step(0.00001f, NdotV);
 }
 
+float2 EnvBRDFApprox(float NdotV, float material_roughness)
+{
+    float4 c0 = float4(-1.0f, -0.0275f, -0.572f, 0.022f);
+    float4 c1 = float4(1.0f, 0.0425f, 1.04f, -0.04f);
+    float4 r = material_roughness * c0 + c1;
+
+    float a004 = min(r.x * r.x, exp2(-9.28f * NdotV)) * r.x + r.y;
+    return max(float2(-1.04f, 1.04f) * a004 + r.zw, 0.0f);
+}
+
 float4 PSMain(PSInput input) : SV_TARGET
 {
     if (unlit != 0)
@@ -186,7 +197,29 @@ float4 PSMain(PSInput input) : SV_TARGET
 
     float3 result = ambient_kD * albedo * incoming_diffuse;
 
-    // Existing sun shadowing and direct-light loops follow unchanged.
+    // sample reflections by roughness
+    float3 reflection = reflect(-V, N);
+
+    float2 reflection_uv = float2(
+        atan2(reflection.z, reflection.x) /
+            (2.0f * 3.14159265f) + 0.5f,
+        acos(clamp(reflection.y, -1.0f, 1.0f)) / 3.14159265f
+    );
+
+    float3 prefiltered_color = g_prefiltered_environment.SampleLevel(
+        g_sampler,
+        reflection_uv,
+        material_roughness * 4.0f
+    ).rgb;
+
+    float2 environment_brdf = EnvBRDFApprox(
+        max(dot(N, V), 0.0f),
+        material_roughness
+    );
+
+    result += prefiltered_color *
+            (ambient_F0 * environment_brdf.x + environment_brdf.y);
+
 
     float sun_visibility = 1.0f;
 
