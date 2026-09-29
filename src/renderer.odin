@@ -485,6 +485,19 @@ renderer_load_assets :: proc(){
         ShaderVisibility = .PIXEL,
     }
 
+    material_sampler := d3d12.STATIC_SAMPLER_DESC{
+        Filter = .ANISOTROPIC,
+        AddressU = .WRAP,
+        AddressV = .WRAP,
+        AddressW = .WRAP,
+        MaxAnisotropy = 16,
+        ComparisonFunc = .ALWAYS,
+        MinLOD = 0,
+        MaxLOD = 16.0,
+        ShaderRegister = 2,
+        ShaderVisibility = .PIXEL,
+    }
+
     params := []d3d12.ROOT_PARAMETER{
         cbv_param,
         srv_param,
@@ -496,8 +509,11 @@ renderer_load_assets :: proc(){
         prefilter_cbv_param, // Root slot 7 -> b3
         prefilter_param,     // Root slot 8 -> t4
     }
-    samplers := []d3d12.STATIC_SAMPLER_DESC{static_sampler, shadow_sampler}
-
+    samplers := []d3d12.STATIC_SAMPLER_DESC{
+        static_sampler,
+        shadow_sampler,
+        material_sampler,
+    }
     rs_desc := d3d12.ROOT_SIGNATURE_DESC{
         NumParameters = u32(len(params)),
         pParameters = raw_data(params),

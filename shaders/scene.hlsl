@@ -38,6 +38,7 @@ cbuffer SceneConstants : register(b0)
 
 Texture2D    g_texture : register(t0);
 SamplerState g_sampler : register(s0);
+SamplerState g_material_sampler : register(s2);
 Texture2D<float> g_shadow_map : register(t1);
 SamplerComparisonState g_shadow_sampler : register(s1);
 Texture2D<float4> g_irradiance : register(t3);
@@ -164,7 +165,7 @@ float4 PSMain(PSInput input) : SV_TARGET
     }
 
     // Our texture SRV is UNORM, so decode its sRGB-style image values manually.
-    float3 texture_color = g_texture.Sample(g_sampler, input.texcoord).rgb;
+    float3 texture_color = g_texture.Sample(g_material_sampler, input.texcoord).rgb;
     float3 albedo = pow(saturate(texture_color), 2.2f) * material_tint;
 
     float material_roughness = clamp(roughness, 0.08f, 1.0f);
