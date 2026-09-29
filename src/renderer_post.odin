@@ -211,3 +211,28 @@ renderer_apply_post_steps :: proc(
 
     renderer_update_post_title()
 }
+
+renderer_render_bloom :: proc() {
+    r := &g_renderer
+
+    renderer_begin_gpu_pass(.Bloom_Extract)
+    // HDR -> bright areas in bloom target 0.
+    renderer_bloom_pass(
+        0, HDR_SRV_INDEX, r.bloom_pipeline_states[0],
+    )
+    renderer_end_gpu_pass(.Bloom_Extract)
+
+    // Target 0 -> horizontal blur in target 1.
+    renderer_begin_gpu_pass(.Bloom_Horizontal)
+    renderer_bloom_pass(
+        1, BLOOM_SRV_START, r.bloom_pipeline_states[1],
+    )
+    renderer_end_gpu_pass(.Bloom_Horizontal)
+
+    // Target 1 -> vertical blur back in target 0.
+    renderer_begin_gpu_pass(.Bloom_Vertical)
+    renderer_bloom_pass(
+        0, BLOOM_SRV_START + 1, r.bloom_pipeline_states[2],
+    )
+    renderer_end_gpu_pass(.Bloom_Vertical)
+}
