@@ -1210,12 +1210,31 @@ renderer_load_texture :: proc(index: int){
         }
     }
 
+    mips := make([dynamic][]u8, context.temp_allocator)
+    append(&mips, pixels) // Level 0 belongs to img; do not free it here.
+
+    mip_width := u32(width)
+    mip_height := u32(height)
+
+    for mip_width > 1 || mip_height > 1 {
+        next, next_width, next_height := texture_next_mip(
+            mips[len(mips) - 1],
+            mip_width,
+            mip_height,
+            context.temp_allocator,
+        )
+        append(&mips, next)
+
+        mip_width = next_width
+        mip_height = next_height
+    }
+
     tex_desc := d3d12.RESOURCE_DESC{
         Dimension = .TEXTURE2D,
         Width = width,
         Height = u32(height),
         DepthOrArraySize = 1,
-        MipLevels = 1,
+        MipLevels = u16(len(mips)),
         Format = .R8G8B8A8_UNORM,
         SampleDesc = {Count = 1},
         Flags = {},
@@ -1233,8 +1252,25 @@ renderer_load_texture :: proc(index: int){
     ))
 
     // UPLOAD BUFFER
-    row_pitch := (width * 4 + 255) & ~u64(255)
-    upload_size := row_pitch * height
+    layouts := make(
+        []d3d12.PLACED_SUBRESOURCE_FOOTPRINT,
+        len(mips),
+        context.temp_allocator,
+    )
+    row_counts := make([]u32, len(mips), context.temp_allocator)
+    row_sizes := make([]u64, len(mips), context.temp_allocator)
+
+    upload_size: u64
+    r.device->GetCopyableFootprints(
+        &tex_desc,
+        0,
+        u32(len(mips)),
+        0,
+        raw_data(layouts),
+        raw_data(row_counts),
+        raw_data(row_sizes),
+        &upload_size,
+    )
 
     upload_heap := d3d12.HEAP_PROPERTIES { Type = .UPLOAD }
     upload_desc := d3d12.RESOURCE_DESC{
@@ -1261,36 +1297,46 @@ renderer_load_texture :: proc(index: int){
 
     mapped: rawptr
     dx_check(upload_buffer->Map(0, nil, &mapped))
-    src := raw_data(pixels)
-    dst := uintptr(mapped)
-    for y in 0..<height {
-        dst_row := dst + uintptr(y * row_pitch)
-        src_row := uintptr(src) + uintptr(y * width * 4)
-        runtime.mem_copy(rawptr(dst_row), rawptr(src_row), int(width * 4))
+    for mip in 0..<len(mips) {
+        layout := layouts[mip]
+        source_address := uintptr(raw_data(mips[mip]))
+
+        for y in 0..<int(row_counts[mip]) {
+            destination_row := uintptr(mapped) +
+                uintptr(layout.Offset) +
+                uintptr(u64(y) * u64(layout.Footprint.RowPitch))
+
+            source_row := source_address +
+                uintptr(u64(y) * row_sizes[mip])
+
+            runtime.mem_copy(
+                rawptr(destination_row),
+                rawptr(source_row),
+                int(row_sizes[mip]),
+            )
+        }
     }
     upload_buffer->Unmap(0, nil)
 
     dx_check(r.command_allocators[0]->Reset())
     dx_check(r.command_list->Reset(r.command_allocators[0], nil))
 
-    src_location := d3d12.TEXTURE_COPY_LOCATION{
-        pResource = upload_buffer,
-        Type = .PLACED_FOOTPRINT,
-    }
-    src_location.PlacedFootprint = {
-        Footprint = {
-            Format = .R8G8B8A8_UNORM,
-            Width = u32(width),
-            Height = u32(height),
-            Depth = 1,
-            RowPitch = u32(row_pitch),
-        },
-    }
+    for mip in 0..<len(mips) {
+        src_location := d3d12.TEXTURE_COPY_LOCATION{
+            pResource = upload_buffer,
+            Type = .PLACED_FOOTPRINT,
+        }
+        src_location.PlacedFootprint = layouts[mip]
 
-    dst_location := d3d12.TEXTURE_COPY_LOCATION{
-        pResource = r.textures[index],
-        Type = .SUBRESOURCE_INDEX,
-        SubresourceIndex = 0,
+        dst_location := d3d12.TEXTURE_COPY_LOCATION{
+            pResource = r.textures[index],
+            Type = .SUBRESOURCE_INDEX,
+            SubresourceIndex = u32(mip),
+        }
+
+        r.command_list->CopyTextureRegion(
+            &dst_location, 0, 0, 0, &src_location, nil,
+        )
     }
 
     // Transition: COPY_DEST → SHADER_RESOURCE
@@ -1302,7 +1348,6 @@ renderer_load_texture :: proc(index: int){
         Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
     }
 
-    r.command_list->CopyTextureRegion(&dst_location, 0, 0, 0, &src_location, nil)
     r.command_list->ResourceBarrier(1, &copy_barrier)
     dx_check(r.command_list->Close())
 
@@ -1317,7 +1362,7 @@ renderer_load_texture :: proc(index: int){
         ViewDimension           = .TEXTURE2D,
         Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
     }
-    srv_desc.Texture2D = { MipLevels = 1 }
+    srv_desc.Texture2D = { MipLevels = u32(len(mips)) }
 
     srv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv_handle)
