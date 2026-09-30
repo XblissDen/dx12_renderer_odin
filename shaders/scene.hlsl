@@ -15,10 +15,10 @@ cbuffer SceneConstants : register(b0)
     float4x4 projection;
 
     float3 view_position;
-    float  _pad0;
+    float  normal_strength;
 
     float3 material_tint;
-    float  _pad1;
+    float  uv_scale;
 
     uint  light_count;
     uint  unlit;
@@ -43,12 +43,14 @@ Texture2D<float> g_shadow_map : register(t1);
 SamplerComparisonState g_shadow_sampler : register(s1);
 Texture2D<float4> g_irradiance : register(t3);
 Texture2D<float4> g_prefiltered_environment : register(t4);
+Texture2D<float4> g_normal_map : register(t5);
 
 struct VSInput
 {
     float3 position : POSITION;
     float3 normal   : NORMAL;
     float2 texcoord : TEXCOORD;
+    float4 tangent : TANGENT;
 };
 
 struct PSInput
@@ -58,6 +60,7 @@ struct PSInput
     float3 normal       : NORMAL;
     float2 texcoord     : TEXCOORD1;
     float4 shadow_position : TEXCOORD2;
+    float4 tangent : TEXCOORD3;
 };
 
 PSInput VSMain(VSInput input)
@@ -75,6 +78,10 @@ PSInput VSMain(VSInput input)
 
     output.normal = mul(input.normal, (float3x3)model);
     output.texcoord = input.texcoord;
+    output.tangent = float4(
+        mul(input.tangent.xyz, (float3x3)model),
+        input.tangent.w
+    );
 
     return output;
 }
@@ -165,13 +172,38 @@ float4 PSMain(PSInput input) : SV_TARGET
     }
 
     // Our texture SRV is UNORM, so decode its sRGB-style image values manually.
-    float3 texture_color = g_texture.Sample(g_material_sampler, input.texcoord).rgb;
+    float2 material_uv = input.texcoord * uv_scale;
+
+    float3 texture_color = g_texture.Sample(
+        g_material_sampler, material_uv
+    ).rgb;
     float3 albedo = pow(saturate(texture_color), 2.2f) * material_tint;
 
     float material_roughness = clamp(roughness, 0.08f, 1.0f);
     float material_metallic = saturate(metallic);
 
     float3 N = normalize(input.normal);
+    if (normal_strength > 0.0f)
+    {
+        // Rebuild an orthogonal surface basis after interpolation.
+        float3 T = normalize(
+            input.tangent.xyz - N * dot(N, input.tangent.xyz)
+        );
+        float3 B = cross(N, T) * input.tangent.w;
+
+        // Normal maps encode signed directions in unsigned RGB channels.
+        float3 tangent_normal = g_normal_map.Sample(
+            g_material_sampler, material_uv
+        ).xyz * 2.0f - 1.0f;
+
+        tangent_normal.xy *= normal_strength;
+
+        N = normalize(
+            T * tangent_normal.x +
+            B * tangent_normal.y +
+            N * tangent_normal.z
+        );
+    }
     float3 V = normalize(view_position - input.world_pos);
     float3 sun_L = normalize(-sun_direction);
 

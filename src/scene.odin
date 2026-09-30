@@ -4,13 +4,15 @@ import alg "core:math/linalg"
 import "core:math"
 
 MAX_ENTITIES :: 16
-TEXTURE_COUNT :: 2
+TEXTURE_COUNT :: 4
 MESH_COUNT :: 2
 MAX_LIGHTS :: 4
 
 Texture_Asset :: enum u32{
     Portrait,
     Checkerboard,
+    Stone_Albedo,
+    Stone_Normal,
 }
 
 Mesh_Asset :: enum u32 {
@@ -47,6 +49,10 @@ Material :: struct{
     unlit: bool,
     roughness: f32,
     metallic: f32,
+
+    normal_texture: Texture_Asset,
+    normal_strength, f32,
+    uv_scale: f32,
 }
 
 MeshRenderer :: struct {
@@ -122,6 +128,9 @@ scene_add_camera :: proc(scene: ^Scene, entity: Entity, camera: Camera){
 scene_add_material :: proc(scene: ^Scene, entity: Entity, material: Material){
     index := int(entity)
     scene.materials[index] = material
+    if scene.materials[index].uv_scale == 0{
+        scene.materials[index].uv_scale = 1.0
+    }
     scene.has_material[index] = true
 }
 
@@ -178,10 +187,14 @@ scene_init :: proc(){
         mesh = .Cube,
     })
     scene_add_material(&g_scene, ground_entity, Material{
-        tint = {0.65, 0.65, 0.65},
-        texture = .Checkerboard,
+        tint = {1, 1, 1},
+        texture = .Stone_Albedo,
         roughness = 0.9,
         metallic = 0.0,
+
+        normal_texture = .Stone_Normal,
+        normal_strength = 1.0,
+        uv_scale = 4.0
     })
 
     sun_entity := scene_create_entity(&g_scene)

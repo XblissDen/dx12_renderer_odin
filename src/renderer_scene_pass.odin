@@ -5,9 +5,11 @@ import d3d12 "vendor:directx/d3d12"
 renderer_render_scene_pass :: proc(
     draw_meshes: []Mesh_Asset,
     draw_textures: []Texture_Asset,
+    draw_normals: []Texture_Asset,
 ) {
     r := &g_renderer
     assert(len(draw_meshes) == len(draw_textures))
+    assert(len(draw_meshes) == len(draw_normals))
 
     renderer_begin_gpu_pass(.Scene)
     hdr_barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
@@ -107,6 +109,15 @@ renderer_render_scene_pass :: proc(
         srv_gpu_handle.ptr += u64(texture_index) * u64(r.srv_descriptor_size)
 
         r.command_list->SetGraphicsRootDescriptorTable(1, srv_gpu_handle)
+
+        normal_index := int(draw_normals[i])
+        assert(normal_index >= 0 && normal_index < TEXTURE_COUNT)
+
+        normal_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
+        r.srv_heap->GetGPUDescriptorHandleForHeapStart(&normal_gpu_handle)
+        normal_gpu_handle.ptr += u64(normal_index) * u64(r.srv_descriptor_size)
+
+        r.command_list->SetGraphicsRootDescriptorTable(9, normal_gpu_handle)
 
         mesh_index := int(draw_meshes[i])
         assert(mesh_index >= 0 && mesh_index < MESH_COUNT)

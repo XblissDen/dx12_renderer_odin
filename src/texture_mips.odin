@@ -1,11 +1,13 @@
 package main
 
 import "core:math"
+import linalg "core:math/linalg"
 
 texture_next_mip :: proc(
     source: []u8,
     width, height: u32,
     allocator := context.allocator,
+    normal_map := false,
 ) -> (result: []u8, next_width, next_height: u32) {
     next_width = max(u32(1), width / 2)
     next_height = max(u32(1), height / 2)
@@ -19,6 +21,39 @@ texture_next_mip :: proc(
     for y in 0..<next_height {
         for x in 0..<next_width {
             destination := int((y * next_width + x) * 4)
+
+            if normal_map {
+                normal: linalg.Vector3f32
+
+                for offset_y in 0..<2 {
+                    for offset_x in 0..<2 {
+                        source_x := min(x * 2 + u32(offset_x), width - 1)
+                        source_y := min(y * 2 + u32(offset_y), height - 1)
+                        source_index := int((source_y * width + source_x) * 4)
+
+                        for channel in 0..<3 {
+                            normal[channel] +=
+                                f32(source[source_index + channel]) / 255.0 * 2.0 - 1.0
+                        }
+                    }
+                }
+
+                if linalg.dot(normal, normal) > 0.00000001 {
+                    normal = linalg.normalize(normal)
+                } else {
+                    normal = {0, 0, 1}
+                }
+
+                for channel in 0..<3 {
+                    result[destination + channel] = u8(clamp(
+                        (normal[channel] * 0.5 + 0.5) * 255.0 + 0.5,
+                        0.0,
+                        255.0,
+                    ))
+                }
+                result[destination + 3] = 255
+                continue
+            }
 
             for channel in 0..<3 {
                 linear_sum: f32

@@ -48,6 +48,7 @@ Vertex :: struct {
     position:   [3]f32,
     normal:     [3]f32,
     texcoord:   [2]f32,
+    tangent:   [4]f32,
 }
 
 GpuPointLight :: struct {
@@ -72,10 +73,10 @@ SceneConstants :: struct #align(256) {
     projection: alg.Matrix4f32,
 
     view_position: [3]f32,
-    _pad0: f32,
+    normal_strength: f32,
 
     material_tint: [3]f32,
-    _pad1: f32,
+    uv_scale: f32,
 
     light_count: u32,
     unlit: u32,
@@ -459,6 +460,21 @@ renderer_load_assets :: proc(){
         pDescriptorRanges = &prefilter_range,
     }
 
+    normal_range := d3d12.DESCRIPTOR_RANGE{
+        RangeType = .SRV,
+        NumDescriptors = 1,
+        BaseShaderRegister = 5,
+        OffsetInDescriptorsFromTableStart = 0,
+    }
+
+    normal_param := d3d12.ROOT_PARAMETER{}
+    normal_param.ParameterType = .DESCRIPTOR_TABLE
+    normal_param.ShaderVisibility = .PIXEL
+    normal_param.DescriptorTable = {
+        NumDescriptorRanges = 1,
+        pDescriptorRanges = &normal_range,
+    }
+
     prefilter_cbv_param := d3d12.ROOT_PARAMETER{}
     prefilter_cbv_param.ParameterType = .CBV
     prefilter_cbv_param.ShaderVisibility = .PIXEL
@@ -508,6 +524,7 @@ renderer_load_assets :: proc(){
         irradiance_param,  // Root slot 6 -> t3
         prefilter_cbv_param, // Root slot 7 -> b3
         prefilter_param,     // Root slot 8 -> t4
+        normal_param, // Root slot 9 -> t5
     }
     samplers := []d3d12.STATIC_SAMPLER_DESC{
         static_sampler,
@@ -728,6 +745,15 @@ renderer_load_assets :: proc(){
             InputSlot            = 0,
             AlignedByteOffset    = 24,
             InputSlotClass       = .PER_VERTEX_DATA,
+            InstanceDataStepRate = 0,
+        },
+        {
+            SemanticName = "TANGENT",
+            SemanticIndex = 0,
+            Format = .R32G32B32A32_FLOAT,
+            InputSlot = 0,
+            AlignedByteOffset = 32,
+            InputSlotClass = .PER_VERTEX_DATA,
             InstanceDataStepRate = 0,
         },
     }
@@ -1183,13 +1209,28 @@ renderer_load_textures :: proc(){
 
     renderer_load_texture(int(Texture_Asset.Portrait))
     renderer_load_texture(int(Texture_Asset.Checkerboard))
+    renderer_load_texture(int(Texture_Asset.Stone_Albedo))
+    renderer_load_texture(int(Texture_Asset.Stone_Normal))
 }
 
 renderer_load_texture :: proc(index: int){
     r := &g_renderer
 
     // LOADING PNG
-    img, err := image.load_from_file("textures/2.png")
+    path := "textures/2.png"
+
+    #partial switch Texture_Asset(index) {
+        case .Stone_Albedo:
+            path = "textures/stone/albedo.png"
+
+        case .Stone_Normal:
+            path = "textures/stone/normal.png"
+    }
+
+    is_normal_map := index == int(Texture_Asset.Stone_Normal)
+
+    img, err := image.load_from_file(path)
+
     if err != nil{
         fmt.panicf("Failed to load texture: %v", err)
     }
@@ -1205,6 +1246,21 @@ renderer_load_texture :: proc(index: int){
     width := u64(img.width)
     height := u64(img.height)
     pixels := img.pixels.buf[:]
+
+    if img.depth == 16 {
+        source16 := ([^]u16)(raw_data(pixels))
+        converted := make(
+            []u8,
+            int(width * height * 4),
+            context.temp_allocator,
+        )
+
+        for i in 0..<len(converted) {
+            converted[i] = u8((u32(source16[i]) + 128) / 257)
+        }
+
+        pixels = converted
+    }
 
     if index == int(Texture_Asset.Checkerboard) {
         for y in 0..<int(img.height) {
@@ -1238,6 +1294,7 @@ renderer_load_texture :: proc(index: int){
             mip_width,
             mip_height,
             context.temp_allocator,
+            normal_map = is_normal_map,
         )
         append(&mips, next)
 
@@ -1402,6 +1459,7 @@ renderer_render_frame :: proc(scene: ^Scene){
     renderer_render_scene_pass(
         frame.draw_meshes[:frame.draw_count],
         frame.draw_textures[:frame.draw_count],
+        frame.draw_normals[:frame.draw_count],
     )
 
     renderer_render_bloom()

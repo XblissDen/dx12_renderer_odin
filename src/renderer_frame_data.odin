@@ -7,6 +7,7 @@ FrameDraws :: struct {
     draw_meshes: [MAX_ENTITIES]Mesh_Asset,
     draw_textures: [MAX_ENTITIES]Texture_Asset,
     draw_count: int,
+    draw_normals: [MAX_ENTITIES]Texture_Asset,
 }
 
 renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
@@ -118,10 +119,18 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
             sun_view_projection = sun_view_projection,
             roughness = scene.materials[i].roughness,
             metallic = scene.materials[i].metallic,
+            normal_strength = scene.materials[i].normal_strength,
+            uv_scale = scene.materials[i].uv_scale,
         }
 
         data.draw_textures[data.draw_count] = scene.materials[i].texture
         data.draw_meshes[data.draw_count] = scene.mesh_renderers[i].mesh
+        data.draw_normals[data.draw_count] = .Stone_Normal
+
+        if scene.materials[i].normal_strength > 0 {
+            data.draw_normals[data.draw_count] = scene.materials[i].normal_texture
+        }
+
 
         data.draw_count += 1
     }

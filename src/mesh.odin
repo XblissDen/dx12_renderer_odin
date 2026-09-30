@@ -5,6 +5,7 @@ import "core:os"
 import "core:strconv"
 import "core:strings"
 import "core:math/linalg"
+import "core:math"
 
 MeshData :: struct {
     vertices: []Vertex,
@@ -99,7 +100,85 @@ mesh_load_obj :: proc(path: string, allocator := context.allocator) -> (mesh: Me
 
     mesh.vertices = out_vertices[:]
     mesh.indices  = out_indices[:]
+    mesh_generate_tangents(mesh)
     return mesh, true
+}
+
+mesh_generate_tangents :: proc(mesh: MeshData) {
+    tangents := make(
+        []linalg.Vector3f32,
+        len(mesh.vertices),
+        context.temp_allocator,
+    )
+    bitangents := make(
+        []linalg.Vector3f32,
+        len(mesh.vertices),
+        context.temp_allocator,
+    )
+
+    for triangle in 0..<len(mesh.indices) / 3 {
+        i0 := mesh.indices[triangle * 3 + 0]
+        i1 := mesh.indices[triangle * 3 + 1]
+        i2 := mesh.indices[triangle * 3 + 2]
+
+        v0 := mesh.vertices[i0]
+        v1 := mesh.vertices[i1]
+        v2 := mesh.vertices[i2]
+
+        edge1 := linalg.Vector3f32(v1.position) -
+                 linalg.Vector3f32(v0.position)
+        edge2 := linalg.Vector3f32(v2.position) -
+                 linalg.Vector3f32(v0.position)
+
+        uv1 := linalg.Vector2f32(v1.texcoord) -
+               linalg.Vector2f32(v0.texcoord)
+        uv2 := linalg.Vector2f32(v2.texcoord) -
+               linalg.Vector2f32(v0.texcoord)
+
+        determinant := uv1.x * uv2.y - uv1.y * uv2.x
+        if math.abs(determinant) < 0.00000001 {
+            continue
+        }
+
+        tangent := (edge1 * uv2.y - edge2 * uv1.y) / determinant
+        bitangent := (edge2 * uv1.x - edge1 * uv2.x) / determinant
+
+        triangle_indices := [3]u32{i0, i1, i2}
+        for index in triangle_indices {
+            tangents[index] += tangent
+            bitangents[index] += bitangent
+        }
+    }
+
+    for i in 0..<len(mesh.vertices) {
+        N := linalg.Vector3f32(mesh.vertices[i].normal)
+        if linalg.dot(N, N) < 0.00000001 {
+            N = {0, 1, 0}
+        } else {
+            N = linalg.normalize(N)
+        }
+
+        // Remove the tangent's component along the normal.
+        T := tangents[i] - N * linalg.dot(N, tangents[i])
+
+        // Provide a valid basis even for degenerate/missing UVs.
+        if linalg.dot(T, T) < 0.00000001 {
+            helper := linalg.Vector3f32{0, 1, 0}
+            if math.abs(N.y) > 0.99 {
+                helper = {1, 0, 0}
+            }
+            T = linalg.cross(helper, N)
+        }
+        T = linalg.normalize(T)
+
+        handedness: f32 = 1
+        if linalg.dot(linalg.cross(N, T), bitangents[i]) < 0 {
+            handedness = -1
+        }
+
+        mesh.vertices[i].normal = N
+        mesh.vertices[i].tangent = {T.x, T.y, T.z, handedness}
+    }
 }
 
 @(private)
