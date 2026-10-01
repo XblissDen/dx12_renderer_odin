@@ -86,7 +86,7 @@ SceneConstants :: struct #align(256) {
     lights: [MAX_LIGHTS]GpuPointLight,
 
     sun_direction: [3]f32,
-    _sun_pad0: f32,
+    use_roughness_map: u32,
     sun_color: [3]f32,
     sun_intensity: f32,
 
@@ -475,6 +475,21 @@ renderer_load_assets :: proc(){
         pDescriptorRanges = &normal_range,
     }
 
+    roughness_range := d3d12.DESCRIPTOR_RANGE{
+        RangeType = .SRV,
+        NumDescriptors = 1,
+        BaseShaderRegister = 6,
+        OffsetInDescriptorsFromTableStart = 0,
+    }
+
+    roughness_param := d3d12.ROOT_PARAMETER{}
+    roughness_param.ParameterType = .DESCRIPTOR_TABLE
+    roughness_param.ShaderVisibility = .PIXEL
+    roughness_param.DescriptorTable = {
+        NumDescriptorRanges = 1,
+        pDescriptorRanges = &roughness_range,
+    }
+
     prefilter_cbv_param := d3d12.ROOT_PARAMETER{}
     prefilter_cbv_param.ParameterType = .CBV
     prefilter_cbv_param.ShaderVisibility = .PIXEL
@@ -524,7 +539,8 @@ renderer_load_assets :: proc(){
         irradiance_param,  // Root slot 6 -> t3
         prefilter_cbv_param, // Root slot 7 -> b3
         prefilter_param,     // Root slot 8 -> t4
-        normal_param, // Root slot 9 -> t5
+        normal_param,    // Root slot 9 -> t5
+        roughness_param, // Root slot 10 -> t6
     }
     samplers := []d3d12.STATIC_SAMPLER_DESC{
         static_sampler,
@@ -1211,6 +1227,7 @@ renderer_load_textures :: proc(){
     renderer_load_texture(int(Texture_Asset.Checkerboard))
     renderer_load_texture(int(Texture_Asset.Stone_Albedo))
     renderer_load_texture(int(Texture_Asset.Stone_Normal))
+    renderer_load_texture(int(Texture_Asset.Stone_Roughness))
 }
 
 renderer_load_texture :: proc(index: int){
@@ -1222,12 +1239,14 @@ renderer_load_texture :: proc(index: int){
     #partial switch Texture_Asset(index) {
         case .Stone_Albedo:
             path = "textures/stone/albedo.png"
-
         case .Stone_Normal:
             path = "textures/stone/normal.png"
+        case .Stone_Roughness:
+            path = "textures/stone/roughness.png"
     }
 
     is_normal_map := index == int(Texture_Asset.Stone_Normal)
+    is_roughness_map := index == int(Texture_Asset.Stone_Roughness)
 
     img, err := image.load_from_file(path)
 
@@ -1295,6 +1314,7 @@ renderer_load_texture :: proc(index: int){
             mip_height,
             context.temp_allocator,
             normal_map = is_normal_map,
+            linear_data = is_roughness_map,
         )
         append(&mips, next)
 
@@ -1460,6 +1480,7 @@ renderer_render_frame :: proc(scene: ^Scene){
         frame.draw_meshes[:frame.draw_count],
         frame.draw_textures[:frame.draw_count],
         frame.draw_normals[:frame.draw_count],
+        frame.draw_roughness[:frame.draw_count],
     )
 
     renderer_render_bloom()

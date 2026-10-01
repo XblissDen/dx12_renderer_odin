@@ -8,6 +8,7 @@ texture_next_mip :: proc(
     width, height: u32,
     allocator := context.allocator,
     normal_map := false,
+    linear_data := false,
 ) -> (result: []u8, next_width, next_height: u32) {
     next_width = max(u32(1), width / 2)
     next_height = max(u32(1), height / 2)
@@ -68,14 +69,21 @@ texture_next_mip :: proc(
                         )
 
                         encoded := f32(source[source_index]) / 255.0
-                        linear_sum += math.pow(encoded, 2.2)
+                        if linear_data {
+                            linear_sum += encoded
+                        } else {
+                            linear_sum += math.pow(encoded, 2.2)
+                        }
                     }
                 }
 
                 linear_average := linear_sum * 0.25
-                encoded_average := math.pow(
-                    linear_average, 1.0 / 2.2,
-                )
+                encoded_average := linear_average
+
+                if !linear_data {
+                    encoded_average = math.pow(linear_average, 1.0 / 2.2)
+                }
+
                 result[destination + channel] = u8(clamp(
                     encoded_average * 255.0 + 0.5,
                     0.0,

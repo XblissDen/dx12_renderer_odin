@@ -28,7 +28,7 @@ cbuffer SceneConstants : register(b0)
     GpuPointLight lights[MAX_LIGHTS];
 
     float3 sun_direction;
-    float  _sun_pad0;
+    uint   use_roughness_map;
     float3 sun_color;
     float  sun_intensity;
 
@@ -44,6 +44,7 @@ SamplerComparisonState g_shadow_sampler : register(s1);
 Texture2D<float4> g_irradiance : register(t3);
 Texture2D<float4> g_prefiltered_environment : register(t4);
 Texture2D<float4> g_normal_map : register(t5);
+Texture2D<float4> g_roughness_map : register(t6);
 
 struct VSInput
 {
@@ -179,7 +180,17 @@ float4 PSMain(PSInput input) : SV_TARGET
     ).rgb;
     float3 albedo = pow(saturate(texture_color), 2.2f) * material_tint;
 
-    float material_roughness = clamp(roughness, 0.08f, 1.0f);
+    float roughness_value = roughness;
+
+    if (use_roughness_map != 0)
+    {
+        roughness_value *= g_roughness_map.Sample(
+            g_material_sampler, material_uv
+        ).r;
+    }
+
+    float material_roughness = clamp(roughness_value, 0.08f, 1.0f);
+    
     float material_metallic = saturate(metallic);
 
     float3 N = normalize(input.normal);

@@ -4,7 +4,7 @@ import alg "core:math/linalg"
 import "core:math"
 
 MAX_ENTITIES :: 16
-TEXTURE_COUNT :: 4
+TEXTURE_COUNT :: 5
 MESH_COUNT :: 2
 MAX_LIGHTS :: 4
 
@@ -13,6 +13,7 @@ Texture_Asset :: enum u32{
     Checkerboard,
     Stone_Albedo,
     Stone_Normal,
+    Stone_Roughness,
 }
 
 Mesh_Asset :: enum u32 {
@@ -53,6 +54,9 @@ Material :: struct{
     normal_texture: Texture_Asset,
     normal_strength, f32,
     uv_scale: f32,
+
+    roughness_texture: Texture_Asset,
+    use_roughness_map: bool,
 }
 
 MeshRenderer :: struct {
@@ -189,7 +193,9 @@ scene_init :: proc(){
     scene_add_material(&g_scene, ground_entity, Material{
         tint = {1, 1, 1},
         texture = .Stone_Albedo,
-        roughness = 0.9,
+        roughness = 1.0,
+        roughness_texture = .Stone_Roughness,
+        use_roughness_map = true,
         metallic = 0.0,
 
         normal_texture = .Stone_Normal,
