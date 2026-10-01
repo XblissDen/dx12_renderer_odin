@@ -1,0 +1,6 @@
+Dear ImGui v1.92.9b-docking
+Upstream: https://github.com/ocornut/imgui
+Commit: b48d1afbe8ee8b238e2961dc363a949dd7304e23
+
+The src/ directory contains unmodified core sources, the demo, and the
+official DirectX 12 and Win32 backends from this commit.

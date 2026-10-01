@@ -1,3 +1,8 @@
 models/female_bust
 textures/environment_4k.hdr
 textures/environment_4k_2.hdr
+dx12_renderer.exe
+*.pdb
+*.ilk
+vendor/imgui/build/
+vendor/imgui/lib/

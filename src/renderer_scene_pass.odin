@@ -191,6 +191,9 @@ renderer_render_post_process :: proc() {
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
     r.command_list->DrawInstanced(3, 1, 0, 0)
 
+    // UI is drawn in display space, after tone mapping and before Present.
+    debug_ui_render()
+
     // Presentable again.
     back_buffer_barrier.Transition.StateBefore = {.RENDER_TARGET}
     back_buffer_barrier.Transition.StateAfter = d3d12.RESOURCE_STATE_PRESENT

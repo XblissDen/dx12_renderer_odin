@@ -119,6 +119,10 @@ window_proc :: proc "stdcall" (hwnd: win32.HWND, msg: win32.UINT,
 wparam: win32.WPARAM, lparam: win32.LPARAM) -> win32.LRESULT{
     context = runtime.default_context()
 
+    if debug_ui_handle_message(hwnd, msg, wparam, lparam) {
+        return 1
+    }
+
     switch msg{
         case win32.WM_INPUT:
             if g_cursor_locked {
@@ -142,6 +146,10 @@ wparam: win32.WPARAM, lparam: win32.LPARAM) -> win32.LRESULT{
         case win32.WM_KEYDOWN:
             if wparam == win32.VK_ESCAPE{
                 win32.PostQuitMessage(0)
+            } else if wparam == win32.VK_F1 {
+                if (u64(lparam) & (u64(1) << 30)) == 0 {
+                    g_debug_ui_visible = !g_debug_ui_visible
+                }
             } else if wparam == win32.WPARAM('L'){
                 if (u64(lparam) & (u64(1) << 30)) == 0{
                     if g_cursor_locked{
@@ -150,6 +158,8 @@ wparam: win32.WPARAM, lparam: win32.LPARAM) -> win32.LRESULT{
                         window_lock_cursor()
                     }
                 }
+            } else if debug_ui_wants_keyboard() {
+                return 0
             } else if (u64(lparam) & (u64(1) << 30)) == 0 {
                 // One adjustment per physical press, ignoring key auto-repeat.
                 switch wparam {
@@ -160,6 +170,10 @@ wparam: win32.WPARAM, lparam: win32.LPARAM) -> win32.LRESULT{
                     case win32.WPARAM('5'): g_bloom_steps -= 1
                     case win32.WPARAM('6'): g_bloom_steps += 1
                 }
+            }
+        case win32.WM_CHAR:
+            if debug_ui_wants_keyboard() {
+                return 0
             }
         case win32.WM_DESTROY:
             window_unlock_cursor()

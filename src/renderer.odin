@@ -1564,6 +1564,7 @@ renderer_wait_for_gpu :: proc(){
 renderer_destroy :: proc(){
     r:= &g_renderer
     renderer_wait_for_gpu()
+    debug_ui_destroy()
 
     win32.CloseHandle(r.fence_event)
     r.fence->Release()
