@@ -65,6 +65,7 @@ MeshRenderer :: struct {
 
 Scene :: struct{
     entity_count: int,
+    names: [MAX_ENTITIES]string,
 
     transforms: [MAX_ENTITIES]Transform,
     has_transform: [MAX_ENTITIES]bool,
@@ -87,11 +88,13 @@ Scene :: struct{
 
 g_scene: Scene
 
-scene_create_entity :: proc(scene: ^Scene) -> Entity{
+scene_create_entity :: proc(scene: ^Scene, name := "") -> Entity {
     assert(scene.entity_count < MAX_ENTITIES)
 
     entity := Entity(scene.entity_count)
+    scene.names[int(entity)] = name
     scene.entity_count += 1
+
     return entity
 }
 
@@ -166,8 +169,14 @@ scene_init :: proc(){
     roughnesses := [3]f32{0.85, 0.28, 0.15}
     metallics   := [3]f32{0.0, 0.75, 0.0}
 
+    object_names := [3]string{
+        "Cube (left)",
+        "Pyramid",
+        "Cube (right)",
+    }
+
     for i in 0..<len(positions){
-        entity := scene_create_entity(&g_scene)
+        entity := scene_create_entity(&g_scene, object_names[i])
 
         scene_add_transform(&g_scene, entity, Transform{position = positions[i], rotation_speed = 0.6, scale = 1.0,})
         scene_add_mesh_renderer(&g_scene, entity, MeshRenderer{
@@ -181,7 +190,7 @@ scene_init :: proc(){
         })
     }
 
-    ground_entity := scene_create_entity(&g_scene)
+    ground_entity := scene_create_entity(&g_scene, "Ground")
 
     scene_add_transform(&g_scene, ground_entity, Transform{
         position = {0, -4.5, 0},

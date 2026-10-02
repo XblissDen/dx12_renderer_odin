@@ -158,6 +158,37 @@ void dx12_ui_separator() { ImGui::Separator(); }
 bool dx12_ui_slider_float(const char* label, float* value, float minimum, float maximum) {
     return ImGui::SliderFloat(label, value, minimum, maximum, "%.2f");
 }
+bool dx12_ui_selectable(const char* label, bool selected) {
+    return ImGui::Selectable(label, selected);
+}
+
+bool dx12_ui_drag_float3(const char* label, float* values, float speed) {
+    return ImGui::DragFloat3(label, values, speed);
+}
+
+bool dx12_ui_drag_float(
+    const char* label,
+    float* value,
+    float speed,
+    float minimum,
+    float maximum
+) {
+    ImGuiSliderFlags flags = minimum < maximum
+        ? ImGuiSliderFlags_AlwaysClamp
+        : ImGuiSliderFlags_None;
+
+    return ImGui::DragFloat(
+        label, value, speed, minimum, maximum, "%.2f", flags
+    );
+}
+
+void dx12_ui_push_id(std::int32_t id) {
+    ImGui::PushID(id);
+}
+
+void dx12_ui_pop_id() {
+    ImGui::PopID();
+}
 bool dx12_ui_checkbox(const char* label, bool* value) {
     return ImGui::Checkbox(label, value);
 }

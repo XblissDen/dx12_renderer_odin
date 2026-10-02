@@ -32,6 +32,22 @@ foreign imgui_lib {
     ui_end_table :: proc() ---
     ui_show_demo :: proc(open: ^bool) ---
     ui_render :: proc(command_list: rawptr) ---
+    ui_selectable :: proc(label: cstring, selected: bool) -> bool ---
+
+    ui_drag_float3 :: proc(
+        label: cstring,
+        values: ^[3]f32,
+        speed: f32,
+    ) -> bool ---
+
+    ui_drag_float :: proc(
+        label: cstring,
+        value: ^f32,
+        speed, minimum, maximum: f32,
+    ) -> bool ---
+
+    ui_push_id :: proc(id: i32) ---
+    ui_pop_id :: proc() ---
 }
 
 g_debug_ui_ready: bool
@@ -115,6 +131,9 @@ debug_ui_update :: proc() {
         ui_checkbox("Show ImGui demo", &g_debug_ui_demo)
     }
     ui_end_panel()
+
+    editor_draw_scene(&g_scene)
+    editor_draw_transform_inspector(&g_scene)
 
     if g_debug_ui_demo {
         ui_show_demo(&g_debug_ui_demo)
