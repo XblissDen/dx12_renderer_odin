@@ -48,6 +48,7 @@ foreign imgui_lib {
 
     ui_push_id :: proc(id: i32) ---
     ui_pop_id :: proc() ---
+    ui_color_edit3 :: proc(label: cstring, values: ^[3]f32) -> bool ---
 }
 
 g_debug_ui_ready: bool
@@ -133,7 +134,7 @@ debug_ui_update :: proc() {
     ui_end_panel()
 
     editor_draw_scene(&g_scene)
-    editor_draw_transform_inspector(&g_scene)
+    editor_draw_inspector(&g_scene)
 
     if g_debug_ui_demo {
         ui_show_demo(&g_debug_ui_demo)

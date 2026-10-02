@@ -34,8 +34,51 @@ editor_draw_scene :: proc(scene: ^Scene){
     ui_end_panel()
 }
 
-editor_draw_transform_inspector :: proc(scene: ^Scene){
-    ui_next_window(392, 16, 380, 280)
+editor_draw_material_controls :: proc(scene: ^Scene, index: int){
+    if !scene.has_material[index]{
+        return
+    }
+
+    material := &scene.materials[index]
+
+    ui_separator()
+    debug_ui_text("Material")
+
+    picker_tint: [3]f32
+    for channel in 0..<3{
+        picker_tint[channel] = math.pow(clamp(material.tint[channel], 0.0, 1.0), 1.0 / 2.2)
+    }
+
+    if ui_color_edit3("Tint", &picker_tint) {
+        for channel in 0..<3 {
+            material.tint[channel] = math.pow(
+                clamp(picker_tint[channel], 0.0, 1.0),
+                2.2,
+            )
+        }
+    }
+
+    if material.roughness_texture == .Stone_Roughness{
+        ui_checkbox("Use roughness map", &material.use_roughness_map)
+    }
+
+    ui_slider_float("Roughness", &material.roughness, 0.08, 1.0)
+
+    if material.use_roughness_map{
+        debug_ui_text("Roughness multiplies the texture's values.")
+    }
+
+    ui_slider_float("Metallic", &material.metallic, 0.0, 1.0)
+
+    if material.normal_texture == .Stone_Normal{
+        ui_slider_float("Normal strength", &material.normal_strength, 0.0, 2.0,)
+    }
+
+    ui_drag_float("UV tiling", &material.uv_scale, 0.1, 0.1, 32.0)
+}
+
+editor_draw_inspector :: proc(scene: ^Scene){
+    ui_next_window(392, 16, 380, 520)
 
     if ui_begin_panel("Inspector"){
         index := int(g_editor_selected)
@@ -70,6 +113,9 @@ editor_draw_transform_inspector :: proc(scene: ^Scene){
             }
 
             debug_ui_text("Set spin to 0 to stop automatic rotation.")
+
+            editor_draw_material_controls(scene, index)
+            
             ui_pop_id()
         } else{
             debug_ui_text("Select an object in the Scene panel.")

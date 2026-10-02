@@ -195,6 +195,9 @@ bool dx12_ui_checkbox(const char* label, bool* value) {
 bool dx12_ui_begin_table(const char* label) {
     return ImGui::BeginTable(label, 2, ImGuiTableFlags_RowBg);
 }
+bool dx12_ui_color_edit3(const char* label, float* values) {
+    return ImGui::ColorEdit3(label, values, ImGuiColorEditFlags_Float);
+}
 void dx12_ui_table_column(const char* label) { ImGui::TableSetupColumn(label); }
 void dx12_ui_table_headers() { ImGui::TableHeadersRow(); }
 void dx12_ui_table_row() { ImGui::TableNextRow(); }
