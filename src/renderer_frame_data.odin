@@ -84,7 +84,13 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
     assert(sun_found)
 
     sun_eye := -sun.direction * 12.0
-    sun_view := look_at_lh(sun_eye, {0,0,0}, {0, 1, 0})
+
+    sun_up := alg.Vector3f32{0, 1, 0}
+    if math.abs(sun.direction.y) > 0.99{
+        sun_up = {0, 0, 1}
+    }
+
+    sun_view := look_at_lh(sun_eye, {0,0,0}, sun_up)
     sun_projection := orthographic_lh(-8, 8, -8, 8, 0.1, 30.0)
     sun_view_projection := sun_view * sun_projection
 

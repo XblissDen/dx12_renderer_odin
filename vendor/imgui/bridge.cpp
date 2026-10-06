@@ -215,4 +215,12 @@ void dx12_ui_render(void* command_list_ptr) {
     ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), command_list);
 }
 
+void dx12_ui_begin_disabled(bool disabled) {
+    ImGui::BeginDisabled(disabled);
+}
+
+void dx12_ui_end_disabled() {
+    ImGui::EndDisabled();
+}
+
 } // extern "C"

@@ -36,6 +36,7 @@ PointLight :: struct{
     orbit_radius: f32,
     orbit_angle: f32,
     orbit_speed: f32,
+    orbit_enabled: bool,
 }
 
 DirectionalLight :: struct{
@@ -212,7 +213,7 @@ scene_init :: proc(){
         uv_scale = 4.0
     })
 
-    sun_entity := scene_create_entity(&g_scene)
+    sun_entity := scene_create_entity(&g_scene, "Sun")
 
     scene_add_directional_light(&g_scene, sun_entity, DirectionalLight{
         direction = alg.normalize(alg.Vector3f32{0.6, -0.5, 0.4}),
@@ -220,7 +221,7 @@ scene_init :: proc(){
         intensity = 0.8,
     })
 
-    light_entity := scene_create_entity(&g_scene)
+    light_entity := scene_create_entity(&g_scene, "Warm point light")
 
     scene_add_transform(&g_scene, light_entity, Transform{position = {2, 1.5, 0}, scale = 0.2,})
     scene_add_point_light(&g_scene, light_entity, PointLight{
@@ -228,6 +229,7 @@ scene_init :: proc(){
         intensity = 3.0,
         orbit_radius = 2.0,
         orbit_speed = 0.6,
+        orbit_enabled = true,
     })
     scene_add_mesh_renderer(&g_scene, light_entity, MeshRenderer{
     mesh = .Cube,
@@ -238,7 +240,7 @@ scene_init :: proc(){
         unlit = true,
     })
 
-    second_light_entity := scene_create_entity(&g_scene)
+    second_light_entity := scene_create_entity(&g_scene, "Cool point light")
 
     scene_add_transform(&g_scene, second_light_entity, Transform{
         position = {-2, 1.5, 0},
@@ -251,6 +253,7 @@ scene_init :: proc(){
         orbit_radius = 2.0,
         orbit_angle = math.PI,
         orbit_speed = 0.6,
+        orbit_enabled = true,
     })
 
     scene_add_mesh_renderer(&g_scene, second_light_entity, MeshRenderer{
@@ -285,10 +288,16 @@ scene_update :: proc(scene: ^Scene, dt: f32){
 
         if scene.has_transform[i] && scene.has_point_light[i]{
             light := &scene.point_lights[i]
-            light.orbit_angle += light.orbit_speed * dt
+            if light.orbit_enabled{
+                light.orbit_angle += light.orbit_speed * dt
 
-            scene.transforms[i].position.x = math.cos(light.orbit_angle) * light.orbit_radius
-            scene.transforms[i].position.z = math.sin(light.orbit_angle) * light.orbit_radius
+                scene.transforms[i].position.x = math.cos(light.orbit_angle) * light.orbit_radius
+                scene.transforms[i].position.z = math.sin(light.orbit_angle) * light.orbit_radius
+            }
+            
+            if scene.has_material[i] {
+                scene.materials[i].tint = light.color
+            }
         }
 
         if scene.has_transform[i] && scene.has_camera[i]{

@@ -49,6 +49,9 @@ foreign imgui_lib {
     ui_push_id :: proc(id: i32) ---
     ui_pop_id :: proc() ---
     ui_color_edit3 :: proc(label: cstring, values: ^[3]f32) -> bool ---
+
+    ui_begin_disabled :: proc(disabled: bool) ---
+    ui_end_disabled :: proc() ---
 }
 
 g_debug_ui_ready: bool

@@ -2,6 +2,7 @@ package main
 
 import "core:fmt"
 import "core:math"
+import alg "core:math/linalg"
 
 g_editor_selected: Entity = Entity(-1)
 
@@ -12,7 +13,7 @@ editor_draw_scene :: proc(scene: ^Scene){
         label_buffer: [128]u8
 
         for i in 0..<scene.entity_count{
-            if !scene.has_transform[i] || !scene.has_mesh_renderer[i] || scene.has_point_light[i]{
+            if !scene.has_mesh_renderer[i] && !scene.has_directional_light[i] && !scene.has_point_light[i]{
                 continue
             }
 
@@ -44,19 +45,7 @@ editor_draw_material_controls :: proc(scene: ^Scene, index: int){
     ui_separator()
     debug_ui_text("Material")
 
-    picker_tint: [3]f32
-    for channel in 0..<3{
-        picker_tint[channel] = math.pow(clamp(material.tint[channel], 0.0, 1.0), 1.0 / 2.2)
-    }
-
-    if ui_color_edit3("Tint", &picker_tint) {
-        for channel in 0..<3 {
-            material.tint[channel] = math.pow(
-                clamp(picker_tint[channel], 0.0, 1.0),
-                2.2,
-            )
-        }
-    }
+    editor_edit_linear_color("Tint", &material.tint)
 
     if material.roughness_texture == .Stone_Roughness{
         ui_checkbox("Use roughness map", &material.use_roughness_map)
@@ -77,51 +66,172 @@ editor_draw_material_controls :: proc(scene: ^Scene, index: int){
     ui_drag_float("UV tiling", &material.uv_scale, 0.1, 0.1, 32.0)
 }
 
-editor_draw_inspector :: proc(scene: ^Scene){
-    ui_next_window(392, 16, 380, 520)
+editor_edit_linear_color :: proc(
+    label: cstring,
+    color: ^[3]f32,
+) -> bool {
+    picker_color: [3]f32
 
-    if ui_begin_panel("Inspector"){
+    for channel in 0..<3 {
+        picker_color[channel] = math.pow(
+            clamp(color^[channel], 0.0, 1.0),
+            1.0 / 2.2,
+        )
+    }
+
+    if ui_color_edit3(label, &picker_color) {
+        for channel in 0..<3 {
+            color^[channel] = math.pow(
+                clamp(picker_color[channel], 0.0, 1.0),
+                2.2,
+            )
+        }
+        return true
+    }
+
+    return false
+}
+
+editor_draw_point_light_controls :: proc(scene: ^Scene, index: int) {
+    light := &scene.point_lights[index]
+
+    ui_separator()
+    debug_ui_text("Point light")
+
+    editor_edit_linear_color("Light color", &light.color)
+    ui_slider_float("Intensity", &light.intensity, 0.0, 20.0)
+
+    ui_checkbox("Orbit enabled", &light.orbit_enabled)
+
+    if light.orbit_enabled {
+        ui_drag_float(
+            "Orbit radius",
+            &light.orbit_radius,
+            0.05,
+            0.0,
+            20.0,
+        )
+
+        ui_drag_float(
+            "Orbit height",
+            &scene.transforms[index].position.y,
+            0.05,
+            0.0,
+            0.0,
+        )
+
+        speed_degrees := math.to_degrees(light.orbit_speed)
+        if ui_drag_float(
+            "Orbit (degrees/s)",
+            &speed_degrees,
+            1.0,
+            -180.0,
+            180.0,
+        ) {
+            light.orbit_speed = math.to_radians(speed_degrees)
+        }
+
+        debug_ui_text("Disable orbit to edit Position manually.")
+    }
+}
+
+editor_draw_directional_light_controls :: proc(scene: ^Scene, index: int) {
+    light := &scene.directional_lights[index]
+
+    ui_separator()
+    debug_ui_text("Directional light")
+
+    editor_edit_linear_color("Light color", &light.color)
+    ui_slider_float("Intensity", &light.intensity, 0.0, 10.0)
+
+    direction := light.direction
+    if ui_drag_float3("Direction", &direction, 0.02) {
+        if alg.dot(direction, direction) > 0.00000001 {
+            light.direction = alg.normalize(direction)
+        }
+    }
+
+    debug_ui_text("Direction points along the light rays.")
+    debug_ui_text("Negative Y sends light downward.")
+}
+
+editor_draw_inspector :: proc(scene: ^Scene) {
+    ui_next_window(392, 16, 380, 560)
+
+    if ui_begin_panel("Inspector") {
         index := int(g_editor_selected)
 
-        if index >= 0 &&
-        index < scene.entity_count &&
-        scene.has_transform[index] &&
-        scene.has_mesh_renderer[index] &&
-        !scene.has_point_light[index]{
-
+        if index >= 0 && index < scene.entity_count {
             text_buffer: [128]u8
-            debug_ui_text(fmt.bprintf(text_buffer[:], "%s | Entity %d", scene.names[index], index))
+            debug_ui_text(fmt.bprintf(
+                text_buffer[:],
+                "%s | Entity %d",
+                scene.names[index],
+                index,
+            ))
             debug_ui_text("Drag values; Ctrl+click to type.")
             ui_separator()
 
             ui_push_id(i32(index))
 
-            transform := &scene.transforms[index]
+            if scene.has_transform[index] {
+                transform := &scene.transforms[index]
 
-            ui_drag_float3("Position", &transform.position, 0.05)
+                orbiting := scene.has_point_light[index] &&
+                            scene.point_lights[index].orbit_enabled
 
-            rotation_degrees := math.to_degrees(transform.rotation)
-            if ui_drag_float("Y rotation", &rotation_degrees, 1.0, 0.0, 0.0){
-                transform.rotation = math.to_radians(rotation_degrees)
+                ui_begin_disabled(orbiting)
+                ui_drag_float3("Position", &transform.position, 0.05)
+                ui_end_disabled()
+
+                rotation_degrees := math.to_degrees(transform.rotation)
+                if ui_drag_float(
+                    "Y rotation",
+                    &rotation_degrees,
+                    1.0,
+                    0.0,
+                    0.0,
+                ) {
+                    transform.rotation = math.to_radians(rotation_degrees)
+                }
+
+                ui_drag_float(
+                    "Uniform scale",
+                    &transform.scale,
+                    0.02,
+                    0.05,
+                    100.0,
+                )
+
+                spin_degrees := math.to_degrees(transform.rotation_speed)
+                if ui_drag_float(
+                    "Spin (degrees/s)",
+                    &spin_degrees,
+                    1.0,
+                    -180.0,
+                    180.0,
+                ) {
+                    transform.rotation_speed = math.to_radians(spin_degrees)
+                }
             }
 
-            ui_drag_float("Uniform scale", &transform.scale, 0.02, 0.05, 100.0)
-
-            spin_degrees := math.to_degrees(transform.rotation_speed)
-            if ui_drag_float("Spin (degrees/s)", &spin_degrees, 1.0, -180.0, 180.0){
-                transform.rotation_speed = math.to_radians(spin_degrees)
+            if scene.has_point_light[index] {
+                editor_draw_point_light_controls(scene, index)
             }
 
-            debug_ui_text("Set spin to 0 to stop automatic rotation.")
+            if scene.has_directional_light[index] {
+                editor_draw_directional_light_controls(scene, index)
+            }
 
-            editor_draw_material_controls(scene, index)
-            
+            if scene.has_material[index] && !scene.has_point_light[index] {
+                editor_draw_material_controls(scene, index)
+            }
+
             ui_pop_id()
-        } else{
-            debug_ui_text("Select an object in the Scene panel.")
+        } else {
+            debug_ui_text("Select an entity in the Scene panel.")
         }
     }
 
     ui_end_panel()
-
 }
