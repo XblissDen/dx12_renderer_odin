@@ -52,6 +52,8 @@ foreign imgui_lib {
 
     ui_begin_disabled :: proc(disabled: bool) ---
     ui_end_disabled :: proc() ---
+
+    ui_button :: proc(label: cstring) -> bool ---
 }
 
 g_debug_ui_ready: bool

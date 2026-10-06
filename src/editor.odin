@@ -5,11 +5,37 @@ import "core:math"
 import alg "core:math/linalg"
 
 g_editor_selected: Entity = Entity(-1)
+g_editor_file_status: string
 
 editor_draw_scene :: proc(scene: ^Scene){
     ui_next_window(16, 462, 260, 240)
 
     if ui_begin_panel("Scene"){
+        if ui_button("Save Scene"){
+            _, g_editor_file_status = scene_save_to_file(
+                scene,
+                SCENE_FILE_PATH
+            )
+        }
+
+        if ui_button("Load Scene"){
+            ok, message := scene_load_from_file(SCENE_FILE_PATH)
+            g_editor_file_status = message
+
+            if ok{
+                g_editor_selected = Entity(-1)
+                renderer_update_post_title()
+            }
+        }
+
+        debug_ui_text(SCENE_FILE_PATH)
+
+        if len(g_editor_file_status) > 0 {
+            debug_ui_text(g_editor_file_status)
+        }
+
+        ui_separator()
+
         label_buffer: [128]u8
 
         for i in 0..<scene.entity_count{

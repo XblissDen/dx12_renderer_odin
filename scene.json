@@ -1,0 +1,1125 @@
+{
+  "version": 1,
+  "scene": {
+    "entity_count": 8,
+    "names": [
+      "Cube (left)",
+      "Pyramid",
+      "Cube (right)",
+      "Ground",
+      "Sun",
+      "Warm point light",
+      "Cool point light",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      ""
+    ],
+    "transforms": [
+      {
+        "position": [
+          -2.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation": 17.44562912,
+        "rotation_speed": 0.00000000,
+        "scale": 1.00000000
+      },
+      {
+        "position": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation": 28.03867912,
+        "rotation_speed": 0.60000002,
+        "scale": 1.00000000
+      },
+      {
+        "position": [
+          2.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation": 28.03867912,
+        "rotation_speed": 0.60000002,
+        "scale": 1.00000000
+      },
+      {
+        "position": [
+          0.00000000,
+          -4.50000000,
+          0.00000000
+        ],
+        "rotation": 0.00000000,
+        "rotation_speed": 0.00000000,
+        "scale": 8.00000000
+      },
+      {
+        "position": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation": 0.00000000,
+        "rotation_speed": 0.00000000,
+        "scale": 0.00000000
+      },
+      {
+        "position": [
+          0.40153039,
+          0.00000000,
+          -1.95927882
+        ],
+        "rotation": 0.00000000,
+        "rotation_speed": 0.00000000,
+        "scale": 0.20000000
+      },
+      {
+        "position": [
+          1.94474173,
+          1.50000000,
+          -0.46688274
+        ],
+        "rotation": 0.00000000,
+        "rotation_speed": 0.00000000,
+        "scale": 0.20000000
+      },
+      {
+        "position": [
+          -1.49033868,
+          0.95880401,
+          -5.57322407
+        ],
+        "rotation": 0.00000000,
+        "rotation_speed": 0.00000000,
+        "scale": 1.00000000
+      },
+      {
+        "position": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation": 0.00000000,
+        "rotation_speed": 0.00000000,
+        "scale": 0.00000000
+      },
+      {
+        "position": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation": 0.00000000,
+        "rotation_speed": 0.00000000,
+        "scale": 0.00000000
+      },
+      {
+        "position": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation": 0.00000000,
+        "rotation_speed": 0.00000000,
+        "scale": 0.00000000
+      },
+      {
+        "position": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation": 0.00000000,
+        "rotation_speed": 0.00000000,
+        "scale": 0.00000000
+      },
+      {
+        "position": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation": 0.00000000,
+        "rotation_speed": 0.00000000,
+        "scale": 0.00000000
+      },
+      {
+        "position": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation": 0.00000000,
+        "rotation_speed": 0.00000000,
+        "scale": 0.00000000
+      },
+      {
+        "position": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation": 0.00000000,
+        "rotation_speed": 0.00000000,
+        "scale": 0.00000000
+      },
+      {
+        "position": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation": 0.00000000,
+        "rotation_speed": 0.00000000,
+        "scale": 0.00000000
+      }
+    ],
+    "has_transform": [
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    "mesh_renderers": [
+      {
+        "mesh": "Cube"
+      },
+      {
+        "mesh": "Pyramid"
+      },
+      {
+        "mesh": "Cube"
+      },
+      {
+        "mesh": "Cube"
+      },
+      {
+        "mesh": "Cube"
+      },
+      {
+        "mesh": "Cube"
+      },
+      {
+        "mesh": "Cube"
+      },
+      {
+        "mesh": "Cube"
+      },
+      {
+        "mesh": "Cube"
+      },
+      {
+        "mesh": "Cube"
+      },
+      {
+        "mesh": "Cube"
+      },
+      {
+        "mesh": "Cube"
+      },
+      {
+        "mesh": "Cube"
+      },
+      {
+        "mesh": "Cube"
+      },
+      {
+        "mesh": "Cube"
+      },
+      {
+        "mesh": "Cube"
+      }
+    ],
+    "has_mesh_renderer": [
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    "point_lights": [
+      {
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000,
+        "orbit_radius": 0.00000000,
+        "orbit_angle": 0.00000000,
+        "orbit_speed": 0.00000000,
+        "orbit_enabled": false
+      },
+      {
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000,
+        "orbit_radius": 0.00000000,
+        "orbit_angle": 0.00000000,
+        "orbit_speed": 0.00000000,
+        "orbit_enabled": false
+      },
+      {
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000,
+        "orbit_radius": 0.00000000,
+        "orbit_angle": 0.00000000,
+        "orbit_speed": 0.00000000,
+        "orbit_enabled": false
+      },
+      {
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000,
+        "orbit_radius": 0.00000000,
+        "orbit_angle": 0.00000000,
+        "orbit_speed": 0.00000000,
+        "orbit_enabled": false
+      },
+      {
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000,
+        "orbit_radius": 0.00000000,
+        "orbit_angle": 0.00000000,
+        "orbit_speed": 0.00000000,
+        "orbit_enabled": false
+      },
+      {
+        "color": [
+          0.89999998,
+          0.55000001,
+          0.40000001
+        ],
+        "intensity": 3.00000000,
+        "orbit_radius": 2.00000000,
+        "orbit_angle": 23.76408386,
+        "orbit_speed": 0.60000002,
+        "orbit_enabled": false
+      },
+      {
+        "color": [
+          0.30000001,
+          0.55000001,
+          1.00000000
+        ],
+        "intensity": 3.00000000,
+        "orbit_radius": 2.00000000,
+        "orbit_angle": 31.18031120,
+        "orbit_speed": 0.60000002,
+        "orbit_enabled": true
+      },
+      {
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000,
+        "orbit_radius": 0.00000000,
+        "orbit_angle": 0.00000000,
+        "orbit_speed": 0.00000000,
+        "orbit_enabled": false
+      },
+      {
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000,
+        "orbit_radius": 0.00000000,
+        "orbit_angle": 0.00000000,
+        "orbit_speed": 0.00000000,
+        "orbit_enabled": false
+      },
+      {
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000,
+        "orbit_radius": 0.00000000,
+        "orbit_angle": 0.00000000,
+        "orbit_speed": 0.00000000,
+        "orbit_enabled": false
+      },
+      {
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000,
+        "orbit_radius": 0.00000000,
+        "orbit_angle": 0.00000000,
+        "orbit_speed": 0.00000000,
+        "orbit_enabled": false
+      },
+      {
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000,
+        "orbit_radius": 0.00000000,
+        "orbit_angle": 0.00000000,
+        "orbit_speed": 0.00000000,
+        "orbit_enabled": false
+      },
+      {
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000,
+        "orbit_radius": 0.00000000,
+        "orbit_angle": 0.00000000,
+        "orbit_speed": 0.00000000,
+        "orbit_enabled": false
+      },
+      {
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000,
+        "orbit_radius": 0.00000000,
+        "orbit_angle": 0.00000000,
+        "orbit_speed": 0.00000000,
+        "orbit_enabled": false
+      },
+      {
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000,
+        "orbit_radius": 0.00000000,
+        "orbit_angle": 0.00000000,
+        "orbit_speed": 0.00000000,
+        "orbit_enabled": false
+      },
+      {
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000,
+        "orbit_radius": 0.00000000,
+        "orbit_angle": 0.00000000,
+        "orbit_speed": 0.00000000,
+        "orbit_enabled": false
+      }
+    ],
+    "has_point_light": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    "cameras": [
+      {
+        "yaw": 0.00000000,
+        "pitch": 0.00000000,
+        "speed": 0.00000000,
+        "sensitivity": 0.00000000
+      },
+      {
+        "yaw": 0.00000000,
+        "pitch": 0.00000000,
+        "speed": 0.00000000,
+        "sensitivity": 0.00000000
+      },
+      {
+        "yaw": 0.00000000,
+        "pitch": 0.00000000,
+        "speed": 0.00000000,
+        "sensitivity": 0.00000000
+      },
+      {
+        "yaw": 0.00000000,
+        "pitch": 0.00000000,
+        "speed": 0.00000000,
+        "sensitivity": 0.00000000
+      },
+      {
+        "yaw": 0.00000000,
+        "pitch": 0.00000000,
+        "speed": 0.00000000,
+        "sensitivity": 0.00000000
+      },
+      {
+        "yaw": 0.00000000,
+        "pitch": 0.00000000,
+        "speed": 0.00000000,
+        "sensitivity": 0.00000000
+      },
+      {
+        "yaw": 0.00000000,
+        "pitch": 0.00000000,
+        "speed": 0.00000000,
+        "sensitivity": 0.00000000
+      },
+      {
+        "yaw": 1.46279800,
+        "pitch": -0.12000005,
+        "speed": 3.00000000,
+        "sensitivity": 0.00300000
+      },
+      {
+        "yaw": 0.00000000,
+        "pitch": 0.00000000,
+        "speed": 0.00000000,
+        "sensitivity": 0.00000000
+      },
+      {
+        "yaw": 0.00000000,
+        "pitch": 0.00000000,
+        "speed": 0.00000000,
+        "sensitivity": 0.00000000
+      },
+      {
+        "yaw": 0.00000000,
+        "pitch": 0.00000000,
+        "speed": 0.00000000,
+        "sensitivity": 0.00000000
+      },
+      {
+        "yaw": 0.00000000,
+        "pitch": 0.00000000,
+        "speed": 0.00000000,
+        "sensitivity": 0.00000000
+      },
+      {
+        "yaw": 0.00000000,
+        "pitch": 0.00000000,
+        "speed": 0.00000000,
+        "sensitivity": 0.00000000
+      },
+      {
+        "yaw": 0.00000000,
+        "pitch": 0.00000000,
+        "speed": 0.00000000,
+        "sensitivity": 0.00000000
+      },
+      {
+        "yaw": 0.00000000,
+        "pitch": 0.00000000,
+        "speed": 0.00000000,
+        "sensitivity": 0.00000000
+      },
+      {
+        "yaw": 0.00000000,
+        "pitch": 0.00000000,
+        "speed": 0.00000000,
+        "sensitivity": 0.00000000
+      }
+    ],
+    "has_camera": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    "materials": [
+      {
+        "tint": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ],
+        "texture": "Portrait",
+        "unlit": false,
+        "roughness": 0.85000002,
+        "metallic": 0.00000000,
+        "normal_texture": "Portrait",
+        "normal_strength": 0.00000000,
+        "f32": 0.00000000,
+        "uv_scale": 1.00000000,
+        "roughness_texture": "Portrait",
+        "use_roughness_map": false
+      },
+      {
+        "tint": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ],
+        "texture": "Checkerboard",
+        "unlit": false,
+        "roughness": 0.28000000,
+        "metallic": 0.75000000,
+        "normal_texture": "Portrait",
+        "normal_strength": 0.00000000,
+        "f32": 0.00000000,
+        "uv_scale": 1.00000000,
+        "roughness_texture": "Portrait",
+        "use_roughness_map": false
+      },
+      {
+        "tint": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ],
+        "texture": "Portrait",
+        "unlit": false,
+        "roughness": 0.15000001,
+        "metallic": 0.00000000,
+        "normal_texture": "Portrait",
+        "normal_strength": 0.00000000,
+        "f32": 0.00000000,
+        "uv_scale": 1.00000000,
+        "roughness_texture": "Portrait",
+        "use_roughness_map": false
+      },
+      {
+        "tint": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ],
+        "texture": "Stone_Albedo",
+        "unlit": false,
+        "roughness": 1.00000000,
+        "metallic": 0.00000000,
+        "normal_texture": "Stone_Normal",
+        "normal_strength": 1.00000000,
+        "f32": 0.00000000,
+        "uv_scale": 4.00000000,
+        "roughness_texture": "Stone_Roughness",
+        "use_roughness_map": true
+      },
+      {
+        "tint": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "texture": "Portrait",
+        "unlit": false,
+        "roughness": 0.00000000,
+        "metallic": 0.00000000,
+        "normal_texture": "Portrait",
+        "normal_strength": 0.00000000,
+        "f32": 0.00000000,
+        "uv_scale": 0.00000000,
+        "roughness_texture": "Portrait",
+        "use_roughness_map": false
+      },
+      {
+        "tint": [
+          0.89999998,
+          0.55000001,
+          0.40000001
+        ],
+        "texture": "Checkerboard",
+        "unlit": true,
+        "roughness": 0.00000000,
+        "metallic": 0.00000000,
+        "normal_texture": "Portrait",
+        "normal_strength": 0.00000000,
+        "f32": 0.00000000,
+        "uv_scale": 1.00000000,
+        "roughness_texture": "Portrait",
+        "use_roughness_map": false
+      },
+      {
+        "tint": [
+          0.30000001,
+          0.55000001,
+          1.00000000
+        ],
+        "texture": "Checkerboard",
+        "unlit": true,
+        "roughness": 0.00000000,
+        "metallic": 0.00000000,
+        "normal_texture": "Portrait",
+        "normal_strength": 0.00000000,
+        "f32": 0.00000000,
+        "uv_scale": 1.00000000,
+        "roughness_texture": "Portrait",
+        "use_roughness_map": false
+      },
+      {
+        "tint": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "texture": "Portrait",
+        "unlit": false,
+        "roughness": 0.00000000,
+        "metallic": 0.00000000,
+        "normal_texture": "Portrait",
+        "normal_strength": 0.00000000,
+        "f32": 0.00000000,
+        "uv_scale": 0.00000000,
+        "roughness_texture": "Portrait",
+        "use_roughness_map": false
+      },
+      {
+        "tint": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "texture": "Portrait",
+        "unlit": false,
+        "roughness": 0.00000000,
+        "metallic": 0.00000000,
+        "normal_texture": "Portrait",
+        "normal_strength": 0.00000000,
+        "f32": 0.00000000,
+        "uv_scale": 0.00000000,
+        "roughness_texture": "Portrait",
+        "use_roughness_map": false
+      },
+      {
+        "tint": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "texture": "Portrait",
+        "unlit": false,
+        "roughness": 0.00000000,
+        "metallic": 0.00000000,
+        "normal_texture": "Portrait",
+        "normal_strength": 0.00000000,
+        "f32": 0.00000000,
+        "uv_scale": 0.00000000,
+        "roughness_texture": "Portrait",
+        "use_roughness_map": false
+      },
+      {
+        "tint": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "texture": "Portrait",
+        "unlit": false,
+        "roughness": 0.00000000,
+        "metallic": 0.00000000,
+        "normal_texture": "Portrait",
+        "normal_strength": 0.00000000,
+        "f32": 0.00000000,
+        "uv_scale": 0.00000000,
+        "roughness_texture": "Portrait",
+        "use_roughness_map": false
+      },
+      {
+        "tint": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "texture": "Portrait",
+        "unlit": false,
+        "roughness": 0.00000000,
+        "metallic": 0.00000000,
+        "normal_texture": "Portrait",
+        "normal_strength": 0.00000000,
+        "f32": 0.00000000,
+        "uv_scale": 0.00000000,
+        "roughness_texture": "Portrait",
+        "use_roughness_map": false
+      },
+      {
+        "tint": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "texture": "Portrait",
+        "unlit": false,
+        "roughness": 0.00000000,
+        "metallic": 0.00000000,
+        "normal_texture": "Portrait",
+        "normal_strength": 0.00000000,
+        "f32": 0.00000000,
+        "uv_scale": 0.00000000,
+        "roughness_texture": "Portrait",
+        "use_roughness_map": false
+      },
+      {
+        "tint": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "texture": "Portrait",
+        "unlit": false,
+        "roughness": 0.00000000,
+        "metallic": 0.00000000,
+        "normal_texture": "Portrait",
+        "normal_strength": 0.00000000,
+        "f32": 0.00000000,
+        "uv_scale": 0.00000000,
+        "roughness_texture": "Portrait",
+        "use_roughness_map": false
+      },
+      {
+        "tint": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "texture": "Portrait",
+        "unlit": false,
+        "roughness": 0.00000000,
+        "metallic": 0.00000000,
+        "normal_texture": "Portrait",
+        "normal_strength": 0.00000000,
+        "f32": 0.00000000,
+        "uv_scale": 0.00000000,
+        "roughness_texture": "Portrait",
+        "use_roughness_map": false
+      },
+      {
+        "tint": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "texture": "Portrait",
+        "unlit": false,
+        "roughness": 0.00000000,
+        "metallic": 0.00000000,
+        "normal_texture": "Portrait",
+        "normal_strength": 0.00000000,
+        "f32": 0.00000000,
+        "uv_scale": 0.00000000,
+        "roughness_texture": "Portrait",
+        "use_roughness_map": false
+      }
+    ],
+    "has_material": [
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    "directional_lights": [
+      {
+        "direction": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000
+      },
+      {
+        "direction": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000
+      },
+      {
+        "direction": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000
+      },
+      {
+        "direction": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000
+      },
+      {
+        "direction": [
+          0.68376344,
+          -0.56980288,
+          0.45584229
+        ],
+        "color": [
+          1.00000000,
+          0.94999999,
+          0.85000002
+        ],
+        "intensity": 0.80000001
+      },
+      {
+        "direction": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000
+      },
+      {
+        "direction": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000
+      },
+      {
+        "direction": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000
+      },
+      {
+        "direction": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000
+      },
+      {
+        "direction": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000
+      },
+      {
+        "direction": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000
+      },
+      {
+        "direction": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000
+      },
+      {
+        "direction": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000
+      },
+      {
+        "direction": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000
+      },
+      {
+        "direction": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000
+      },
+      {
+        "direction": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "color": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "intensity": 0.00000000
+      }
+    ],
+    "has_directional_light": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "post_process": {
+    "exposure": 1.00000000,
+    "bloom_threshold": 1.00000000,
+    "bloom_strength": 0.60000002
+  }
+}

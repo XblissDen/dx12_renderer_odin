@@ -223,4 +223,8 @@ void dx12_ui_end_disabled() {
     ImGui::EndDisabled();
 }
 
+bool dx12_ui_button(const char* label) {
+    return ImGui::Button(label);
+}
+
 } // extern "C"

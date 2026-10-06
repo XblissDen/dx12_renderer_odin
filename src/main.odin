@@ -8,6 +8,7 @@ main :: proc(){
     defer window_unlock_cursor()
     window_lock_cursor()
     scene_init()
+    defer scene_file_destroy()
 
     renderer_init()
     renderer_create_depth_buffer()
