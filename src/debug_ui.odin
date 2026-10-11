@@ -54,6 +54,10 @@ foreign imgui_lib {
     ui_end_disabled :: proc() ---
 
     ui_button :: proc(label: cstring) -> bool ---
+
+    ui_item_activated :: proc() -> bool ---
+    ui_item_deactivated :: proc() -> bool ---
+    ui_any_item_active :: proc() -> bool ---
 }
 
 g_debug_ui_ready: bool
@@ -90,9 +94,14 @@ debug_ui_update :: proc() {
     if !g_debug_ui_ready {
         return
     }
+    //finish edits when leaving the UI
+    if g_cursor_locked {
+        editor_finish_transform_edit()
+    }
 
     ui_begin_frame(g_cursor_locked)
     if !g_debug_ui_visible {
+        editor_finish_transform_edit()
         return
     }
 
@@ -147,6 +156,8 @@ debug_ui_update :: proc() {
     if changed {
         renderer_update_post_title()
     }
+
+    editor_finish_idle_transform_edit()
 }
 
 debug_ui_render :: proc() {

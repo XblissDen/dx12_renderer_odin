@@ -227,4 +227,16 @@ bool dx12_ui_button(const char* label) {
     return ImGui::Button(label);
 }
 
+bool dx12_ui_item_activated() {
+    return ImGui::IsItemActivated();
+}
+
+bool dx12_ui_item_deactivated() {
+    return ImGui::IsItemDeactivated();
+}
+
+bool dx12_ui_any_item_active() {
+    return ImGui::IsAnyItemActive();
+}
+
 } // extern "C"

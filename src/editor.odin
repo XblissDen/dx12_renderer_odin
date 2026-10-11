@@ -8,10 +8,40 @@ g_editor_selected: Entity = Entity(-1)
 g_editor_file_status: string
 
 editor_draw_scene :: proc(scene: ^Scene){
-    ui_next_window(16, 462, 260, 240)
+    ui_next_window(16, 462, 300, 360)
 
     if ui_begin_panel("Scene"){
+        // Undo/Redo
+        ui_begin_disabled(
+            g_editor_history_cursor == 0 && !g_editor_pending_changed,
+        )
+        if ui_button("Undo Transform") {
+            editor_undo_transform(scene)
+        }
+        ui_end_disabled()
+
+        ui_begin_disabled(
+            g_editor_pending_changed ||
+            g_editor_history_cursor >= g_editor_history_count,
+        )
+        if ui_button("Redo Transform") {
+            editor_redo_transform(scene)
+        }
+        ui_end_disabled()
+
+        history_buffer: [64]u8
+        debug_ui_text(fmt.bprintf(
+            history_buffer[:],
+            "Undo: %d | Redo: %d",
+            g_editor_history_cursor,
+            g_editor_history_count - g_editor_history_cursor,
+        ))
+
+        ui_separator()
+
+        // Save/Load
         if ui_button("Save Scene"){
+            editor_finish_transform_edit()
             _, g_editor_file_status = scene_save_to_file(
                 scene,
                 SCENE_FILE_PATH
@@ -23,6 +53,7 @@ editor_draw_scene :: proc(scene: ^Scene){
             g_editor_file_status = message
 
             if ok{
+                editor_clear_transform_history()
                 g_editor_selected = Entity(-1)
                 renderer_update_post_title()
             }
@@ -53,6 +84,7 @@ editor_draw_scene :: proc(scene: ^Scene){
             label_buffer[len(label)] = 0
 
             if ui_selectable(cstring(raw_data(label_buffer[:])), g_editor_selected == Entity(i)){
+                editor_finish_transform_edit()
                 g_editor_selected = Entity(i)
             }
         }
@@ -206,39 +238,62 @@ editor_draw_inspector :: proc(scene: ^Scene) {
                 orbiting := scene.has_point_light[index] &&
                             scene.point_lights[index].orbit_enabled
 
+                before_position := editor_transform_value(scene, index, .Position)
+
                 ui_begin_disabled(orbiting)
-                ui_drag_float3("Position", &transform.position, 0.05)
+                position_changed := ui_drag_float3(
+                    "Position", &transform.position, 0.05,
+                )
+                editor_track_transform_edit(
+                    scene, index, .Position, before_position, position_changed,
+                )
                 ui_end_disabled()
 
+                before_rotation := editor_transform_value(scene, index, .Y_Rotation)
                 rotation_degrees := math.to_degrees(transform.rotation)
-                if ui_drag_float(
+                rotation_changed := ui_drag_float(
                     "Y rotation",
                     &rotation_degrees,
                     1.0,
                     0.0,
                     0.0,
-                ) {
+                )
+                if rotation_changed {
                     transform.rotation = math.to_radians(rotation_degrees)
                 }
+                editor_track_transform_edit(
+                    scene, index, .Y_Rotation, before_rotation, rotation_changed,
+                )
 
-                ui_drag_float(
+                before_scale := editor_transform_value(scene, index, .Uniform_Scale)
+
+                scale_changed := ui_drag_float(
                     "Uniform scale",
                     &transform.scale,
                     0.02,
                     0.05,
                     100.0,
                 )
+                editor_track_transform_edit(
+                    scene, index, .Uniform_Scale, before_scale, scale_changed,
+                )
 
+                before_spin := editor_transform_value(scene, index, .Spin)
                 spin_degrees := math.to_degrees(transform.rotation_speed)
-                if ui_drag_float(
+
+                spin_changed := ui_drag_float(
                     "Spin (degrees/s)",
                     &spin_degrees,
                     1.0,
                     -180.0,
                     180.0,
-                ) {
+                )
+                if spin_changed {
                     transform.rotation_speed = math.to_radians(spin_degrees)
                 }
+                editor_track_transform_edit(
+                    scene, index, .Spin, before_spin, spin_changed,
+                )
             }
 
             if scene.has_point_light[index] {
