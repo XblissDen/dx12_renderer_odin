@@ -2,7 +2,6 @@ package main
 
 import "core:fmt"
 import "core:math"
-import alg "core:math/linalg"
 
 g_editor_selected: Entity = Entity(-1)
 g_editor_file_status: string
@@ -15,8 +14,8 @@ editor_draw_scene :: proc(scene: ^Scene){
         ui_begin_disabled(
             g_editor_history_cursor == 0 && !g_editor_pending_changed,
         )
-        if ui_button("Undo Transform") {
-            editor_undo_transform(scene)
+        if ui_button("Undo") {
+            editor_undo(scene)
         }
         ui_end_disabled()
 
@@ -24,8 +23,8 @@ editor_draw_scene :: proc(scene: ^Scene){
             g_editor_pending_changed ||
             g_editor_history_cursor >= g_editor_history_count,
         )
-        if ui_button("Redo Transform") {
-            editor_redo_transform(scene)
+        if ui_button("Redo") {
+            editor_redo(scene)
         }
         ui_end_disabled()
 
@@ -41,7 +40,7 @@ editor_draw_scene :: proc(scene: ^Scene){
 
         // Save/Load
         if ui_button("Save Scene"){
-            editor_finish_transform_edit()
+            editor_finish_edit()
             _, g_editor_file_status = scene_save_to_file(
                 scene,
                 SCENE_FILE_PATH
@@ -53,7 +52,7 @@ editor_draw_scene :: proc(scene: ^Scene){
             g_editor_file_status = message
 
             if ok{
-                editor_clear_transform_history()
+                editor_clear_history()
                 g_editor_selected = Entity(-1)
                 renderer_update_post_title()
             }
@@ -84,7 +83,7 @@ editor_draw_scene :: proc(scene: ^Scene){
             label_buffer[len(label)] = 0
 
             if ui_selectable(cstring(raw_data(label_buffer[:])), g_editor_selected == Entity(i)){
-                editor_finish_transform_edit()
+                editor_finish_edit()
                 g_editor_selected = Entity(i)
             }
         }
@@ -93,8 +92,8 @@ editor_draw_scene :: proc(scene: ^Scene){
     ui_end_panel()
 }
 
-editor_draw_material_controls :: proc(scene: ^Scene, index: int){
-    if !scene.has_material[index]{
+editor_draw_material_controls :: proc(scene: ^Scene, index: int) {
+    if !scene.has_material[index] {
         return
     }
 
@@ -103,51 +102,35 @@ editor_draw_material_controls :: proc(scene: ^Scene, index: int){
     ui_separator()
     debug_ui_text("Material")
 
-    editor_edit_linear_color("Tint", &material.tint)
+    editor_color(scene, index, .Material_Tint, "Tint")
 
-    if material.roughness_texture == .Stone_Roughness{
-        ui_checkbox("Use roughness map", &material.use_roughness_map)
-    }
-
-    ui_slider_float("Roughness", &material.roughness, 0.08, 1.0)
-
-    if material.use_roughness_map{
-        debug_ui_text("Roughness multiplies the texture's values.")
-    }
-
-    ui_slider_float("Metallic", &material.metallic, 0.0, 1.0)
-
-    if material.normal_texture == .Stone_Normal{
-        ui_slider_float("Normal strength", &material.normal_strength, 0.0, 2.0,)
-    }
-
-    ui_drag_float("UV tiling", &material.uv_scale, 0.1, 0.1, 32.0)
-}
-
-editor_edit_linear_color :: proc(
-    label: cstring,
-    color: ^[3]f32,
-) -> bool {
-    picker_color: [3]f32
-
-    for channel in 0..<3 {
-        picker_color[channel] = math.pow(
-            clamp(color^[channel], 0.0, 1.0),
-            1.0 / 2.2,
+    if material.roughness_texture == .Stone_Roughness {
+        editor_checkbox(
+            scene, index, .Material_Use_Roughness_Map, "Use roughness map",
         )
     }
 
-    if ui_color_edit3(label, &picker_color) {
-        for channel in 0..<3 {
-            color^[channel] = math.pow(
-                clamp(picker_color[channel], 0.0, 1.0),
-                2.2,
-            )
-        }
-        return true
+    editor_slider(
+        scene, index, .Material_Roughness, "Roughness", 0.08, 1.0,
+    )
+
+    if material.use_roughness_map {
+        debug_ui_text("Roughness multiplies the texture's values.")
     }
 
-    return false
+    editor_slider(
+        scene, index, .Material_Metallic, "Metallic", 0.0, 1.0,
+    )
+
+    if material.normal_texture == .Stone_Normal {
+        editor_slider(
+            scene, index, .Material_Normal_Strength, "Normal strength", 0.0, 2.0,
+        )
+    }
+
+    editor_drag_number(
+        scene, index, .Material_UV_Scale, "UV tiling", 0.1, 0.1, 32.0,
+    )
 }
 
 editor_draw_point_light_controls :: proc(scene: ^Scene, index: int) {
@@ -156,58 +139,36 @@ editor_draw_point_light_controls :: proc(scene: ^Scene, index: int) {
     ui_separator()
     debug_ui_text("Point light")
 
-    editor_edit_linear_color("Light color", &light.color)
-    ui_slider_float("Intensity", &light.intensity, 0.0, 20.0)
-
-    ui_checkbox("Orbit enabled", &light.orbit_enabled)
+    editor_color(scene, index, .Point_Color, "Light color")
+    editor_slider(scene, index, .Point_Intensity, "Intensity", 0.0, 20.0)
+    editor_checkbox(scene, index, .Point_Orbit_Enabled, "Orbit enabled")
 
     if light.orbit_enabled {
-        ui_drag_float(
-            "Orbit radius",
-            &light.orbit_radius,
-            0.05,
-            0.0,
-            20.0,
+        editor_drag_number(
+            scene, index, .Point_Orbit_Radius, "Orbit radius", 0.05, 0.0, 20.0,
         )
 
-        ui_drag_float(
-            "Orbit height",
-            &scene.transforms[index].position.y,
-            0.05,
-            0.0,
-            0.0,
+        editor_drag_number(
+            scene, index, .Point_Orbit_Height, "Orbit height", 0.05, 0.0, 0.0,
         )
 
-        speed_degrees := math.to_degrees(light.orbit_speed)
-        if ui_drag_float(
-            "Orbit (degrees/s)",
-            &speed_degrees,
-            1.0,
-            -180.0,
-            180.0,
-        ) {
-            light.orbit_speed = math.to_radians(speed_degrees)
-        }
+        editor_drag_number(
+            scene, index, .Point_Orbit_Speed, "Orbit (degrees/s)",
+            1.0, -180.0, 180.0,
+            degrees = true,
+        )
 
         debug_ui_text("Disable orbit to edit Position manually.")
     }
 }
 
 editor_draw_directional_light_controls :: proc(scene: ^Scene, index: int) {
-    light := &scene.directional_lights[index]
-
     ui_separator()
     debug_ui_text("Directional light")
 
-    editor_edit_linear_color("Light color", &light.color)
-    ui_slider_float("Intensity", &light.intensity, 0.0, 10.0)
-
-    direction := light.direction
-    if ui_drag_float3("Direction", &direction, 0.02) {
-        if alg.dot(direction, direction) > 0.00000001 {
-            light.direction = alg.normalize(direction)
-        }
-    }
+    editor_color(scene, index, .Sun_Color, "Light color")
+    editor_slider(scene, index, .Sun_Intensity, "Intensity", 0.0, 10.0)
+    editor_drag_vector(scene, index, .Sun_Direction, "Direction", 0.02)
 
     debug_ui_text("Direction points along the light rays.")
     debug_ui_text("Negative Y sends light downward.")
@@ -238,18 +199,18 @@ editor_draw_inspector :: proc(scene: ^Scene) {
                 orbiting := scene.has_point_light[index] &&
                             scene.point_lights[index].orbit_enabled
 
-                before_position := editor_transform_value(scene, index, .Position)
+                before_position := editor_value(scene, index, .Position)
 
                 ui_begin_disabled(orbiting)
                 position_changed := ui_drag_float3(
                     "Position", &transform.position, 0.05,
                 )
-                editor_track_transform_edit(
+                editor_track_edit(
                     scene, index, .Position, before_position, position_changed,
                 )
                 ui_end_disabled()
 
-                before_rotation := editor_transform_value(scene, index, .Y_Rotation)
+                before_rotation := editor_value(scene, index, .Y_Rotation)
                 rotation_degrees := math.to_degrees(transform.rotation)
                 rotation_changed := ui_drag_float(
                     "Y rotation",
@@ -261,11 +222,11 @@ editor_draw_inspector :: proc(scene: ^Scene) {
                 if rotation_changed {
                     transform.rotation = math.to_radians(rotation_degrees)
                 }
-                editor_track_transform_edit(
+                editor_track_edit(
                     scene, index, .Y_Rotation, before_rotation, rotation_changed,
                 )
 
-                before_scale := editor_transform_value(scene, index, .Uniform_Scale)
+                before_scale := editor_value(scene, index, .Uniform_Scale)
 
                 scale_changed := ui_drag_float(
                     "Uniform scale",
@@ -274,11 +235,11 @@ editor_draw_inspector :: proc(scene: ^Scene) {
                     0.05,
                     100.0,
                 )
-                editor_track_transform_edit(
+                editor_track_edit(
                     scene, index, .Uniform_Scale, before_scale, scale_changed,
                 )
 
-                before_spin := editor_transform_value(scene, index, .Spin)
+                before_spin := editor_value(scene, index, .Spin)
                 spin_degrees := math.to_degrees(transform.rotation_speed)
 
                 spin_changed := ui_drag_float(
@@ -291,7 +252,7 @@ editor_draw_inspector :: proc(scene: ^Scene) {
                 if spin_changed {
                     transform.rotation_speed = math.to_radians(spin_degrees)
                 }
-                editor_track_transform_edit(
+                editor_track_edit(
                     scene, index, .Spin, before_spin, spin_changed,
                 )
             }

@@ -96,12 +96,12 @@ debug_ui_update :: proc() {
     }
     //finish edits when leaving the UI
     if g_cursor_locked {
-        editor_finish_transform_edit()
+        editor_finish_edit()
     }
 
     ui_begin_frame(g_cursor_locked)
     if !g_debug_ui_visible {
-        editor_finish_transform_edit()
+        editor_finish_edit()
         return
     }
 
@@ -157,7 +157,7 @@ debug_ui_update :: proc() {
         renderer_update_post_title()
     }
 
-    editor_finish_idle_transform_edit()
+    editor_finish_idle_edit()
 }
 
 debug_ui_render :: proc() {

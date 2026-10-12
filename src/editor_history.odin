@@ -1,17 +1,37 @@
 package main
 
+import alg "core:math/linalg"
+
 MAX_EDITOR_HISTORY :: 128
 
-EditorTransformField :: enum {
+EditorField :: enum {
     Position,
     Y_Rotation,
     Uniform_Scale,
     Spin,
+
+    Material_Tint,
+    Material_Roughness,
+    Material_Metallic,
+    Material_Normal_Strength,
+    Material_UV_Scale,
+    Material_Use_Roughness_Map,
+
+    Point_Color,
+    Point_Intensity,
+    Point_Orbit_Enabled,
+    Point_Orbit_Radius,
+    Point_Orbit_Height,
+    Point_Orbit_Speed,
+
+    Sun_Color,
+    Sun_Intensity,
+    Sun_Direction,
 }
 
-EditorTransformCommand :: struct {
+EditorCommand :: struct {
     entity: Entity,
-    field: EditorTransformField,
+    field: EditorField,
 
     // Position uses all three values.
     // Scalar properties use the first value.
@@ -19,68 +39,182 @@ EditorTransformCommand :: struct {
     after: [3]f32,
 }
 
-g_editor_history: [MAX_EDITOR_HISTORY]EditorTransformCommand
+g_editor_history: [MAX_EDITOR_HISTORY]EditorCommand
 g_editor_history_count: int
 
 // Number of commands currently applied.
 // Commands from cursor to count are available for redo.
 g_editor_history_cursor: int
 
-g_editor_pending_edit: EditorTransformCommand
+g_editor_pending_edit: EditorCommand
 g_editor_pending_active: bool
 g_editor_pending_changed: bool
 
-editor_transform_value :: proc(
+editor_bool_value :: proc(value: bool) -> [3]f32 {
+    if value {
+        return {1, 0, 0}
+    }
+    return {0, 0, 0}
+}
+
+editor_field_exists :: proc(
     scene: ^Scene,
     index: int,
-    field: EditorTransformField,
+    field: EditorField,
+) -> bool {
+    if index < 0 || index >= scene.entity_count {
+        return false
+    }
+
+    switch field {
+        case .Position, .Y_Rotation, .Uniform_Scale, .Spin:
+            return scene.has_transform[index]
+
+        case .Material_Tint,
+             .Material_Roughness,
+             .Material_Metallic,
+             .Material_Normal_Strength,
+             .Material_UV_Scale,
+             .Material_Use_Roughness_Map:
+            return scene.has_material[index]
+
+        case .Point_Orbit_Height:
+            return scene.has_point_light[index] &&
+                   scene.has_transform[index]
+
+        case .Point_Color,
+             .Point_Intensity,
+             .Point_Orbit_Enabled,
+             .Point_Orbit_Radius,
+             .Point_Orbit_Speed:
+            return scene.has_point_light[index]
+
+        case .Sun_Color, .Sun_Intensity, .Sun_Direction:
+            return scene.has_directional_light[index]
+    }
+
+    return false
+}
+
+editor_value :: proc(
+    scene: ^Scene,
+    index: int,
+    field: EditorField,
 ) -> [3]f32 {
-    transform := scene.transforms[index]
+    if !editor_field_exists(scene, index, field) {
+        return {}
+    }
 
     switch field {
         case .Position:
-            return transform.position
+            return scene.transforms[index].position
         case .Y_Rotation:
-            return {transform.rotation, 0, 0}
+            return {scene.transforms[index].rotation, 0, 0}
         case .Uniform_Scale:
-            return {transform.scale, 0, 0}
+            return {scene.transforms[index].scale, 0, 0}
         case .Spin:
-            return {transform.rotation_speed, 0, 0}
+            return {scene.transforms[index].rotation_speed, 0, 0}
+
+        case .Material_Tint:
+            return scene.materials[index].tint
+        case .Material_Roughness:
+            return {scene.materials[index].roughness, 0, 0}
+        case .Material_Metallic:
+            return {scene.materials[index].metallic, 0, 0}
+        case .Material_Normal_Strength:
+            return {scene.materials[index].normal_strength, 0, 0}
+        case .Material_UV_Scale:
+            return {scene.materials[index].uv_scale, 0, 0}
+        case .Material_Use_Roughness_Map:
+            return editor_bool_value(scene.materials[index].use_roughness_map)
+
+        case .Point_Color:
+            return scene.point_lights[index].color
+        case .Point_Intensity:
+            return {scene.point_lights[index].intensity, 0, 0}
+        case .Point_Orbit_Enabled:
+            return editor_bool_value(scene.point_lights[index].orbit_enabled)
+        case .Point_Orbit_Radius:
+            return {scene.point_lights[index].orbit_radius, 0, 0}
+        case .Point_Orbit_Height:
+            return {scene.transforms[index].position.y, 0, 0}
+        case .Point_Orbit_Speed:
+            return {scene.point_lights[index].orbit_speed, 0, 0}
+
+        case .Sun_Color:
+            return scene.directional_lights[index].color
+        case .Sun_Intensity:
+            return {scene.directional_lights[index].intensity, 0, 0}
+        case .Sun_Direction:
+            return scene.directional_lights[index].direction
     }
 
     return {}
 }
 
-editor_apply_transform_value :: proc(
+editor_apply_value :: proc(
     scene: ^Scene,
     entity: Entity,
-    field: EditorTransformField,
+    field: EditorField,
     value: [3]f32,
 ) -> bool {
     index := int(entity)
-
-    if index < 0 || index >= scene.entity_count ||
-       !scene.has_transform[index] {
+    if !editor_field_exists(scene, index, field) {
         return false
     }
 
-    transform := &scene.transforms[index]
-
     switch field {
         case .Position:
-            transform.position = value
+            scene.transforms[index].position = value
         case .Y_Rotation:
-            transform.rotation = value[0]
+            scene.transforms[index].rotation = value[0]
         case .Uniform_Scale:
-            transform.scale = value[0]
+            scene.transforms[index].scale = value[0]
         case .Spin:
-            transform.rotation_speed = value[0]
+            scene.transforms[index].rotation_speed = value[0]
+
+        case .Material_Tint:
+            scene.materials[index].tint = value
+        case .Material_Roughness:
+            scene.materials[index].roughness = value[0]
+        case .Material_Metallic:
+            scene.materials[index].metallic = value[0]
+        case .Material_Normal_Strength:
+            scene.materials[index].normal_strength = value[0]
+        case .Material_UV_Scale:
+            scene.materials[index].uv_scale = value[0]
+        case .Material_Use_Roughness_Map:
+            scene.materials[index].use_roughness_map = value[0] != 0
+
+        case .Point_Color:
+            scene.point_lights[index].color = value
+        case .Point_Intensity:
+            scene.point_lights[index].intensity = value[0]
+        case .Point_Orbit_Enabled:
+            scene.point_lights[index].orbit_enabled = value[0] != 0
+        case .Point_Orbit_Radius:
+            scene.point_lights[index].orbit_radius = value[0]
+        case .Point_Orbit_Height:
+            scene.transforms[index].position.y = value[0]
+        case .Point_Orbit_Speed:
+            scene.point_lights[index].orbit_speed = value[0]
+
+        case .Sun_Color:
+            scene.directional_lights[index].color = value
+        case .Sun_Intensity:
+            scene.directional_lights[index].intensity = value[0]
+        case .Sun_Direction:
+            direction := alg.Vector3f32(value)
+            if alg.dot(direction, direction) <= 0.00000001 {
+                return false
+            }
+            scene.directional_lights[index].direction = alg.normalize(direction)
     }
 
     return true
 }
 
-editor_push_transform_command :: proc(command: EditorTransformCommand) {
+editor_push_command :: proc(command: EditorCommand) {
     if command.before == command.after {
         return
     }
@@ -100,23 +234,23 @@ editor_push_transform_command :: proc(command: EditorTransformCommand) {
     g_editor_history_cursor = g_editor_history_count
 }
 
-editor_finish_transform_edit :: proc() {
+editor_finish_edit :: proc() {
     if !g_editor_pending_active {
         return
     }
 
     if g_editor_pending_changed {
-        editor_push_transform_command(g_editor_pending_edit)
+        editor_push_command(g_editor_pending_edit)
     }
 
     g_editor_pending_active = false
     g_editor_pending_changed = false
 }
 
-editor_track_transform_edit :: proc(
+editor_track_edit :: proc(
     scene: ^Scene,
     index: int,
-    field: EditorTransformField,
+    field: EditorField,
     before: [3]f32,
     changed: bool,
 ) {
@@ -129,9 +263,9 @@ editor_track_transform_edit :: proc(
                 g_editor_pending_edit.field == field
 
     if activated || (changed && !matching) {
-        editor_finish_transform_edit()
+        editor_finish_edit()
 
-        g_editor_pending_edit = EditorTransformCommand{
+        g_editor_pending_edit = EditorCommand{
             entity = Entity(index),
             field = field,
             before = before,
@@ -147,7 +281,7 @@ editor_track_transform_edit :: proc(
 
     if matching {
         if changed {
-            g_editor_pending_edit.after = editor_transform_value(
+            g_editor_pending_edit.after = editor_value(
                 scene, index, field,
             )
             g_editor_pending_changed = true
@@ -156,23 +290,23 @@ editor_track_transform_edit :: proc(
         if deactivated {
             // Read the final value, including a possible cancelled edit.
             if g_editor_pending_changed {
-                g_editor_pending_edit.after = editor_transform_value(
+                g_editor_pending_edit.after = editor_value(
                     scene, index, field,
                 )
             }
-            editor_finish_transform_edit()
+            editor_finish_edit()
         }
     }
 }
 
-editor_finish_idle_transform_edit :: proc() {
+editor_finish_idle_edit :: proc() {
     if g_editor_pending_active && !ui_any_item_active() {
-        editor_finish_transform_edit()
+        editor_finish_edit()
     }
 }
 
-editor_undo_transform :: proc(scene: ^Scene) {
-    editor_finish_transform_edit()
+editor_undo :: proc(scene: ^Scene) {
+    editor_finish_edit()
 
     if g_editor_history_cursor == 0 {
         return
@@ -180,7 +314,7 @@ editor_undo_transform :: proc(scene: ^Scene) {
 
     command := g_editor_history[g_editor_history_cursor - 1]
 
-    if editor_apply_transform_value(
+    if editor_apply_value(
         scene, command.entity, command.field, command.before,
     ) {
         g_editor_history_cursor -= 1
@@ -188,8 +322,8 @@ editor_undo_transform :: proc(scene: ^Scene) {
     }
 }
 
-editor_redo_transform :: proc(scene: ^Scene) {
-    editor_finish_transform_edit()
+editor_redo :: proc(scene: ^Scene) {
+    editor_finish_edit()
 
     if g_editor_history_cursor >= g_editor_history_count {
         return
@@ -197,7 +331,7 @@ editor_redo_transform :: proc(scene: ^Scene) {
 
     command := g_editor_history[g_editor_history_cursor]
 
-    if editor_apply_transform_value(
+    if editor_apply_value(
         scene, command.entity, command.field, command.after,
     ) {
         g_editor_history_cursor += 1
@@ -205,7 +339,7 @@ editor_redo_transform :: proc(scene: ^Scene) {
     }
 }
 
-editor_clear_transform_history :: proc() {
+editor_clear_history :: proc() {
     g_editor_history_count = 0
     g_editor_history_cursor = 0
     g_editor_pending_active = false
