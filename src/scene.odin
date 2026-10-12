@@ -89,10 +89,34 @@ Scene :: struct{
 
 g_scene: Scene
 
+scene_clear_entity_slot :: proc(scene: ^Scene, index: int) {
+    scene.names[index] = ""
+
+    scene.transforms[index] = {}
+    scene.has_transform[index] = false
+
+    scene.mesh_renderers[index] = {}
+    scene.has_mesh_renderer[index] = false
+
+    scene.materials[index] = {}
+    scene.has_material[index] = false
+
+    scene.point_lights[index] = {}
+    scene.has_point_light[index] = false
+
+    scene.directional_lights[index] = {}
+    scene.has_directional_light[index] = false
+
+    scene.cameras[index] = {}
+    scene.has_camera[index] = false
+}
+
 scene_create_entity :: proc(scene: ^Scene, name := "") -> Entity {
     assert(scene.entity_count < MAX_ENTITIES)
 
     entity := Entity(scene.entity_count)
+
+    scene_clear_entity_slot(scene, int(entity))
     scene.names[int(entity)] = name
     scene.entity_count += 1
 

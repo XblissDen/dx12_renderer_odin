@@ -3,6 +3,7 @@ package main
 import "core:encoding/json"
 import "core:mem"
 import "core:os"
+import "core:strings"
 import alg "core:math/linalg"
 
 SCENE_FILE_PATH :: "scene.json"
@@ -29,6 +30,20 @@ scene_file_destroy :: proc(){
         mem.dynamic_arena_destroy(&g_scene_file_arena)
         g_scene_file_arena_active = false
     }
+}
+
+scene_store_owned_name :: proc(name: string) -> (result: string, ok: bool) {
+    if !g_scene_file_arena_active {
+        mem.dynamic_arena_init(&g_scene_file_arena)
+        g_scene_file_arena_active = true
+    }
+
+    copied, error := strings.clone(
+        name,
+        mem.dynamic_arena_allocator(&g_scene_file_arena),
+    )
+
+    return copied, error == nil
 }
 
 scene_file_validate :: proc(scene: ^Scene) -> string{

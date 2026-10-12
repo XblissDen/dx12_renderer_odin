@@ -29,7 +29,21 @@ EditorField :: enum {
     Sun_Direction,
 }
 
+EditorCommandKind :: enum {
+    Edit_Field,
+    Create_Mesh,
+}
+
+EditorMeshSnapshot :: struct {
+    name: string,
+    transform: Transform,
+    mesh_renderer: MeshRenderer,
+    material: Material,
+}
+
 EditorCommand :: struct {
+    kind: EditorCommandKind,
+
     entity: Entity,
     field: EditorField,
 
@@ -37,6 +51,9 @@ EditorCommand :: struct {
     // Scalar properties use the first value.
     before: [3]f32,
     after: [3]f32,
+
+    created_mesh: EditorMeshSnapshot,
+    source_entity: Entity,
 }
 
 g_editor_history: [MAX_EDITOR_HISTORY]EditorCommand
@@ -215,7 +232,7 @@ editor_apply_value :: proc(
 }
 
 editor_push_command :: proc(command: EditorCommand) {
-    if command.before == command.after {
+    if command.kind == .Edit_Field && command.before == command.after {
         return
     }
 
@@ -313,12 +330,26 @@ editor_undo :: proc(scene: ^Scene) {
     }
 
     command := g_editor_history[g_editor_history_cursor - 1]
+    applied := false
 
-    if editor_apply_value(
-        scene, command.entity, command.field, command.before,
-    ) {
+    switch command.kind {
+        case .Edit_Field:
+            applied = editor_apply_value(
+                scene, command.entity, command.field, command.before,
+            )
+            if applied {
+                g_editor_selected = command.entity
+            }
+
+        case .Create_Mesh:
+            applied = editor_remove_created_mesh(scene, command.entity)
+            if applied {
+                g_editor_selected = command.source_entity
+            }
+    }
+
+    if applied {
         g_editor_history_cursor -= 1
-        g_editor_selected = command.entity
     }
 }
 
@@ -330,10 +361,21 @@ editor_redo :: proc(scene: ^Scene) {
     }
 
     command := g_editor_history[g_editor_history_cursor]
+    applied := false
 
-    if editor_apply_value(
-        scene, command.entity, command.field, command.after,
-    ) {
+    switch command.kind {
+        case .Edit_Field:
+            applied = editor_apply_value(
+                scene, command.entity, command.field, command.after,
+            )
+
+        case .Create_Mesh:
+            applied = editor_restore_created_mesh(
+                scene, command.entity, command.created_mesh,
+            )
+    }
+
+    if applied {
         g_editor_history_cursor += 1
         g_editor_selected = command.entity
     }

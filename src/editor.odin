@@ -36,6 +36,20 @@ editor_draw_scene :: proc(scene: ^Scene){
             g_editor_history_count - g_editor_history_cursor,
         ))
 
+        ui_begin_disabled(
+            !editor_can_duplicate_mesh(scene, g_editor_selected),
+        )
+
+        if ui_button("Duplicate Selected") {
+            editor_duplicate_selected(scene)
+        }
+
+        ui_end_disabled()
+
+        if scene.entity_count >= MAX_ENTITIES {
+            debug_ui_text("Scene entity capacity reached.")
+        }
+
         ui_separator()
 
         // Save/Load
