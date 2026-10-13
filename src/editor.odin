@@ -50,6 +50,16 @@ editor_draw_scene :: proc(scene: ^Scene){
             debug_ui_text("Scene entity capacity reached.")
         }
 
+        ui_begin_disabled(
+            !editor_can_delete_mesh(scene, g_editor_selected),
+        )
+
+        if ui_button("Delete Selected") {
+            editor_delete_selected(scene)
+        }
+
+        ui_end_disabled()
+
         ui_separator()
 
         // Save/Load
@@ -83,6 +93,10 @@ editor_draw_scene :: proc(scene: ^Scene){
         label_buffer: [128]u8
 
         for i in 0..<scene.entity_count{
+            if !scene.alive[i] {
+                continue
+            }
+
             if !scene.has_mesh_renderer[i] && !scene.has_directional_light[i] && !scene.has_point_light[i]{
                 continue
             }
@@ -194,7 +208,7 @@ editor_draw_inspector :: proc(scene: ^Scene) {
     if ui_begin_panel("Inspector") {
         index := int(g_editor_selected)
 
-        if index >= 0 && index < scene.entity_count {
+        if scene_entity_is_alive(scene, g_editor_selected) {
             text_buffer: [128]u8
             debug_ui_text(fmt.bprintf(
                 text_buffer[:],

@@ -32,6 +32,7 @@ EditorField :: enum {
 EditorCommandKind :: enum {
     Edit_Field,
     Create_Mesh,
+    Delete_Mesh
 }
 
 EditorMeshSnapshot :: struct {
@@ -52,7 +53,7 @@ EditorCommand :: struct {
     before: [3]f32,
     after: [3]f32,
 
-    created_mesh: EditorMeshSnapshot,
+    mesh_snapshot: EditorMeshSnapshot,
     source_entity: Entity,
 }
 
@@ -79,7 +80,7 @@ editor_field_exists :: proc(
     index: int,
     field: EditorField,
 ) -> bool {
-    if index < 0 || index >= scene.entity_count {
+    if !scene_entity_is_alive(scene, Entity(index)) {
         return false
     }
 
@@ -346,6 +347,14 @@ editor_undo :: proc(scene: ^Scene) {
             if applied {
                 g_editor_selected = command.source_entity
             }
+
+        case .Delete_Mesh:
+            applied = editor_restore_deleted_mesh(
+                scene, command.entity, command.mesh_snapshot,
+            )
+            if applied {
+                g_editor_selected = command.entity
+            }
     }
 
     if applied {
@@ -371,13 +380,21 @@ editor_redo :: proc(scene: ^Scene) {
 
         case .Create_Mesh:
             applied = editor_restore_created_mesh(
-                scene, command.entity, command.created_mesh,
+                scene, command.entity, command.mesh_snapshot,
             )
+
+        case .Delete_Mesh:
+            applied = editor_delete_mesh(scene, command.entity)
     }
 
     if applied {
         g_editor_history_cursor += 1
-        g_editor_selected = command.entity
+
+        if command.kind == .Delete_Mesh {
+            g_editor_selected = Entity(-1)
+        } else {
+            g_editor_selected = command.entity
+        }
     }
 }
 

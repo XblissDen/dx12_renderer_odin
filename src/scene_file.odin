@@ -7,7 +7,7 @@ import "core:strings"
 import alg "core:math/linalg"
 
 SCENE_FILE_PATH :: "scene.json"
-SCENE_FILE_VERSION :: 1
+SCENE_FILE_VERSION :: 2
 
 ScenePostSettings :: struct{
     exposure: f32,
@@ -54,6 +54,10 @@ scene_file_validate :: proc(scene: ^Scene) -> string{
     camera_count, sun_count, point_count: int
 
     for i in 0..<scene.entity_count{
+        if !scene.alive[i] {
+            continue
+        }
+
         if scene.has_camera[i]{
             if !scene.has_transform[i]{
                 return "Camera needs a Transform."
@@ -184,7 +188,20 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
         return false, "Could not decode scene file."
     }
 
-    if file.version != SCENE_FILE_VERSION{
+    if file.scene.entity_count < 1 ||
+    file.scene.entity_count > MAX_ENTITIES {
+        return false, "Invalid entity count."
+    }
+
+    if file.version == 1 {
+        // Version 1 had no inactive slots.
+        for i in 0..<file.scene.entity_count {
+            file.scene.alive[i] = true
+        }
+        file.version = SCENE_FILE_VERSION
+    }
+
+    if file.version != SCENE_FILE_VERSION {
         return false, "Unsupported scene-file version."
     }
 
@@ -200,6 +217,10 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
     }
 
     for i in 0..<file.scene.entity_count{
+        if !file.scene.alive[i] {
+            continue
+        }
+        
         if file.scene.has_directional_light[i]{
             file.scene.directional_lights[i].direction = alg.normalize(
                 file.scene.directional_lights[i].direction,

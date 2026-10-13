@@ -66,6 +66,7 @@ MeshRenderer :: struct {
 
 Scene :: struct{
     entity_count: int,
+    alive: [MAX_ENTITIES]bool,
     names: [MAX_ENTITIES]string,
 
     transforms: [MAX_ENTITIES]Transform,
@@ -91,6 +92,7 @@ g_scene: Scene
 
 scene_clear_entity_slot :: proc(scene: ^Scene, index: int) {
     scene.names[index] = ""
+    scene.alive[index] = false
 
     scene.transforms[index] = {}
     scene.has_transform[index] = false
@@ -111,6 +113,14 @@ scene_clear_entity_slot :: proc(scene: ^Scene, index: int) {
     scene.has_camera[index] = false
 }
 
+scene_entity_is_alive :: proc(scene: ^Scene, entity: Entity) -> bool {
+    index := int(entity)
+
+    return index >= 0 &&
+           index < scene.entity_count &&
+           scene.alive[index]
+}
+
 scene_create_entity :: proc(scene: ^Scene, name := "") -> Entity {
     assert(scene.entity_count < MAX_ENTITIES)
 
@@ -118,6 +128,7 @@ scene_create_entity :: proc(scene: ^Scene, name := "") -> Entity {
 
     scene_clear_entity_slot(scene, int(entity))
     scene.names[int(entity)] = name
+    scene.alive[int(entity)] = true
     scene.entity_count += 1
 
     return entity
@@ -306,6 +317,10 @@ scene_init :: proc(){
 
 scene_update :: proc(scene: ^Scene, dt: f32){
     for i in 0..<scene.entity_count{
+        if !scene.alive[i] {
+            continue
+        }
+
         if scene.has_transform[i]{
             scene.transforms[i].rotation += scene.transforms[i]. rotation_speed * dt
         }

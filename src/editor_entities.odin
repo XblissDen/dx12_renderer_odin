@@ -3,19 +3,8 @@ package main
 import "core:fmt"
 
 editor_can_duplicate_mesh :: proc(scene: ^Scene, entity: Entity) -> bool {
-    index := int(entity)
-
-    if index < 0 || index >= scene.entity_count ||
-       scene.entity_count >= MAX_ENTITIES {
-        return false
-    }
-
-    return scene.has_transform[index] &&
-           scene.has_mesh_renderer[index] &&
-           scene.has_material[index] &&
-           !scene.has_point_light[index] &&
-           !scene.has_directional_light[index] &&
-           !scene.has_camera[index]
+    return scene.entity_count < MAX_ENTITIES &&
+           editor_can_delete_mesh(scene, entity)
 }
 
 editor_restore_created_mesh :: proc(
@@ -40,15 +29,8 @@ editor_restore_created_mesh :: proc(
 editor_remove_created_mesh :: proc(scene: ^Scene, entity: Entity) -> bool {
     index := int(entity)
 
-    // Linear undo removes later creations before earlier ones.
-    if index < 0 || index != scene.entity_count - 1 {
-        return false
-    }
-
-    if !scene.has_mesh_renderer[index] ||
-       scene.has_point_light[index] ||
-       scene.has_directional_light[index] ||
-       scene.has_camera[index] {
+    if index != scene.entity_count - 1 ||
+       !editor_can_delete_mesh(scene, entity) {
         return false
     }
 
@@ -99,9 +81,85 @@ editor_duplicate_selected :: proc(scene: ^Scene) {
     editor_push_command(EditorCommand{
         kind = .Create_Mesh,
         entity = created,
-        created_mesh = snapshot,
+        mesh_snapshot = snapshot,
         source_entity = source,
     })
 
     g_editor_selected = created
+}
+
+editor_can_delete_mesh :: proc(scene: ^Scene, entity: Entity) -> bool {
+    if !scene_entity_is_alive(scene, entity) {
+        return false
+    }
+
+    index := int(entity)
+
+    return scene.has_transform[index] &&
+           scene.has_mesh_renderer[index] &&
+           scene.has_material[index] &&
+           !scene.has_point_light[index] &&
+           !scene.has_directional_light[index] &&
+           !scene.has_camera[index]
+}
+
+editor_delete_mesh :: proc(scene: ^Scene, entity: Entity) -> bool {
+    if !editor_can_delete_mesh(scene, entity) {
+        return false
+    }
+
+    scene.alive[int(entity)] = false
+    return true
+}
+
+editor_restore_deleted_mesh :: proc(
+    scene: ^Scene,
+    entity: Entity,
+    snapshot: EditorMeshSnapshot,
+) -> bool {
+    index := int(entity)
+
+    if index < 0 || index >= scene.entity_count ||
+       scene.alive[index] {
+        return false
+    }
+
+    scene_clear_entity_slot(scene, index)
+    scene.names[index] = snapshot.name
+
+    scene_add_transform(scene, entity, snapshot.transform)
+    scene_add_mesh_renderer(scene, entity, snapshot.mesh_renderer)
+    scene_add_material(scene, entity, snapshot.material)
+
+    scene.alive[index] = true
+    return true
+}
+
+editor_delete_selected :: proc(scene: ^Scene) {
+    editor_finish_edit()
+
+    entity := g_editor_selected
+    if !editor_can_delete_mesh(scene, entity) {
+        return
+    }
+
+    index := int(entity)
+    snapshot := EditorMeshSnapshot{
+        name = scene.names[index],
+        transform = scene.transforms[index],
+        mesh_renderer = scene.mesh_renderers[index],
+        material = scene.materials[index],
+    }
+
+    if !editor_delete_mesh(scene, entity) {
+        return
+    }
+
+    editor_push_command(EditorCommand{
+        kind = .Delete_Mesh,
+        entity = entity,
+        mesh_snapshot = snapshot,
+    })
+
+    g_editor_selected = Entity(-1)
 }

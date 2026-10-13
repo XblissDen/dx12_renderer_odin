@@ -21,6 +21,10 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
     camera_index := -1
 
     for i in 0..<scene.entity_count{
+        if !scene.alive[i] {
+            continue
+        }
+
         if scene.has_transform[i] && scene.has_camera[i]{
             camera_index = i
             break
@@ -58,6 +62,10 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
     light_count := 0
 
     for i in 0..<scene.entity_count {
+        if !scene.alive[i] {
+            continue
+        }
+
         if scene.has_transform[i] && scene.has_point_light[i] {
             assert(light_count < MAX_LIGHTS)
 
@@ -74,6 +82,10 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
     sun_found := false
 
     for i in 0..<scene.entity_count {
+        if !scene.alive[i] {
+            continue
+        }
+
         if scene.has_directional_light[i] {
             sun = scene.directional_lights[i]
             sun_found = true
@@ -95,6 +107,10 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
     sun_view_projection := sun_view * sun_projection
 
     for i in 0..<scene.entity_count{
+        if !scene.alive[i] {
+            continue
+        }
+
         if !scene.has_transform[i] || !scene.has_mesh_renderer[i] || !scene.has_material[i]{
             continue
         }
