@@ -323,6 +323,26 @@ editor_finish_idle_edit :: proc() {
     }
 }
 
+editor_slot_referenced_by_history :: proc(slot: int) -> bool {
+    // Only applied commands survive after a new action.
+    // Redo commands are discarded when the next command is pushed.
+    for i in 0..<g_editor_history_cursor {
+        command := g_editor_history[i]
+
+        if int(command.entity) == slot {
+            return true
+        }
+
+        // Undoing a duplicate selects its original source, too.
+        if command.kind == .Create_Mesh &&
+           int(command.source_entity) == slot {
+            return true
+        }
+    }
+
+    return false
+}
+
 editor_undo :: proc(scene: ^Scene) {
     editor_finish_edit()
 

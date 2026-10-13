@@ -46,8 +46,8 @@ editor_draw_scene :: proc(scene: ^Scene){
 
         ui_end_disabled()
 
-        if scene.entity_count >= MAX_ENTITIES {
-            debug_ui_text("Scene entity capacity reached.")
+        if editor_find_available_mesh_slot(scene) < 0 {
+            debug_ui_text("No reusable slots (undo history may retain deleted IDs).")
         }
 
         ui_begin_disabled(

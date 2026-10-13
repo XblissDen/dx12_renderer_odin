@@ -2,8 +2,30 @@ package main
 
 import "core:fmt"
 
+editor_find_available_mesh_slot :: proc(scene: ^Scene) -> int {
+    for i in 0..<scene.entity_count {
+        if scene.alive[i] {
+            continue
+        }
+        if g_editor_selected == Entity(i) {
+            continue
+        }
+        if editor_slot_referenced_by_history(i) {
+            continue
+        }
+
+        return i
+    }
+
+    if scene.entity_count < MAX_ENTITIES {
+        return scene.entity_count
+    }
+
+    return -1
+}
+
 editor_can_duplicate_mesh :: proc(scene: ^Scene, entity: Entity) -> bool {
-    return scene.entity_count < MAX_ENTITIES &&
+    return editor_find_available_mesh_slot(scene) >= 0 &&
            editor_can_delete_mesh(scene, entity)
 }
 
@@ -12,31 +34,39 @@ editor_restore_created_mesh :: proc(
     entity: Entity,
     snapshot: EditorMeshSnapshot,
 ) -> bool {
-    // Our current ECS creates entities by appending to its active range.
-    if int(entity) != scene.entity_count ||
-       scene.entity_count >= MAX_ENTITIES {
+    index := int(entity)
+
+    if index < 0 || index >= MAX_ENTITIES {
         return false
     }
 
-    restored := scene_create_entity(scene, snapshot.name)
-    scene_add_transform(scene, restored, snapshot.transform)
-    scene_add_mesh_renderer(scene, restored, snapshot.mesh_renderer)
-    scene_add_material(scene, restored, snapshot.material)
+    if index == scene.entity_count {
+        // The snapshot is being restored to a new high-water slot.
+        _ = scene_create_entity(scene, snapshot.name)
+    } else if index < scene.entity_count && !scene.alive[index] {
+        // Redo or duplication into a reusable hole.
+        scene_clear_entity_slot(scene, index)
+        scene.names[index] = snapshot.name
+        scene.alive[index] = true
+    } else {
+        return false
+    }
+
+    scene_add_transform(scene, entity, snapshot.transform)
+    scene_add_mesh_renderer(scene, entity, snapshot.mesh_renderer)
+    scene_add_material(scene, entity, snapshot.material)
 
     return true
 }
 
 editor_remove_created_mesh :: proc(scene: ^Scene, entity: Entity) -> bool {
-    index := int(entity)
-
-    if index != scene.entity_count - 1 ||
-       !editor_can_delete_mesh(scene, entity) {
+    if !editor_can_delete_mesh(scene, entity) {
         return false
     }
 
-    scene_clear_entity_slot(scene, index)
-    scene.entity_count -= 1
-
+    // Keep entity_count as the high-water mark. The hole may be reused
+    // after the creation command leaves undo/redo history.
+    scene_clear_entity_slot(scene, int(entity))
     return true
 }
 
@@ -44,7 +74,10 @@ editor_duplicate_selected :: proc(scene: ^Scene) {
     editor_finish_edit()
 
     source := g_editor_selected
-    if !editor_can_duplicate_mesh(scene, source) {
+    slot := editor_find_available_mesh_slot(scene)
+
+    if slot < 0 || !editor_can_delete_mesh(scene, source) {
+        g_editor_file_status = "No reusable entity slots are available."
         return
     }
 
@@ -73,7 +106,7 @@ editor_duplicate_selected :: proc(scene: ^Scene) {
     // Make the copy easier to distinguish from its source.
     snapshot.transform.position.x += 1.5
 
-    created := Entity(scene.entity_count)
+    created := Entity(slot)
     if !editor_restore_created_mesh(scene, created, snapshot) {
         return
     }
