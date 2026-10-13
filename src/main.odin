@@ -58,6 +58,7 @@ main :: proc(){
 
         renderer_resize(g_client_width, g_client_height)
         debug_ui_update()
+        editor_update_picking(&g_scene)
         scene_update(&g_scene, dt)
         renderer_render_frame(&g_scene)
 

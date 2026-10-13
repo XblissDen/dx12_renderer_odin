@@ -65,6 +65,9 @@ GpuMesh :: struct {
     index_buffer: ^d3d12.IResource,
     index_buffer_view: d3d12.INDEX_BUFFER_VIEW,
     index_count: u32,
+
+    // Owned CPU geometry, shared by every entity using this mesh asset.
+    cpu: MeshData,
 }
 
 SceneConstants :: struct #align(256) {
@@ -1089,6 +1092,7 @@ renderer_upload_mesh :: proc(gpu: ^GpuMesh, mesh: MeshData) {
     }
 
     gpu.index_count = u32(len(mesh.indices))
+    gpu.cpu = mesh
 }
 
 renderer_create_depth_buffer :: proc(){
@@ -1584,9 +1588,13 @@ renderer_destroy :: proc(){
     r.depth_buffer->Release()
     r.dsv_heap->Release()
 
-    for mesh in r.meshes {
+    for &mesh in r.meshes {
         mesh.vertex_buffer->Release()
         mesh.index_buffer->Release()
+
+        delete(mesh.cpu.vertices)
+        delete(mesh.cpu.indices)
+        mesh.cpu = {}
     }
 
     for texture in r.textures{

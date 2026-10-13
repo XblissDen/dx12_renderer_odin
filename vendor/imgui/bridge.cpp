@@ -239,4 +239,17 @@ bool dx12_ui_any_item_active() {
     return ImGui::IsAnyItemActive();
 }
 
+bool dx12_ui_scene_left_click(float* x, float* y) {
+    if (!state.initialized || !state.frame_started)
+        return false;
+
+    const auto& io = ImGui::GetIO();
+    if (io.WantCaptureMouse || !ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        return false;
+
+    *x = io.MousePos.x;
+    *y = io.MousePos.y;
+    return true;
+}
+
 } // extern "C"

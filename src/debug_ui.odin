@@ -16,6 +16,7 @@ foreign imgui_lib {
     ui_shutdown :: proc() ---
     ui_handle_message :: proc(hwnd: win32.HWND, message: u32, wparam: win32.WPARAM, lparam: win32.LPARAM) -> bool ---
     ui_wants_keyboard :: proc() -> bool ---
+    ui_scene_left_click :: proc(x, y: ^f32) -> bool ---
     ui_begin_frame :: proc(cursor_locked: bool) ---
     ui_next_window :: proc(x, y, width, height: f32) ---
     ui_begin_panel :: proc(title: cstring) -> bool ---
