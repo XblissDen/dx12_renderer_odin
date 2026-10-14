@@ -104,6 +104,21 @@ scene_file_validate :: proc(scene: ^Scene) -> string{
                     return "Unknown texture asset."
             }
 
+            if !texture_asset_is_albedo(material.texture) {
+                return "Albedo needs a color texture."
+            }
+
+            if !(material.normal_strength >= 0) ||
+               (material.normal_strength > 0 &&
+                material.normal_texture != .Stone_Normal) {
+                return "Invalid normal map assignment."
+            }
+
+            if material.use_roughness_map &&
+               material.roughness_texture != .Stone_Roughness {
+                return "Invalid roughness map assignment."
+            }
+
             if material.uv_scale <= 0{
                 return "UV scale must be positive."
             }

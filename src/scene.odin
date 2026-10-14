@@ -16,6 +16,12 @@ Texture_Asset :: enum u32{
     Stone_Roughness,
 }
 
+texture_asset_is_albedo :: proc(asset: Texture_Asset) -> bool {
+    return asset == .Portrait ||
+           asset == .Checkerboard ||
+           asset == .Stone_Albedo
+}
+
 Mesh_Asset :: enum u32 {
     Cube, 
     Pyramid,

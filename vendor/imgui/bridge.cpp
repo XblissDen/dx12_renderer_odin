@@ -252,4 +252,9 @@ bool dx12_ui_scene_left_click(float* x, float* y) {
     return true;
 }
 
+bool dx12_ui_combo(const char* label, std::int32_t* selected,
+                   const char* const* items, std::int32_t count) {
+    return ImGui::Combo(label, selected, items, count);
+}
+
 } // extern "C"

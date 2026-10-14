@@ -1,6 +1,7 @@
 package main
 
 import alg "core:math/linalg"
+import "core:math"
 
 MAX_EDITOR_HISTORY :: 128
 
@@ -27,6 +28,11 @@ EditorField :: enum {
     Sun_Color,
     Sun_Intensity,
     Sun_Direction,
+
+    Mesh_Asset,
+    Material_Albedo_Texture,
+    Material_Normal_Map,
+    Material_Roughness_Map,
 }
 
 EditorCommandKind :: enum {
@@ -50,6 +56,9 @@ EditorCommand :: struct {
 
     // Position uses all three values.
     // Scalar properties use the first value.
+    //Mesh/albedo:   {asset ID, 0, 0}
+    //Normal map:    {asset ID, strength, 0}
+    //Roughness map: {asset ID, enabled, 0}
     before: [3]f32,
     after: [3]f32,
 
@@ -93,7 +102,10 @@ editor_field_exists :: proc(
              .Material_Metallic,
              .Material_Normal_Strength,
              .Material_UV_Scale,
-             .Material_Use_Roughness_Map:
+             .Material_Use_Roughness_Map,
+             .Material_Albedo_Texture,
+             .Material_Normal_Map,
+             .Material_Roughness_Map:
             return scene.has_material[index]
 
         case .Point_Orbit_Height:
@@ -109,6 +121,9 @@ editor_field_exists :: proc(
 
         case .Sun_Color, .Sun_Intensity, .Sun_Direction:
             return scene.has_directional_light[index]
+
+        case .Mesh_Asset:
+            return scene.has_mesh_renderer[index]
     }
 
     return false
@@ -145,6 +160,25 @@ editor_value :: proc(
             return {scene.materials[index].uv_scale, 0, 0}
         case .Material_Use_Roughness_Map:
             return editor_bool_value(scene.materials[index].use_roughness_map)
+        case .Material_Albedo_Texture:
+            return {f32(u32(scene.materials[index].texture)), 0, 0}
+        case .Material_Normal_Map:
+            return {
+                f32(u32(scene.materials[index].normal_texture)),
+                scene.materials[index].normal_strength,
+                0,
+            }
+        case .Material_Roughness_Map:
+            enabled := editor_bool_value(
+                scene.materials[index].use_roughness_map,
+            )
+            return {
+                f32(u32(scene.materials[index].roughness_texture)),
+                enabled[0],
+                0,
+            }
+        case .Mesh_Asset:
+            return {f32(u32(scene.mesh_renderers[index].mesh)), 0, 0}
 
         case .Point_Color:
             return scene.point_lights[index].color
@@ -203,6 +237,48 @@ editor_apply_value :: proc(
             scene.materials[index].uv_scale = value[0]
         case .Material_Use_Roughness_Map:
             scene.materials[index].use_roughness_map = value[0] != 0
+        case .Material_Albedo_Texture:
+            asset, ok := editor_decode_asset_index(value[0], TEXTURE_COUNT)
+            if !ok || !texture_asset_is_albedo(Texture_Asset(u32(asset))) {
+                return false
+            }
+            scene.materials[index].texture = Texture_Asset(u32(asset))
+
+        case .Material_Normal_Map:
+            asset, ok := editor_decode_asset_index(value[0], TEXTURE_COUNT)
+            if !ok || !(value[1] >= 0) {
+                return false
+            }
+
+            texture := Texture_Asset(u32(asset))
+            if value[1] > 0 && texture != .Stone_Normal {
+                return false
+            }
+
+            scene.materials[index].normal_texture = texture
+            scene.materials[index].normal_strength = value[1]
+
+        case .Material_Roughness_Map:
+            asset, ok := editor_decode_asset_index(value[0], TEXTURE_COUNT)
+            if !ok || (value[1] != 0 && value[1] != 1) {
+                return false
+            }
+
+            texture := Texture_Asset(u32(asset))
+            enabled := value[1] != 0
+            if enabled && texture != .Stone_Roughness {
+                return false
+            }
+
+            scene.materials[index].roughness_texture = texture
+            scene.materials[index].use_roughness_map = enabled
+
+        case .Mesh_Asset:
+            asset, ok := editor_decode_asset_index(value[0], MESH_COUNT)
+            if !ok {
+                return false
+            }
+            scene.mesh_renderers[index].mesh = Mesh_Asset(u32(asset))
 
         case .Point_Color:
             scene.point_lights[index].color = value
@@ -416,6 +492,44 @@ editor_redo :: proc(scene: ^Scene) {
             g_editor_selected = command.entity
         }
     }
+}
+
+editor_decode_asset_index :: proc(
+    value: f32,
+    count: int,
+) -> (index: int, ok: bool) {
+    if !(value >= 0 && value < f32(count)) || value != math.floor(value) {
+        return 0, false
+    }
+    return int(value), true
+}
+
+// Dropdown selections are discrete actions, unlike a multi-frame slider drag.
+editor_commit_value :: proc(
+    scene: ^Scene,
+    index: int,
+    field: EditorField,
+    value: [3]f32,
+) -> bool {
+    if !editor_field_exists(scene, index, field) {
+        return false
+    }
+
+    editor_finish_edit()
+
+    before := editor_value(scene, index, field)
+    if before == value || !editor_apply_value(scene, Entity(index), field, value) {
+        return false
+    }
+
+    editor_push_command(EditorCommand{
+        kind = .Edit_Field,
+        entity = Entity(index),
+        field = field,
+        before = before,
+        after = editor_value(scene, index, field),
+    })
+    return true
 }
 
 editor_clear_history :: proc() {

@@ -29,7 +29,7 @@
       "Warm point light",
       "Cool point light",
       "",
-      "Cube (left) (copy)",
+      "",
       "",
       "",
       "",
@@ -45,7 +45,7 @@
           0.00000000,
           0.00000000
         ],
-        "rotation": 35.82238007,
+        "rotation": 55.26601028,
         "rotation_speed": 0.60000002,
         "scale": 1.00000000
       },
@@ -55,7 +55,7 @@
           0.00000000,
           0.00000000
         ],
-        "rotation": 35.82238007,
+        "rotation": 55.26601028,
         "rotation_speed": 0.60000002,
         "scale": 1.00000000
       },
@@ -65,7 +65,7 @@
           0.00000000,
           0.00000000
         ],
-        "rotation": 35.82238007,
+        "rotation": 55.26601028,
         "rotation_speed": 0.60000002,
         "scale": 1.00000000
       },
@@ -91,9 +91,9 @@
       },
       {
         "position": [
-          -0.60237062,
+          0.56833661,
           1.50000000,
-          -1.90713120
+          -1.91754878
         ],
         "rotation": 0.00000000,
         "rotation_speed": 0.00000000,
@@ -101,9 +101,9 @@
       },
       {
         "position": [
-          0.60244095,
+          -0.56820738,
           1.50000000,
-          1.90710902
+          1.91758716
         ],
         "rotation": 0.00000000,
         "rotation_speed": 0.00000000,
@@ -111,9 +111,9 @@
       },
       {
         "position": [
-          -0.03005223,
-          0.34215981,
-          -5.27681065
+          0.40822133,
+          0.78489745,
+          -3.52739120
         ],
         "rotation": 0.00000000,
         "rotation_speed": 0.00000000,
@@ -121,13 +121,13 @@
       },
       {
         "position": [
-          0.75000000,
+          0.00000000,
           0.00000000,
           0.00000000
         ],
-        "rotation": 14.91638088,
-        "rotation_speed": 0.60000002,
-        "scale": 1.00000000
+        "rotation": 0.00000000,
+        "rotation_speed": 0.00000000,
+        "scale": 0.00000000
       },
       {
         "position": [
@@ -209,7 +209,7 @@
       true,
       true,
       true,
-      true,
+      false,
       false,
       false,
       false,
@@ -277,7 +277,7 @@
       true,
       true,
       false,
-      true,
+      false,
       false,
       false,
       false,
@@ -355,7 +355,7 @@
         ],
         "intensity": 3.00000000,
         "orbit_radius": 2.00000000,
-        "orbit_angle": 35.82238007,
+        "orbit_angle": 55.26601028,
         "orbit_speed": 0.60000002,
         "orbit_enabled": true
       },
@@ -367,7 +367,7 @@
         ],
         "intensity": 3.00000000,
         "orbit_radius": 2.00000000,
-        "orbit_angle": 38.96393585,
+        "orbit_angle": 58.40753555,
         "orbit_speed": 0.60000002,
         "orbit_enabled": true
       },
@@ -503,97 +503,113 @@
         "yaw": 0.00000000,
         "pitch": 0.00000000,
         "speed": 0.00000000,
-        "sensitivity": 0.00000000
+        "sensitivity": 0.00000000,
+        "far_clip": 0.00000000
       },
       {
         "yaw": 0.00000000,
         "pitch": 0.00000000,
         "speed": 0.00000000,
-        "sensitivity": 0.00000000
+        "sensitivity": 0.00000000,
+        "far_clip": 0.00000000
       },
       {
         "yaw": 0.00000000,
         "pitch": 0.00000000,
         "speed": 0.00000000,
-        "sensitivity": 0.00000000
+        "sensitivity": 0.00000000,
+        "far_clip": 0.00000000
       },
       {
         "yaw": 0.00000000,
         "pitch": 0.00000000,
         "speed": 0.00000000,
-        "sensitivity": 0.00000000
+        "sensitivity": 0.00000000,
+        "far_clip": 0.00000000
       },
       {
         "yaw": 0.00000000,
         "pitch": 0.00000000,
         "speed": 0.00000000,
-        "sensitivity": 0.00000000
+        "sensitivity": 0.00000000,
+        "far_clip": 0.00000000
       },
       {
         "yaw": 0.00000000,
         "pitch": 0.00000000,
         "speed": 0.00000000,
-        "sensitivity": 0.00000000
+        "sensitivity": 0.00000000,
+        "far_clip": 0.00000000
       },
       {
         "yaw": 0.00000000,
         "pitch": 0.00000000,
         "speed": 0.00000000,
-        "sensitivity": 0.00000000
+        "sensitivity": 0.00000000,
+        "far_clip": 0.00000000
       },
       {
-        "yaw": 1.58879650,
-        "pitch": -0.10499997,
+        "yaw": 1.76879549,
+        "pitch": -0.25500000,
         "speed": 3.00000000,
-        "sensitivity": 0.00300000
+        "sensitivity": 0.00300000,
+        "far_clip": 0.00000000
       },
       {
         "yaw": 0.00000000,
         "pitch": 0.00000000,
         "speed": 0.00000000,
-        "sensitivity": 0.00000000
+        "sensitivity": 0.00000000,
+        "far_clip": 0.00000000
       },
       {
         "yaw": 0.00000000,
         "pitch": 0.00000000,
         "speed": 0.00000000,
-        "sensitivity": 0.00000000
+        "sensitivity": 0.00000000,
+        "far_clip": 0.00000000
       },
       {
         "yaw": 0.00000000,
         "pitch": 0.00000000,
         "speed": 0.00000000,
-        "sensitivity": 0.00000000
+        "sensitivity": 0.00000000,
+        "far_clip": 0.00000000
       },
       {
         "yaw": 0.00000000,
         "pitch": 0.00000000,
         "speed": 0.00000000,
-        "sensitivity": 0.00000000
+        "sensitivity": 0.00000000,
+        "far_clip": 0.00000000
       },
       {
         "yaw": 0.00000000,
         "pitch": 0.00000000,
         "speed": 0.00000000,
-        "sensitivity": 0.00000000
+        "sensitivity": 0.00000000,
+        "far_clip": 0.00000000
       },
       {
         "yaw": 0.00000000,
         "pitch": 0.00000000,
         "speed": 0.00000000,
-        "sensitivity": 0.00000000
+        "sensitivity": 0.00000000,
+        "far_clip": 0.00000000
       },
       {
         "yaw": 0.00000000,
         "pitch": 0.00000000,
         "speed": 0.00000000,
-        "sensitivity": 0.00000000
+        "sensitivity": 0.00000000,
+        "far_clip": 0.00000000
       },
       {
         "yaw": 0.00000000,
         "pitch": 0.00000000,
         "speed": 0.00000000,
-        "sensitivity": 0.00000000
+        "sensitivity": 0.00000000,
+        "far_clip": 0.00000000
       }
     ],
     "has_camera": [
@@ -638,16 +654,16 @@
           1.00000000,
           1.00000000
         ],
-        "texture": "Checkerboard",
+        "texture": "Stone_Albedo",
         "unlit": false,
         "roughness": 0.28000000,
         "metallic": 0.75000000,
-        "normal_texture": "Portrait",
-        "normal_strength": 0.00000000,
+        "normal_texture": "Stone_Normal",
+        "normal_strength": 1.00000000,
         "f32": 0.00000000,
         "uv_scale": 1.00000000,
-        "roughness_texture": "Portrait",
-        "use_roughness_map": false
+        "roughness_texture": "Stone_Roughness",
+        "use_roughness_map": true
       },
       {
         "tint": [
@@ -753,18 +769,18 @@
       },
       {
         "tint": [
-          1.00000000,
-          1.00000000,
-          1.00000000
+          0.00000000,
+          0.00000000,
+          0.00000000
         ],
         "texture": "Portrait",
         "unlit": false,
-        "roughness": 0.85000002,
+        "roughness": 0.00000000,
         "metallic": 0.00000000,
         "normal_texture": "Portrait",
         "normal_strength": 0.00000000,
         "f32": 0.00000000,
-        "uv_scale": 1.00000000,
+        "uv_scale": 0.00000000,
         "roughness_texture": "Portrait",
         "use_roughness_map": false
       },
@@ -897,7 +913,7 @@
       true,
       true,
       false,
-      true,
+      false,
       false,
       false,
       false,

@@ -139,13 +139,8 @@ editor_draw_material_controls :: proc(scene: ^Scene, index: int) {
     ui_separator()
     debug_ui_text("Material")
 
+    editor_draw_texture_controls(scene, index)
     editor_color(scene, index, .Material_Tint, "Tint")
-
-    if material.roughness_texture == .Stone_Roughness {
-        editor_checkbox(
-            scene, index, .Material_Use_Roughness_Map, "Use roughness map",
-        )
-    }
 
     editor_slider(
         scene, index, .Material_Roughness, "Roughness", 0.08, 1.0,
@@ -159,9 +154,10 @@ editor_draw_material_controls :: proc(scene: ^Scene, index: int) {
         scene, index, .Material_Metallic, "Metallic", 0.0, 1.0,
     )
 
-    if material.normal_texture == .Stone_Normal {
+    if material.normal_strength > 0 {
         editor_slider(
-            scene, index, .Material_Normal_Strength, "Normal strength", 0.0, 2.0,
+            scene, index, .Material_Normal_Strength,
+            "Normal strength", 0.01, 2.0,
         )
     }
 
@@ -293,6 +289,8 @@ editor_draw_inspector :: proc(scene: ^Scene) {
                     scene, index, .Spin, before_spin, spin_changed,
                 )
             }
+
+            editor_draw_mesh_controls(scene, index)
 
             if scene.has_point_light[index] {
                 editor_draw_point_light_controls(scene, index)

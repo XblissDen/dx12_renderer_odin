@@ -2,6 +2,38 @@ package main
 
 import "core:math"
 
+EditorChoice :: struct {
+    label: cstring,
+    value: [3]f32,
+}
+
+editor_combo :: proc(
+    scene: ^Scene,
+    index: int,
+    field: EditorField,
+    label: cstring,
+    choices: []EditorChoice,
+) {
+    labels: [max(MESH_COUNT, TEXTURE_COUNT) + 1]cstring
+    assert(len(choices) > 0 && len(choices) <= len(labels))
+
+    current := editor_value(scene, index, field)
+    selected := i32(-1)
+
+    for choice, i in choices {
+        labels[i] = choice.label
+        if choice.value == current {
+            selected = i32(i)
+        }
+    }
+
+    if ui_combo(label, &selected, raw_data(labels[:]), i32(len(choices))) {
+        editor_commit_value(
+            scene, index, field, choices[int(selected)].value,
+        )
+    }
+}
+
 editor_slider :: proc(
     scene: ^Scene,
     index: int,
