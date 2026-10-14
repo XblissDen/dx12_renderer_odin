@@ -4,11 +4,15 @@ import "core:math"
 import "core:math/linalg"
 import win32 "core:sys/windows"
 
+CAMERA_FOV_Y :: f32(math.PI / 4)
+CAMERA_NEAR_CLIP :: f32(0.1)
+
 Camera :: struct {
     yaw:      f32, // radians
     pitch:    f32,
     speed:    f32,
     sensitivity: f32,
+    far_clip: f32,
 }
 
 camera_forward :: proc(c: ^Camera) -> linalg.Vector3f32 {
@@ -59,6 +63,28 @@ camera_view_matrix :: proc(c: ^Camera, position: linalg.Vector3f32) -> linalg.Ma
     forward := camera_forward(c)
     target  := position + forward
     return look_at_lh(position, target, { 0, 1, 0 })
+}
+
+camera_find_active :: proc(scene: ^Scene) -> int {
+    for i in 0..<scene.entity_count {
+        if scene.alive[i] && scene.has_camera[i] && scene.has_transform[i] {
+            return i
+        }
+    }
+    return -1
+}
+
+camera_far_clip :: proc(camera: ^Camera) -> f32 {
+    return max(camera.far_clip, f32(100))
+}
+
+camera_projection :: proc(camera: ^Camera, aspect: f32) -> linalg.Matrix4f32 {
+    return perspective_lh(
+        CAMERA_FOV_Y,
+        aspect,
+        CAMERA_NEAR_CLIP,
+        camera_far_clip(camera),
+    )
 }
 
 key_down :: proc(vkey: i32) -> bool {

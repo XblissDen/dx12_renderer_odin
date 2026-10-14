@@ -68,6 +68,7 @@ GpuMesh :: struct {
 
     // Owned CPU geometry, shared by every entity using this mesh asset.
     cpu: MeshData,
+    bounds: MeshBounds,
 }
 
 SceneConstants :: struct #align(256) {
@@ -203,6 +204,9 @@ Renderer :: struct {
 
     prefilter_constant_buffer: ^d3d12.IResource,
     prefilter_cb_mapped_data: [^]PrefilterConstants,
+
+    selection_root_signature: ^d3d12.IRootSignature,
+    selection_pipeline_state: ^d3d12.IPipelineState,
 
     frame_index: u32,
 }
@@ -1093,6 +1097,7 @@ renderer_upload_mesh :: proc(gpu: ^GpuMesh, mesh: MeshData) {
 
     gpu.index_count = u32(len(mesh.indices))
     gpu.cpu = mesh
+    gpu.bounds = mesh_compute_bounds(mesh)
 }
 
 renderer_create_depth_buffer :: proc(){
@@ -1489,7 +1494,7 @@ renderer_render_frame :: proc(scene: ^Scene){
 
     renderer_render_bloom()
 
-    renderer_render_post_process()
+    renderer_render_post_process(scene)
 
     r.command_list->ResolveQueryData(
         r.timestamp_heap,
@@ -1610,6 +1615,8 @@ renderer_destroy :: proc(){
     r.hdr_rtv_heap->Release()
     r.hdr_pipeline_state->Release()
     r.post_pipeline_state->Release()
+    r.selection_pipeline_state->Release()
+    r.selection_root_signature->Release()
 
     for target in r.bloom_targets {
         target->Release()

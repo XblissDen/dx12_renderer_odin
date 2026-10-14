@@ -148,7 +148,7 @@ renderer_render_scene_pass :: proc(
     renderer_end_gpu_pass(.Scene)
 }
 
-renderer_render_post_process :: proc() {
+renderer_render_post_process :: proc(scene: ^Scene) {
     r := &g_renderer
 
     renderer_begin_gpu_pass(.Post_Process)
@@ -191,7 +191,9 @@ renderer_render_post_process :: proc() {
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
     r.command_list->DrawInstanced(3, 1, 0, 0)
 
-    // UI is drawn in display space, after tone mapping and before Present.
+    renderer_render_selection(scene)
+    r.command_list->OMSetRenderTargets(1, &rtv_handle, false, nil)
+
     debug_ui_render()
 
     // Presentable again.

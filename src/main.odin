@@ -13,6 +13,7 @@ main :: proc(){
     renderer_init()
     renderer_create_depth_buffer()
     renderer_load_assets()
+    renderer_create_selection_pipeline()
     renderer_load_textures()
     renderer_create_shadow_map()
     renderer_create_hdr_target()

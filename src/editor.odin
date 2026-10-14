@@ -62,6 +62,15 @@ editor_draw_scene :: proc(scene: ^Scene){
 
         ui_separator()
 
+        _, _, can_focus := editor_selection_bounds(scene)
+        ui_begin_disabled(!can_focus)
+        if ui_button("Focus Selected") {
+            editor_focus_selected(scene)
+        }
+        ui_end_disabled()
+
+        ui_separator()
+
         // Save/Load
         if ui_button("Save Scene"){
             editor_finish_edit()

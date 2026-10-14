@@ -12,6 +12,33 @@ MeshData :: struct {
     indices: []u32,
 }
 
+MeshBounds :: struct {
+    minimum, maximum: linalg.Vector3f32,
+    valid: bool,
+}
+
+mesh_compute_bounds :: proc(mesh: MeshData) -> MeshBounds{
+    if len(mesh.vertices) == 0 {
+        return {}
+    }
+
+    first := linalg.Vector3f32(mesh.vertices[0].position)
+    bounds := MeshBounds{
+        minimum = first,
+        maximum = first,
+        valid = true,
+    }
+
+    for vertex in mesh.vertices[1:] {
+        for axis in 0..<3{
+            bounds.minimum[axis] = min(bounds.minimum[axis], vertex.position[axis])
+            bounds.maximum[axis] = max(bounds.maximum[axis], vertex.position[axis])
+        }
+    }
+
+    return bounds
+}
+
 mesh_load_obj :: proc(path: string, allocator := context.allocator) -> (mesh: MeshData, ok: bool){
     data, read_ok := os.read_entire_file(path, context.temp_allocator)
     if read_ok != os.General_Error.None{

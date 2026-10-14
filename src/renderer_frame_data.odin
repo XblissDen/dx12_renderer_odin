@@ -18,19 +18,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
     r.post_cb_mapped_data.bloom_threshold = r.post_threshold
     r.post_cb_mapped_data.bloom_strength = r.post_strength
 
-    camera_index := -1
-
-    for i in 0..<scene.entity_count{
-        if !scene.alive[i] {
-            continue
-        }
-
-        if scene.has_transform[i] && scene.has_camera[i]{
-            camera_index = i
-            break
-        }
-    }
-
+    camera_index := camera_find_active(scene)
     assert(camera_index >= 0)
 
     camera := &scene.cameras[camera_index]
@@ -44,20 +32,13 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
     r.sky_cb_mapped_data.forward = forward
     r.sky_cb_mapped_data.right = right
     r.sky_cb_mapped_data.up = up
-    r.sky_cb_mapped_data.tan_half_fov = math.tan(
-        alg.to_radians(f32(45)) * 0.5,
-    )
+
+    r.sky_cb_mapped_data.tan_half_fov = math.tan(CAMERA_FOV_Y * 0.5)
     r.sky_cb_mapped_data.aspect = f32(r.width) / f32(r.height)
 
     view := camera_view_matrix(camera, camera_position)
-
-    proj := perspective_lh(
-        alg.to_radians(f32(45)),
-        f32(r.width) / f32(r.height),
-        0.1,
-        100.0,
-    )
-
+    proj := camera_projection(camera, f32(r.width) / f32(r.height))
+    
     gpu_lights: [MAX_LIGHTS]GpuPointLight
     light_count := 0
 

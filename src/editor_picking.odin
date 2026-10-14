@@ -22,13 +22,7 @@ editor_mouse_ray :: proc(
     }
 
     // Choose the same first live camera as renderer_prepare_frame.
-    camera_index := -1
-    for i in 0..<scene.entity_count {
-        if scene.alive[i] && scene.has_camera[i] && scene.has_transform[i] {
-            camera_index = i
-            break
-        }
-    }
+    camera_index := camera_find_active(scene)
     if camera_index < 0 {
         return {}, false
     }
@@ -44,7 +38,7 @@ editor_mouse_ray :: proc(
     ndc_x := 2 * mouse_x / width - 1
     ndc_y := 1 - 2 * mouse_y / height
 
-    tan_half_fov := math.tan(alg.to_radians(f32(45)) * 0.5)
+    tan_half_fov := math.tan(CAMERA_FOV_Y * 0.5)
     aspect := width / height
 
     direction := alg.normalize(
@@ -58,8 +52,8 @@ editor_mouse_ray :: proc(
     return EditorRay{
         origin = scene.transforms[camera_index].position,
         direction = direction,
-        near_t = 0.1 / forward_depth,
-        far_t = 100.0 / forward_depth,
+        near_t = CAMERA_NEAR_CLIP / forward_depth,
+        far_t = camera_far_clip(camera) / forward_depth,
     }, true
 }
 
