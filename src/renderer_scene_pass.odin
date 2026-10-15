@@ -7,6 +7,7 @@ renderer_render_scene_pass :: proc(
     draw_textures: []Texture_Asset,
     draw_normals: []Texture_Asset,
     draw_roughness: []Texture_Asset,
+    draw_indices: []u32,
 ) {
     r := &g_renderer
     assert(len(draw_meshes) == len(draw_textures))
@@ -95,7 +96,9 @@ renderer_render_scene_pass :: proc(
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
     
     //r.command_list->DrawInstanced(3, 1, 0, 0)
-    for i in 0..<len(draw_meshes){
+    for draw_index in draw_indices{
+        i := int(draw_index)
+        assert(i >= 0 && i < len(draw_meshes))
         cb_offset := u64(i) * u64(size_of(SceneConstants))
 
         r.command_list->SetGraphicsRootConstantBufferView(

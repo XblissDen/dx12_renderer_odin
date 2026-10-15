@@ -3,16 +3,28 @@ package main
 import "core:math"
 import alg "core:math/linalg"
 
+CullingStats :: struct {
+    scene_visible, scene_total: int,
+    shadow_visible, shadow_total: int,
+}
+
 FrameDraws :: struct {
     draw_meshes: [MAX_ENTITIES]Mesh_Asset,
     draw_textures: [MAX_ENTITIES]Texture_Asset,
     draw_count: int,
     draw_normals: [MAX_ENTITIES]Texture_Asset,
     draw_roughness: [MAX_ENTITIES]Texture_Asset,
+
+    scene_indices: [MAX_ENTITIES]u32,
+    scene_draw_count: int,
+
+    shadow_indices: [MAX_ENTITIES]u32,
+    shadow_draw_count: int,
 }
 
 renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
     r := &g_renderer
+    r.culling_stats = {}
 
     r.post_cb_mapped_data.exposure = r.post_exposure
     r.post_cb_mapped_data.bloom_threshold = r.post_threshold
@@ -38,6 +50,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
 
     view := camera_view_matrix(camera, camera_position)
     proj := camera_projection(camera, f32(r.width) / f32(r.height))
+    camera_frustum := frustum_from_matrix(view * proj)
     
     gpu_lights: [MAX_LIGHTS]GpuPointLight
     light_count := 0
@@ -86,6 +99,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
     sun_view := look_at_lh(sun_eye, {0,0,0}, sun_up)
     sun_projection := orthographic_lh(-8, 8, -8, 8, 0.1, 30.0)
     sun_view_projection := sun_view * sun_projection
+    shadow_frustum := frustum_from_matrix(sun_view_projection)
 
     for i in 0..<scene.entity_count{
         if !scene.alive[i] {
@@ -103,6 +117,29 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
             transform.scale,
             transform.scale,
         })
+
+        model := alg.matrix4_translate_f32(transform.position) * rotation * scale
+        mesh := scene.mesh_renderers[i].mesh
+        bounds := bounds_to_world(r.meshes[mesh].bounds, model)
+        draw_index := u32(data.draw_count)
+
+        if !r.frustum_culling_enabled ||
+           frustum_intersects_bounds(camera_frustum, bounds) {
+            data.scene_indices[data.scene_draw_count] = draw_index
+            data.scene_draw_count += 1
+        }
+
+        // Match the existing policy: unlit marker meshes do not cast shadows.
+        if !scene.materials[i].unlit {
+            r.culling_stats.shadow_total += 1
+
+            if !r.frustum_culling_enabled ||
+               frustum_intersects_bounds(shadow_frustum, bounds) {
+                data.shadow_indices[data.shadow_draw_count] = draw_index
+                data.shadow_draw_count += 1
+            }
+        }
+
         unlit: u32 = 0
         if scene.materials[i].unlit{
             unlit = 1
@@ -114,7 +151,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
         }
 
         r.cb_mapped_data[data.draw_count] = SceneConstants{
-            model = alg.transpose(alg.matrix4_translate_f32(transform.position) * rotation * scale),
+            model = alg.transpose(model),
             view = view,
             projection = proj,
             view_position = camera_position,
@@ -134,7 +171,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
         }
 
         data.draw_textures[data.draw_count] = scene.materials[i].texture
-        data.draw_meshes[data.draw_count] = scene.mesh_renderers[i].mesh
+        data.draw_meshes[data.draw_count] = mesh
         data.draw_normals[data.draw_count] = .Stone_Normal
         data.draw_roughness[data.draw_count] = .Stone_Roughness
 
@@ -149,6 +186,10 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
 
         data.draw_count += 1
     }
+
+    r.culling_stats.scene_total = data.draw_count
+    r.culling_stats.scene_visible = data.scene_draw_count
+    r.culling_stats.shadow_visible = data.shadow_draw_count
 
     return
 }

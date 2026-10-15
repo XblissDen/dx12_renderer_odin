@@ -188,6 +188,9 @@ Renderer :: struct {
     fps: f32,
     frame_ms: f32,
 
+    frustum_culling_enabled: bool,
+    culling_stats: CullingStats,
+
     environment_texture: ^d3d12.IResource,
     sky_pipeline_state: ^d3d12.IPipelineState,
 
@@ -228,6 +231,8 @@ renderer_init :: proc() {
     r.post_exposure = 1.0
     r.post_threshold = 1.0
     r.post_strength = 0.6
+
+    r.frustum_culling_enabled = true
 
     // DEBUG LAYER
     when ODIN_DEBUG {
@@ -1483,13 +1488,17 @@ renderer_render_frame :: proc(scene: ^Scene){
 
     frame := renderer_prepare_frame(scene)
 
-    renderer_render_shadow_pass(frame.draw_meshes[:frame.draw_count])
+    renderer_render_shadow_pass(
+        frame.draw_meshes[:frame.draw_count],
+        frame.shadow_indices[:frame.shadow_draw_count],
+    )
 
     renderer_render_scene_pass(
         frame.draw_meshes[:frame.draw_count],
         frame.draw_textures[:frame.draw_count],
         frame.draw_normals[:frame.draw_count],
         frame.draw_roughness[:frame.draw_count],
+        frame.scene_indices[:frame.scene_draw_count],
     )
 
     renderer_render_bloom()

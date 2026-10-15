@@ -61,7 +61,7 @@ renderer_create_shadow_map :: proc() {
     r.device->CreateShaderResourceView(r.shadow_map, &shadow_srv, srv_handle)
 }
 
-renderer_render_shadow_pass :: proc(draw_meshes: []Mesh_Asset) {
+renderer_render_shadow_pass :: proc(draw_meshes: []Mesh_Asset, draw_indices: []u32) {
     r := &g_renderer
 
     renderer_begin_gpu_pass(.Shadow)
@@ -100,11 +100,9 @@ renderer_render_shadow_pass :: proc(draw_meshes: []Mesh_Asset) {
     r.command_list->SetPipelineState(r.shadow_pipeline_state)
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
 
-    for i in 0..<len(draw_meshes) {
-        // Light-marker cubes are debugging visuals, not shadow casters.
-        if r.cb_mapped_data[i].unlit != 0 {
-            continue
-        }
+    for draw_index in draw_indices {
+        i := int(draw_index)
+        assert(i >= 0 && i < len(draw_meshes))
 
         cb_offset := u64(i) * u64(size_of(SceneConstants))
         r.command_list->SetGraphicsRootConstantBufferView(

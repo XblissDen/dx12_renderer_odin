@@ -133,6 +133,25 @@ debug_ui_update :: proc() {
         ui_separator()
         debug_ui_text(fmt.bprintf(text_buffer[:], "FPS: %.0f | Frame: %.2f ms", r.fps, r.frame_ms))
 
+        ui_checkbox("Frustum culling", &r.frustum_culling_enabled)
+
+        stats := r.culling_stats
+        debug_ui_text(fmt.bprintf(
+            text_buffer[:],
+            "Scene meshes: %d/%d | Culled: %d",
+            stats.scene_visible,
+            stats.scene_total,
+            stats.scene_total - stats.scene_visible,
+        ))
+
+        debug_ui_text(fmt.bprintf(
+            text_buffer[:],
+            "Shadow casters: %d/%d | Culled: %d",
+            stats.shadow_visible,
+            stats.shadow_total,
+            stats.shadow_total - stats.shadow_visible,
+        ))
+
         pass_names := [GPU_PASS_COUNT]string{
             "Shadow", "Scene", "Bloom extract", "Bloom horizontal",
             "Bloom vertical", "Post + UI",
