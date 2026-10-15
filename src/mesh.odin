@@ -39,7 +39,11 @@ mesh_compute_bounds :: proc(mesh: MeshData) -> MeshBounds{
     return bounds
 }
 
-mesh_load_obj :: proc(path: string, allocator := context.allocator) -> (mesh: MeshData, ok: bool){
+mesh_load_obj :: proc(
+    path: string, 
+    allocator := context.allocator,
+    flip_v := false,
+) -> (mesh: MeshData, ok: bool){
     data, read_ok := os.read_entire_file(path, context.temp_allocator)
     if read_ok != os.General_Error.None{
         fmt.eprintln("Cannot open OBJ", path)
@@ -82,9 +86,11 @@ mesh_load_obj :: proc(path: string, allocator := context.allocator) -> (mesh: Me
             case "vt":
                 u := strconv.parse_f32(fields[1]) or_else 0
                 v := strconv.parse_f32(fields[2]) or_else 0
+                if flip_v {
+                    v = 1 - v
+                }
                 append(&texcoords, [2]f32{u, v})
             case "f":
-                // Разбиваем грань на треугольники если их больше 3 вершин (fan triangulation)
                 face_indices := make([dynamic]u32, context.temp_allocator)
 
                 for i in 1..<len(fields) {
@@ -116,7 +122,6 @@ mesh_load_obj :: proc(path: string, allocator := context.allocator) -> (mesh: Me
                     }
                 }
 
-                // Триангулируем веером: (0,1,2), (0,2,3), (0,3,4)...
                 for i in 1..<len(face_indices) - 1 {
                     append(&out_indices, face_indices[0])
                     append(&out_indices, face_indices[i])

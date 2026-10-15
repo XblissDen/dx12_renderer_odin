@@ -94,7 +94,8 @@ SceneConstants :: struct #align(256) {
     sun_color: [3]f32,
     sun_intensity: f32,
 
-    _sun_matrix_pad: [4]f32,
+    use_metallic_map: u32,
+    _sun_matrix_pad: [3]f32,
     sun_view_projection : alg.Matrix4f32,
 }
 
@@ -475,6 +476,22 @@ renderer_load_assets :: proc(){
         pDescriptorRanges = &roughness_range,
     }
 
+    metallic_range := d3d12.DESCRIPTOR_RANGE{
+        RangeType = .SRV,
+        NumDescriptors = 1,
+        BaseShaderRegister = 7,
+        OffsetInDescriptorsFromTableStart = 0,
+    }
+
+    metallic_param := d3d12.ROOT_PARAMETER{
+        ParameterType = .DESCRIPTOR_TABLE,
+        ShaderVisibility = .PIXEL,
+    }
+    metallic_param.DescriptorTable = {
+        NumDescriptorRanges = 1,
+        pDescriptorRanges = &metallic_range,
+    }    
+
     prefilter_cbv_param := d3d12.ROOT_PARAMETER{}
     prefilter_cbv_param.ParameterType = .CBV
     prefilter_cbv_param.ShaderVisibility = .PIXEL
@@ -526,6 +543,7 @@ renderer_load_assets :: proc(){
         prefilter_param,     // Root slot 8 -> t4
         normal_param,    // Root slot 9 -> t5
         roughness_param, // Root slot 10 -> t6
+        metallic_param,  // Root slot 11 -> t7
     }
     samplers := []d3d12.STATIC_SAMPLER_DESC{
         static_sampler,
@@ -912,15 +930,13 @@ renderer_load_assets :: proc(){
         ))
     }
 
-    mesh_paths := [MESH_COUNT]string{
-        "models/cube.obj",
-        "models/pyramid.obj",
-    }
-
     for i in 0..<MESH_COUNT {
-        mesh, ok := mesh_load_obj(mesh_paths[i])
+        mesh, ok := mesh_load_obj(
+            MESH_PATHS[i],
+            flip_v = Mesh_Asset(i) == .Barrel,
+        )
         if !ok {
-            fmt.panicf("Failed to load mesh: %s", mesh_paths[i])
+            fmt.panicf("Failed to load mesh: %s", MESH_PATHS[i])
         }
 
         renderer_upload_mesh(&r.meshes[i], mesh)
@@ -1148,30 +1164,21 @@ renderer_load_textures :: proc(){
 
     r.srv_descriptor_size = r.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV)
 
-    renderer_load_texture(int(Texture_Asset.Portrait))
-    renderer_load_texture(int(Texture_Asset.Checkerboard))
-    renderer_load_texture(int(Texture_Asset.Stone_Albedo))
-    renderer_load_texture(int(Texture_Asset.Stone_Normal))
-    renderer_load_texture(int(Texture_Asset.Stone_Roughness))
+    for i in 0..<TEXTURE_COUNT {
+        renderer_load_texture(i)
+    }
 }
 
 renderer_load_texture :: proc(index: int){
     r := &g_renderer
 
     // LOADING PNG
-    path := "textures/2.png"
+    path := TEXTURE_PATHS[index]
+    asset := Texture_Asset(index)
 
-    #partial switch Texture_Asset(index) {
-        case .Stone_Albedo:
-            path = "textures/stone/albedo.png"
-        case .Stone_Normal:
-            path = "textures/stone/normal.png"
-        case .Stone_Roughness:
-            path = "textures/stone/roughness.png"
-    }
-
-    is_normal_map := index == int(Texture_Asset.Stone_Normal)
-    is_roughness_map := index == int(Texture_Asset.Stone_Roughness)
+    is_normal_map := texture_asset_is_normal(asset)
+    is_linear_data := texture_asset_is_roughness(asset) ||
+                      texture_asset_is_metallic(asset)
 
     img, err := image.load_from_file(path)
 
@@ -1204,6 +1211,12 @@ renderer_load_texture :: proc(index: int){
         }
 
         pixels = converted
+    }
+
+    if asset == .Barrel_Normal {
+        for pixel in 0..<int(width * height) {
+            pixels[pixel * 4 + 1] = 255 - pixels[pixel * 4 + 1]
+        }
     }
 
     if index == int(Texture_Asset.Checkerboard) {
@@ -1239,7 +1252,7 @@ renderer_load_texture :: proc(index: int){
             mip_height,
             context.temp_allocator,
             normal_map = is_normal_map,
-            linear_data = is_roughness_map,
+            linear_data = is_linear_data,
         )
         append(&mips, next)
 
@@ -1408,6 +1421,7 @@ renderer_render_frame :: proc(scene: ^Scene) {
         frame.draw_textures[:frame.draw_count],
         frame.draw_normals[:frame.draw_count],
         frame.draw_roughness[:frame.draw_count],
+        frame.draw_metallic[:frame.draw_count],
         frame.scene_indices[:frame.scene_draw_count],
     )
 

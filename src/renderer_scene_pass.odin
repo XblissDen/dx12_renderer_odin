@@ -7,12 +7,14 @@ renderer_render_scene_pass :: proc(
     draw_textures: []Texture_Asset,
     draw_normals: []Texture_Asset,
     draw_roughness: []Texture_Asset,
+    draw_metallic: []Texture_Asset,
     draw_indices: []u32,
 ) {
     r := &g_renderer
     assert(len(draw_meshes) == len(draw_textures))
     assert(len(draw_meshes) == len(draw_normals))
     assert(len(draw_meshes) == len(draw_roughness))
+    assert(len(draw_meshes) == len(draw_metallic))
 
     renderer_begin_gpu_pass(.Scene)
     hdr_barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
@@ -132,6 +134,18 @@ renderer_render_scene_pass :: proc(
             u64(roughness_index) * u64(r.srv_descriptor_size)
 
         r.command_list->SetGraphicsRootDescriptorTable(10, roughness_gpu_handle)
+
+        metallic_index := int(draw_metallic[i])
+        assert(metallic_index >= 0 && metallic_index < TEXTURE_COUNT)
+
+        metallic_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
+        r.srv_heap->GetGPUDescriptorHandleForHeapStart(&metallic_gpu_handle)
+        metallic_gpu_handle.ptr +=
+            u64(metallic_index) * u64(r.srv_descriptor_size)
+
+        r.command_list->SetGraphicsRootDescriptorTable(
+            11, metallic_gpu_handle,
+        )
 
         mesh_index := int(draw_meshes[i])
         assert(mesh_index >= 0 && mesh_index < MESH_COUNT)

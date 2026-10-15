@@ -4,27 +4,46 @@ import alg "core:math/linalg"
 import "core:math"
 
 MAX_ENTITIES :: 16
-TEXTURE_COUNT :: 5
-MESH_COUNT :: 2
+TEXTURE_COUNT :: 9
+MESH_COUNT :: 3
 MAX_LIGHTS :: 4
 
-Texture_Asset :: enum u32{
+Texture_Asset :: enum u32 {
     Portrait,
     Checkerboard,
     Stone_Albedo,
     Stone_Normal,
     Stone_Roughness,
+
+    Barrel_Albedo,
+    Barrel_Normal,
+    Barrel_Roughness,
+    Barrel_Metallic,
 }
 
 texture_asset_is_albedo :: proc(asset: Texture_Asset) -> bool {
     return asset == .Portrait ||
            asset == .Checkerboard ||
-           asset == .Stone_Albedo
+           asset == .Stone_Albedo ||
+           asset == .Barrel_Albedo
+}
+
+texture_asset_is_normal :: proc(asset: Texture_Asset) -> bool {
+    return asset == .Stone_Normal || asset == .Barrel_Normal
+}
+
+texture_asset_is_roughness :: proc(asset: Texture_Asset) -> bool {
+    return asset == .Stone_Roughness || asset == .Barrel_Roughness
+}
+
+texture_asset_is_metallic :: proc(asset: Texture_Asset) -> bool {
+    return asset == .Barrel_Metallic
 }
 
 Mesh_Asset :: enum u32 {
-    Cube, 
+    Cube,
     Pyramid,
+    Barrel,
 }
 
 Entity :: distinct int
@@ -64,6 +83,9 @@ Material :: struct{
 
     roughness_texture: Texture_Asset,
     use_roughness_map: bool,
+
+    metallic_texture: Texture_Asset,
+    use_metallic_map: bool,
 }
 
 MeshRenderer :: struct {
@@ -318,6 +340,34 @@ scene_init :: proc(){
         pitch = 0,
         speed = 3.0,
         sensitivity = 0.003,
+    })
+
+    bounds := g_renderer.meshes[Mesh_Asset.Barrel].bounds
+    assert(bounds.valid)
+
+    scale := f32(1.5)
+    barrel_entity := scene_create_entity(&g_scene, "Barrel")
+
+    scene_add_transform(&g_scene, barrel_entity, {
+        position = {1, -0.5 - bounds.minimum.y * scale, 1.5},
+        scale = scale,
+    })
+    scene_add_mesh_renderer(&g_scene, barrel_entity, {mesh = .Barrel})
+    scene_add_material(&g_scene, barrel_entity, {
+        tint = {1, 1, 1},
+        texture = .Barrel_Albedo,
+        uv_scale = 1,
+
+        normal_texture = .Barrel_Normal,
+        normal_strength = 1,
+
+        roughness_texture = .Barrel_Roughness,
+        use_roughness_map = true,
+        roughness = 1,
+
+        metallic_texture = .Barrel_Metallic,
+        use_metallic_map = true,
+        metallic = 1,
     })
 }
 

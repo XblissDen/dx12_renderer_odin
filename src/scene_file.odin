@@ -99,9 +99,10 @@ scene_file_validate :: proc(scene: ^Scene) -> string{
             material := scene.materials[i]
 
             if u32(material.texture) >= TEXTURE_COUNT ||
-                u32(material.normal_texture) >= TEXTURE_COUNT ||
-                u32(material.roughness_texture) >= TEXTURE_COUNT {
-                    return "Unknown texture asset."
+               u32(material.normal_texture) >= TEXTURE_COUNT ||
+               u32(material.roughness_texture) >= TEXTURE_COUNT ||
+               u32(material.metallic_texture) >= TEXTURE_COUNT {
+                return "Unknown texture asset."
             }
 
             if !texture_asset_is_albedo(material.texture) {
@@ -110,13 +111,18 @@ scene_file_validate :: proc(scene: ^Scene) -> string{
 
             if !(material.normal_strength >= 0) ||
                (material.normal_strength > 0 &&
-                material.normal_texture != .Stone_Normal) {
+                !texture_asset_is_normal(material.normal_texture)) {
                 return "Invalid normal map assignment."
             }
 
             if material.use_roughness_map &&
-               material.roughness_texture != .Stone_Roughness {
+               !texture_asset_is_roughness(material.roughness_texture) {
                 return "Invalid roughness map assignment."
+            }
+
+            if material.use_metallic_map &&
+               !texture_asset_is_metallic(material.metallic_texture) {
+                return "Invalid metallic map assignment."
             }
 
             if material.uv_scale <= 0{

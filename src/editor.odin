@@ -153,6 +153,9 @@ editor_draw_material_controls :: proc(scene: ^Scene, index: int) {
     editor_slider(
         scene, index, .Material_Metallic, "Metallic", 0.0, 1.0,
     )
+    if material.use_metallic_map {
+        debug_ui_text("Metallic multiplies the map; 1 = original.")
+    }
 
     if material.normal_strength > 0 {
         editor_slider(

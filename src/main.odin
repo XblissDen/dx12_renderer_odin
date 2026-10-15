@@ -7,12 +7,14 @@ main :: proc(){
     window_create()
     defer window_unlock_cursor()
     window_lock_cursor()
-    scene_init()
-    defer scene_file_destroy()
-
+    
     renderer_init()
     renderer_create_depth_buffer()
     renderer_load_assets()
+
+    scene_init()
+    defer scene_file_destroy()
+
     renderer_create_selection_pipeline()
     renderer_load_textures()
     renderer_create_shadow_map()

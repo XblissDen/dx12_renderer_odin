@@ -32,7 +32,8 @@ cbuffer SceneConstants : register(b0)
     float3 sun_color;
     float  sun_intensity;
 
-    float4 _sun_matrix_pad;
+    uint use_metallic_map;
+    float3 _sun_matrix_pad;
     float4x4 sun_view_projection;
 };
 
@@ -45,6 +46,7 @@ Texture2D<float4> g_irradiance : register(t3);
 Texture2D<float4> g_prefiltered_environment : register(t4);
 Texture2D<float4> g_normal_map : register(t5);
 Texture2D<float4> g_roughness_map : register(t6);
+Texture2D<float4> g_metallic_map : register(t7);
 
 struct VSInput
 {
@@ -191,8 +193,15 @@ float4 PSMain(PSInput input) : SV_TARGET
 
     float material_roughness = clamp(roughness_value, 0.08f, 1.0f);
     
-    float material_metallic = saturate(metallic);
-
+    float metallic_value = metallic;
+    if (use_metallic_map != 0)
+    {
+        metallic_value *= g_metallic_map.Sample(
+            g_material_sampler, material_uv
+        ).r;
+    }
+    float material_metallic = saturate(metallic_value);
+    
     float3 N = normalize(input.normal);
     if (normal_strength > 0.0f)
     {

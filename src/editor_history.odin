@@ -33,6 +33,7 @@ EditorField :: enum {
     Material_Albedo_Texture,
     Material_Normal_Map,
     Material_Roughness_Map,
+    Material_Metallic_Map,
 }
 
 EditorCommandKind :: enum {
@@ -105,7 +106,8 @@ editor_field_exists :: proc(
              .Material_Use_Roughness_Map,
              .Material_Albedo_Texture,
              .Material_Normal_Map,
-             .Material_Roughness_Map:
+             .Material_Roughness_Map,
+             .Material_Metallic_Map:
             return scene.has_material[index]
 
         case .Point_Orbit_Height:
@@ -174,6 +176,15 @@ editor_value :: proc(
             )
             return {
                 f32(u32(scene.materials[index].roughness_texture)),
+                enabled[0],
+                0,
+            }
+        case .Material_Metallic_Map:
+            enabled := editor_bool_value(
+                scene.materials[index].use_metallic_map,
+            )
+            return {
+                f32(u32(scene.materials[index].metallic_texture)),
                 enabled[0],
                 0,
             }
@@ -251,7 +262,7 @@ editor_apply_value :: proc(
             }
 
             texture := Texture_Asset(u32(asset))
-            if value[1] > 0 && texture != .Stone_Normal {
+            if value[1] > 0 && !texture_asset_is_normal(texture) {
                 return false
             }
 
@@ -266,13 +277,27 @@ editor_apply_value :: proc(
 
             texture := Texture_Asset(u32(asset))
             enabled := value[1] != 0
-            if enabled && texture != .Stone_Roughness {
+            if enabled && !texture_asset_is_roughness(texture) {
                 return false
             }
 
             scene.materials[index].roughness_texture = texture
             scene.materials[index].use_roughness_map = enabled
+        
+        case .Material_Metallic_Map:
+            asset, ok := editor_decode_asset_index(value[0], TEXTURE_COUNT)
+            if !ok || (value[1] != 0 && value[1] != 1) {
+                return false
+            }
 
+            texture := Texture_Asset(u32(asset))
+            enabled := value[1] != 0
+            if enabled && !texture_asset_is_metallic(texture) {
+                return false
+            }
+
+            scene.materials[index].metallic_texture = texture
+            scene.materials[index].use_metallic_map = enabled
         case .Mesh_Asset:
             asset, ok := editor_decode_asset_index(value[0], MESH_COUNT)
             if !ok {

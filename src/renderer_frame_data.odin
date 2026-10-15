@@ -14,6 +14,7 @@ FrameDraws :: struct {
     draw_count: int,
     draw_normals: [MAX_ENTITIES]Texture_Asset,
     draw_roughness: [MAX_ENTITIES]Texture_Asset,
+    draw_metallic: [MAX_ENTITIES]Texture_Asset,
 
     scene_indices: [MAX_ENTITIES]u32,
     scene_draw_count: int,
@@ -153,6 +154,11 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
             use_roughness_map = 1
         }
 
+        use_metallic_map: u32 = 0
+        if scene.materials[i].use_metallic_map {
+            use_metallic_map = 1
+        }
+
         r.cb_mapped_data[scene_cb_base + data.draw_count] = SceneConstants{
             model = alg.transpose(model),
             view = view,
@@ -171,12 +177,14 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
             normal_strength = scene.materials[i].normal_strength,
             uv_scale = scene.materials[i].uv_scale,
             use_roughness_map = use_roughness_map,
+            use_metallic_map = use_metallic_map,
         }
 
         data.draw_textures[data.draw_count] = scene.materials[i].texture
         data.draw_meshes[data.draw_count] = mesh
         data.draw_normals[data.draw_count] = .Stone_Normal
         data.draw_roughness[data.draw_count] = .Stone_Roughness
+        data.draw_metallic[data.draw_count] = .Barrel_Metallic
 
         if scene.materials[i].normal_strength > 0 {
             data.draw_normals[data.draw_count] = scene.materials[i].normal_texture
@@ -184,6 +192,10 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
         if scene.materials[i].use_roughness_map {
             data.draw_roughness[data.draw_count] =
                 scene.materials[i].roughness_texture
+        }
+        if scene.materials[i].use_metallic_map {
+            data.draw_metallic[data.draw_count] =
+                scene.materials[i].metallic_texture
         }
 
 
