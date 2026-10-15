@@ -41,7 +41,7 @@ renderer_render_scene_pass :: proc(
 
     r.command_list->SetGraphicsRootConstantBufferView(
         4,
-        r.sky_constant_buffer->GetGPUVirtualAddress(),
+        renderer_sky_cb_address(),
     )
 
     sky_srv: d3d12.GPU_DESCRIPTOR_HANDLE
@@ -99,11 +99,10 @@ renderer_render_scene_pass :: proc(
     for draw_index in draw_indices{
         i := int(draw_index)
         assert(i >= 0 && i < len(draw_meshes))
-        cb_offset := u64(i) * u64(size_of(SceneConstants))
 
         r.command_list->SetGraphicsRootConstantBufferView(
             0,
-            r.constant_buffer->GetGPUVirtualAddress() + cb_offset,
+            renderer_scene_cb_address(i),
         )
 
         texture_index := int(draw_textures[i])
@@ -174,7 +173,7 @@ renderer_render_post_process :: proc(scene: ^Scene) {
     r.command_list->SetGraphicsRootSignature(r.root_signature)
     r.command_list->SetGraphicsRootConstantBufferView(
         3,
-        r.post_constant_buffer->GetGPUVirtualAddress(),
+        renderer_post_cb_address(),
     )
     r.command_list->SetPipelineState(r.post_pipeline_state)
 

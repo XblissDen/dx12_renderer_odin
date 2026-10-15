@@ -156,7 +156,7 @@ renderer_bloom_pass :: proc(
     r.command_list->SetGraphicsRootSignature(r.root_signature)
     r.command_list->SetGraphicsRootConstantBufferView(
         3,
-        r.post_constant_buffer->GetGPUVirtualAddress(),
+        renderer_post_cb_address(),
     )
     r.command_list->SetPipelineState(pso)
 

@@ -174,7 +174,7 @@ Renderer :: struct {
     bloom_pipeline_states: [3]^d3d12.IPipelineState,
 
     post_constant_buffer: ^d3d12.IResource,
-    post_cb_mapped_data: ^PostConstants,
+    post_cb_mapped_data: [^]PostConstants,
 
     post_exposure: f32,
     post_threshold: f32,
@@ -195,7 +195,7 @@ Renderer :: struct {
     sky_pipeline_state: ^d3d12.IPipelineState,
 
     sky_constant_buffer: ^d3d12.IResource,
-    sky_cb_mapped_data: ^SkyConstants,
+    sky_cb_mapped_data: [^]SkyConstants,
 
     irradiance_texture: ^d3d12.IResource,
     irradiance_rtv_heap: ^d3d12.IDescriptorHeap,
@@ -212,6 +212,8 @@ Renderer :: struct {
     selection_pipeline_state: ^d3d12.IPipelineState,
 
     frame_index: u32,
+    frame_slot: u32,
+    frame_fence_values: [FRAME_COUNT]u64,
 }
 
 g_renderer: Renderer
@@ -347,36 +349,7 @@ renderer_init :: proc() {
 
     dx_check(r.command_queue->GetTimestampFrequency(&r.timestamp_frequency))
 
-    query_desc := d3d12.QUERY_HEAP_DESC{
-        Type = .TIMESTAMP,
-        Count = GPU_TIMESTAMP_COUNT,
-    }
-    dx_check(r.device->CreateQueryHeap(
-        &query_desc,
-        d3d12.IQueryHeap_UUID,
-        (^rawptr)(&r.timestamp_heap),
-    ))
-
-    readback_heap := d3d12.HEAP_PROPERTIES{Type = .READBACK}
-    readback_desc := d3d12.RESOURCE_DESC{
-        Dimension = .BUFFER,
-        Width = u64(GPU_TIMESTAMP_COUNT * size_of(u64)),
-        Height = 1,
-        DepthOrArraySize = 1,
-        MipLevels = 1,
-        SampleDesc = {Count = 1},
-        Layout = .ROW_MAJOR,
-    }
-
-    dx_check(r.device->CreateCommittedResource(
-        &readback_heap,
-        {},
-        &readback_desc,
-        {.COPY_DEST},
-        nil,
-        d3d12.IResource_UUID,
-        (^rawptr)(&r.timestamp_readback),
-    ))
+    renderer_create_timestamp_resources()
 }
 
 renderer_load_assets :: proc(){
@@ -954,69 +927,7 @@ renderer_load_assets :: proc(){
     }
 
     // CONSTANT BUFFER
-    cb_size := u64(size_of(SceneConstants)) * u64(MAX_ENTITIES)
-
-    cb_heap_props := d3d12.HEAP_PROPERTIES{ Type = .UPLOAD }
-    cb_desc := d3d12.RESOURCE_DESC{
-        Dimension           = .BUFFER,
-        Width               = cb_size,
-        Height              = 1,
-        DepthOrArraySize    = 1,
-        MipLevels           = 1,
-        SampleDesc          = { Count = 1},
-        Layout              = .ROW_MAJOR,
-    }
-
-    dx_check(r.device->CreateCommittedResource(
-        &cb_heap_props,
-        {},
-        &cb_desc,
-        { .VERTEX_AND_CONSTANT_BUFFER },
-        nil,
-        d3d12.IResource_UUID,
-        (^rawptr)(&r.constant_buffer),
-    ))
-
-    read_range := d3d12.RANGE {Begin = 0, End = 0}
-    dx_check(r.constant_buffer->Map(0, &read_range, (^rawptr)(&r.cb_mapped_data)))
-
-    post_cb_desc := cb_desc
-    post_cb_desc.Width = u64(size_of(PostConstants))
-
-    dx_check(r.device->CreateCommittedResource(
-        &cb_heap_props,
-        {},
-        &post_cb_desc,
-        {.VERTEX_AND_CONSTANT_BUFFER},
-        nil,
-        d3d12.IResource_UUID,
-        (^rawptr)(&r.post_constant_buffer),
-    ))
-
-    dx_check(r.post_constant_buffer->Map(
-        0,
-        &read_range,
-        (^rawptr)(&r.post_cb_mapped_data),
-    ))
-
-    sky_cb_desc := post_cb_desc
-    sky_cb_desc.Width = u64(size_of(SkyConstants))
-
-    dx_check(r.device->CreateCommittedResource(
-        &cb_heap_props,
-        {},
-        &sky_cb_desc,
-        {.VERTEX_AND_CONSTANT_BUFFER},
-        nil,
-        d3d12.IResource_UUID,
-        (^rawptr)(&r.sky_constant_buffer),
-    ))
-
-    dx_check(r.sky_constant_buffer->Map(
-        0,
-        &read_range,
-        (^rawptr)(&r.sky_cb_mapped_data),
-    ))
+    renderer_create_frame_constant_buffers()
 
     // ── 6. Viewport & Scissor ─────────────────────────────────────────────────
     r.viewport = d3d12.VIEWPORT {
@@ -1479,12 +1390,11 @@ renderer_load_texture :: proc(index: int){
 
 }
 
-renderer_render_frame :: proc(scene: ^Scene){
+renderer_render_frame :: proc(scene: ^Scene) {
     r := &g_renderer
 
-    allocator := r.command_allocators[r.frame_index]
-    dx_check(allocator->Reset())
-    dx_check(r.command_list->Reset(allocator, nil))
+    r.frame_index = r.swap_chain->GetCurrentBackBufferIndex()
+    renderer_begin_frame()
 
     frame := renderer_prepare_frame(scene)
 
@@ -1502,62 +1412,51 @@ renderer_render_frame :: proc(scene: ^Scene){
     )
 
     renderer_render_bloom()
-
     renderer_render_post_process(scene)
 
-    r.command_list->ResolveQueryData(
-        r.timestamp_heap,
-        .TIMESTAMP,
-        0,
-        GPU_TIMESTAMP_COUNT,
-        r.timestamp_readback,
-        0,
-    )
-
-    dx_check(r.command_list->Close())
-
-    lists := []^d3d12.ICommandList{r.command_list}
-    r.command_queue->ExecuteCommandLists(u32(len(lists)), raw_data(lists))
-
+    renderer_submit_frame()
     dx_check(r.swap_chain->Present(1, {}))
-
-    renderer_wait_for_gpu()
-
-    renderer_read_gpu_timings()
 }
 
 renderer_begin_gpu_pass :: proc(pass: GPU_Pass) {
     r := &g_renderer
     r.command_list->EndQuery(
-        r.timestamp_heap, .TIMESTAMP, u32(pass) * 2,
+        r.timestamp_heap,
+        .TIMESTAMP,
+        r.frame_slot * GPU_TIMESTAMP_COUNT + u32(pass) * 2,
     )
 }
 
 renderer_end_gpu_pass :: proc(pass: GPU_Pass) {
     r := &g_renderer
     r.command_list->EndQuery(
-        r.timestamp_heap, .TIMESTAMP, u32(pass) * 2 + 1,
+        r.timestamp_heap,
+        .TIMESTAMP,
+        r.frame_slot * GPU_TIMESTAMP_COUNT + u32(pass) * 2 + 1,
     )
 }
 
-renderer_read_gpu_timings :: proc() {
+renderer_read_gpu_timings :: proc(slot: u32) {
     r := &g_renderer
+    first_tick := int(slot) * GPU_TIMESTAMP_COUNT
 
     read_range := d3d12.RANGE{
-        Begin = 0,
-        End = GPU_TIMESTAMP_COUNT * size_of(u64),
+        Begin = uint(first_tick * size_of(u64)),
+        End = uint((first_tick + GPU_TIMESTAMP_COUNT) * size_of(u64)),
     }
+
     mapped: rawptr
     dx_check(r.timestamp_readback->Map(0, &read_range, &mapped))
 
+    // Map returns the buffer's base address, including when Begin is nonzero.
     ticks := ([^]u64)(mapped)
     for i in 0..<GPU_PASS_COUNT {
-        start_tick := ticks[i * 2]
-        end_tick := ticks[i * 2 + 1]
+        start_tick := ticks[first_tick + i * 2]
+        end_tick := ticks[first_tick + i * 2 + 1]
 
         r.gpu_pass_ms[i] = f32(
             f64(end_tick - start_tick) * 1000.0 /
-            f64(r.timestamp_frequency)
+            f64(r.timestamp_frequency),
         )
     }
 
@@ -1565,18 +1464,12 @@ renderer_read_gpu_timings :: proc() {
     r.timestamp_readback->Unmap(0, &written_range)
 }
 
-renderer_wait_for_gpu :: proc(){
-    r:= &g_renderer
+renderer_wait_for_gpu :: proc() {
+    r := &g_renderer
 
     r.fence_value += 1
     dx_check(r.command_queue->Signal(r.fence, r.fence_value))
-
-    if r.fence ->GetCompletedValue() < r.fence_value{
-        dx_check(r.fence->SetEventOnCompletion(r.fence_value, r.fence_event))
-        win32.WaitForSingleObject(r.fence_event, win32.INFINITE)
-    }
-
-    r.frame_index = r.swap_chain->GetCurrentBackBufferIndex()
+    renderer_wait_for_fence(r.fence_value)
 }
 
 renderer_destroy :: proc(){

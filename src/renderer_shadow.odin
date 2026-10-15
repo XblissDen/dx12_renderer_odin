@@ -104,10 +104,9 @@ renderer_render_shadow_pass :: proc(draw_meshes: []Mesh_Asset, draw_indices: []u
         i := int(draw_index)
         assert(i >= 0 && i < len(draw_meshes))
 
-        cb_offset := u64(i) * u64(size_of(SceneConstants))
         r.command_list->SetGraphicsRootConstantBufferView(
             0,
-            r.constant_buffer->GetGPUVirtualAddress() + cb_offset,
+            renderer_scene_cb_address(i),
         )
 
         mesh_index := int(draw_meshes[i])

@@ -26,9 +26,13 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
     r := &g_renderer
     r.culling_stats = {}
 
-    r.post_cb_mapped_data.exposure = r.post_exposure
-    r.post_cb_mapped_data.bloom_threshold = r.post_threshold
-    r.post_cb_mapped_data.bloom_strength = r.post_strength
+    post := &r.post_cb_mapped_data[r.frame_slot]
+    sky := &r.sky_cb_mapped_data[r.frame_slot]
+    scene_cb_base := int(r.frame_slot) * MAX_ENTITIES
+
+    post.exposure = r.post_exposure
+    post.bloom_threshold = r.post_threshold
+    post.bloom_strength = r.post_strength
 
     camera_index := camera_find_active(scene)
     assert(camera_index >= 0)
@@ -41,12 +45,11 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
     right := alg.normalize(alg.cross(world_up, forward))
     up := alg.cross(forward, right)
 
-    r.sky_cb_mapped_data.forward = forward
-    r.sky_cb_mapped_data.right = right
-    r.sky_cb_mapped_data.up = up
-
-    r.sky_cb_mapped_data.tan_half_fov = math.tan(CAMERA_FOV_Y * 0.5)
-    r.sky_cb_mapped_data.aspect = f32(r.width) / f32(r.height)
+    sky.forward = forward
+    sky.right = right
+    sky.up = up
+    sky.tan_half_fov = math.tan(CAMERA_FOV_Y * 0.5)
+    sky.aspect = f32(r.width) / f32(r.height)
 
     view := camera_view_matrix(camera, camera_position)
     proj := camera_projection(camera, f32(r.width) / f32(r.height))
@@ -150,7 +153,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
             use_roughness_map = 1
         }
 
-        r.cb_mapped_data[data.draw_count] = SceneConstants{
+        r.cb_mapped_data[scene_cb_base + data.draw_count] = SceneConstants{
             model = alg.transpose(model),
             view = view,
             projection = proj,
