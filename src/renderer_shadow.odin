@@ -57,11 +57,11 @@ renderer_create_shadow_map :: proc() {
 
     srv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv_handle)
-    srv_handle.ptr += uint(SHADOW_SRV_INDEX) * uint(r.srv_descriptor_size)
+    srv_handle.ptr += uint(r.shadow_srv_index) * uint(r.srv_descriptor_size)
     r.device->CreateShaderResourceView(r.shadow_map, &shadow_srv, srv_handle)
 }
 
-renderer_render_shadow_pass :: proc(draw_meshes: []Mesh_Asset, draw_indices: []u32) {
+renderer_render_shadow_pass :: proc(draw_meshes: []MeshHandle, draw_indices: []u32) {
     r := &g_renderer
 
     renderer_begin_gpu_pass(.Shadow)
@@ -110,7 +110,7 @@ renderer_render_shadow_pass :: proc(draw_meshes: []Mesh_Asset, draw_indices: []u
         )
 
         mesh_index := int(draw_meshes[i])
-        assert(mesh_index >= 0 && mesh_index < MESH_COUNT)
+        assert(mesh_index > 0 && mesh_index < len(r.meshes))
         gpu_mesh := &r.meshes[mesh_index]
 
         r.command_list->IASetVertexBuffers(0, 1, &gpu_mesh.vertex_buffer_view)

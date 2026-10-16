@@ -9,12 +9,12 @@ CullingStats :: struct {
 }
 
 FrameDraws :: struct {
-    draw_meshes: [MAX_ENTITIES]Mesh_Asset,
-    draw_textures: [MAX_ENTITIES]Texture_Asset,
+    draw_meshes: [MAX_ENTITIES]MeshHandle,
+    draw_textures: [MAX_ENTITIES]TextureHandle,
     draw_count: int,
-    draw_normals: [MAX_ENTITIES]Texture_Asset,
-    draw_roughness: [MAX_ENTITIES]Texture_Asset,
-    draw_metallic: [MAX_ENTITIES]Texture_Asset,
+    draw_normals: [MAX_ENTITIES]TextureHandle,
+    draw_roughness: [MAX_ENTITIES]TextureHandle,
+    draw_metallic: [MAX_ENTITIES]TextureHandle,
 
     scene_indices: [MAX_ENTITIES]u32,
     scene_draw_count: int,
@@ -124,7 +124,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
 
         model := alg.matrix4_translate_f32(transform.position) * rotation * scale
         mesh := scene.mesh_renderers[i].mesh
-        bounds := bounds_to_world(r.meshes[mesh].bounds, model)
+        bounds := bounds_to_world(g_assets.meshes[mesh].bounds, model)
         draw_index := u32(data.draw_count)
 
         if !r.frustum_culling_enabled ||
@@ -182,9 +182,9 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
 
         data.draw_textures[data.draw_count] = scene.materials[i].texture
         data.draw_meshes[data.draw_count] = mesh
-        data.draw_normals[data.draw_count] = .Stone_Normal
-        data.draw_roughness[data.draw_count] = .Stone_Roughness
-        data.draw_metallic[data.draw_count] = .Barrel_Metallic
+        data.draw_normals[data.draw_count] = g_assets.flat_normal
+        data.draw_roughness[data.draw_count] = g_assets.one
+        data.draw_metallic[data.draw_count] = g_assets.one
 
         if scene.materials[i].normal_strength > 0 {
             data.draw_normals[data.draw_count] = scene.materials[i].normal_texture

@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "textures": [
+    {"id":"portrait", "name":"Portrait", "path":"textures/2.png", "usage":"albedo"},
+    {"id":"checkerboard", "name":"Checkerboard", "source":"checkerboard", "usage":"albedo", "width":512, "height":512, "tile_size":32},
+    {"id":"stone.albedo", "name":"Stone Albedo", "path":"textures/stone/albedo.png", "usage":"albedo"},
+    {"id":"stone.normal", "name":"Stone Normal", "path":"textures/stone/normal.png", "usage":"normal"},
+    {"id":"stone.roughness", "name":"Stone Roughness", "path":"textures/stone/roughness.png", "usage":"roughness"},
+    {"id":"barrel.albedo", "name":"Barrel Albedo", "path":"models/barrel_01_2k/textures/Barrel_01_explosive_diff_2k.png", "usage":"albedo"},
+    {"id":"barrel.normal", "name":"Barrel Normal", "path":"models/barrel_01_2k/textures/Barrel_01_explosive_nor_gl_2k.png", "usage":"normal", "import":{"flip_green":true}},
+    {"id":"barrel.roughness", "name":"Barrel Roughness", "path":"models/barrel_01_2k/textures/Barrel_01_explosive_roughness_2k.png", "usage":"roughness"},
+    {"id":"barrel.metallic", "name":"Barrel Metallic", "path":"models/barrel_01_2k/textures/Barrel_01_explosive_metallic_2k.png", "usage":"metallic"},
+    {
+      "id": "burst.albedo",
+      "name": "Burst Albedo",
+      "path": "models/marble_burst/textures/marble_bust_01_diff_2k.png",
+      "usage": "albedo"
+    },
+    {
+      "id": "burst.normal",
+      "name": "Burst Normal",
+      "path": "models/marble_burst/textures/marble_bust_01_nor_dx_2k.png",
+      "usage": "normal",
+      "import": {
+        "flip_green": true
+      }
+    },
+    {
+      "id": "burst.roughness",
+      "name": "Burst Roughness",
+      "path": "models/marble_burst/textures/marble_bust_01_rough_2k.png",
+      "usage": "roughness"
+    },
+    {
+      "id": "burst.metallic",
+      "name": "Burst Metallic",
+      "path": "models/marble_burst/textures/marble_bust_01_ao_2k.png",
+      "usage": "metallic"
+    }
+  ],
+  "models": [
+    {"id":"cube", "name":"Cube", "path":"models/cube.obj", "material":{"albedo":"portrait", "roughness":0.8}},
+    {"id":"pyramid", "name":"Pyramid", "path":"models/pyramid.obj", "material":{"albedo":"checkerboard", "roughness":0.28, "metallic":0.75}},
+    {
+      "id":"barrel",
+      "name":"Barrel",
+      "path":"models/barrel_01_2k/Barrel_01_2k.obj",
+      "import":{"flip_v":true},
+      "material": {
+        "albedo":"barrel.albedo",
+        "normal":"barrel.normal",
+        "roughness_map":"barrel.roughness",
+        "metallic_map":"barrel.metallic",
+        "roughness":1,
+        "metallic":1
+        }
+    },
+    {
+      "id": "burst",
+      "name": "Marble Burst",
+      "path": "models/marble_burst/marble_bust_01_2k.obj",
+      "import": {
+        "flip_v": true
+      },
+      "material": {
+        "albedo": "burst.albedo",
+        "normal": "burst.normal",
+        "roughness_map":"burst.roughness",
+        "metallic_map":"burst.metallic",
+        "roughness": 1,
+        "metallic": 1
+      }
+    }
+  ]
+}

@@ -136,7 +136,7 @@ renderer_load_environment :: proc() {
 
     srv: d3d12.CPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv)
-    srv.ptr += uint(ENVIRONMENT_SRV_INDEX) *
+    srv.ptr += uint(r.environment_srv_index) *
                uint(r.srv_descriptor_size)
     r.device->CreateShaderResourceView(
         r.environment_texture, &srv_desc, srv,
@@ -196,7 +196,7 @@ renderer_create_irradiance_map :: proc() {
 
     srv: d3d12.CPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv)
-    srv.ptr += uint(IRRADIANCE_SRV_INDEX) *
+    srv.ptr += uint(r.irradiance_srv_index) *
                uint(r.srv_descriptor_size)
     r.device->CreateShaderResourceView(r.irradiance_texture, &srv_desc, srv)
 }
@@ -242,7 +242,7 @@ renderer_generate_irradiance :: proc() {
 
     environment_srv: d3d12.GPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetGPUDescriptorHandleForHeapStart(&environment_srv)
-    environment_srv.ptr += u64(ENVIRONMENT_SRV_INDEX) *
+    environment_srv.ptr += u64(r.environment_srv_index) *
                            u64(r.srv_descriptor_size)
     r.command_list->SetGraphicsRootDescriptorTable(5, environment_srv)
 
@@ -323,7 +323,7 @@ renderer_create_prefiltered_environment :: proc() {
 
     srv: d3d12.CPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv)
-    srv.ptr += uint(PREFILTER_SRV_INDEX) * uint(r.srv_descriptor_size)
+    srv.ptr += uint(r.prefilter_srv_index) * uint(r.srv_descriptor_size)
     r.device->CreateShaderResourceView(r.prefilter_texture, &srv_desc, srv)
 
     // One 256-byte constant-buffer slot for each mip's roughness.
@@ -383,7 +383,7 @@ renderer_generate_prefiltered_environment :: proc() {
 
     environment_srv: d3d12.GPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetGPUDescriptorHandleForHeapStart(&environment_srv)
-    environment_srv.ptr += u64(ENVIRONMENT_SRV_INDEX) *
+    environment_srv.ptr += u64(r.environment_srv_index) *
                            u64(r.srv_descriptor_size)
     r.command_list->SetGraphicsRootDescriptorTable(5, environment_srv)
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)

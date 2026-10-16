@@ -3,11 +3,11 @@ package main
 import d3d12 "vendor:directx/d3d12"
 
 renderer_render_scene_pass :: proc(
-    draw_meshes: []Mesh_Asset,
-    draw_textures: []Texture_Asset,
-    draw_normals: []Texture_Asset,
-    draw_roughness: []Texture_Asset,
-    draw_metallic: []Texture_Asset,
+    draw_meshes: []MeshHandle,
+    draw_textures: []TextureHandle,
+    draw_normals: []TextureHandle,
+    draw_roughness: []TextureHandle,
+    draw_metallic: []TextureHandle,
     draw_indices: []u32,
 ) {
     r := &g_renderer
@@ -48,7 +48,7 @@ renderer_render_scene_pass :: proc(
 
     sky_srv: d3d12.GPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetGPUDescriptorHandleForHeapStart(&sky_srv)
-    sky_srv.ptr += u64(ENVIRONMENT_SRV_INDEX) *
+    sky_srv.ptr += u64(r.environment_srv_index) *
                 u64(r.srv_descriptor_size)
     r.command_list->SetGraphicsRootDescriptorTable(1, sky_srv)
 
@@ -75,18 +75,18 @@ renderer_render_scene_pass :: proc(
 
     shadow_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetGPUDescriptorHandleForHeapStart(&shadow_gpu_handle)
-    shadow_gpu_handle.ptr += u64(SHADOW_SRV_INDEX) * u64(r.srv_descriptor_size)
+    shadow_gpu_handle.ptr += u64(r.shadow_srv_index) * u64(r.srv_descriptor_size)
     r.command_list->SetGraphicsRootDescriptorTable(2, shadow_gpu_handle)
 
     irradiance_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetGPUDescriptorHandleForHeapStart(&irradiance_gpu_handle)
-    irradiance_gpu_handle.ptr += u64(IRRADIANCE_SRV_INDEX) *
+    irradiance_gpu_handle.ptr += u64(r.irradiance_srv_index) *
                                 u64(r.srv_descriptor_size)
     r.command_list->SetGraphicsRootDescriptorTable(6, irradiance_gpu_handle)
 
     prefilter_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetGPUDescriptorHandleForHeapStart(&prefilter_gpu_handle)
-    prefilter_gpu_handle.ptr += u64(PREFILTER_SRV_INDEX) *
+    prefilter_gpu_handle.ptr += u64(r.prefilter_srv_index) *
                                 u64(r.srv_descriptor_size)
     r.command_list->SetGraphicsRootDescriptorTable(8, prefilter_gpu_handle)
 
@@ -107,48 +107,26 @@ renderer_render_scene_pass :: proc(
             renderer_scene_cb_address(i),
         )
 
-        texture_index := int(draw_textures[i])
-        assert(texture_index >= 0 && texture_index < TEXTURE_COUNT)
-
-        srv_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
-        r.srv_heap->GetGPUDescriptorHandleForHeapStart(&srv_gpu_handle)
-        srv_gpu_handle.ptr += u64(texture_index) * u64(r.srv_descriptor_size)
+        srv_gpu_handle := renderer_texture_srv(draw_textures[i])
 
         r.command_list->SetGraphicsRootDescriptorTable(1, srv_gpu_handle)
 
-        normal_index := int(draw_normals[i])
-        assert(normal_index >= 0 && normal_index < TEXTURE_COUNT)
-
-        normal_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
-        r.srv_heap->GetGPUDescriptorHandleForHeapStart(&normal_gpu_handle)
-        normal_gpu_handle.ptr += u64(normal_index) * u64(r.srv_descriptor_size)
+        normal_gpu_handle := renderer_texture_srv(draw_normals[i])
 
         r.command_list->SetGraphicsRootDescriptorTable(9, normal_gpu_handle)
 
-        roughness_index := int(draw_roughness[i])
-        assert(roughness_index >= 0 && roughness_index < TEXTURE_COUNT)
-
-        roughness_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
-        r.srv_heap->GetGPUDescriptorHandleForHeapStart(&roughness_gpu_handle)
-        roughness_gpu_handle.ptr +=
-            u64(roughness_index) * u64(r.srv_descriptor_size)
+        roughness_gpu_handle := renderer_texture_srv(draw_roughness[i])
 
         r.command_list->SetGraphicsRootDescriptorTable(10, roughness_gpu_handle)
 
-        metallic_index := int(draw_metallic[i])
-        assert(metallic_index >= 0 && metallic_index < TEXTURE_COUNT)
-
-        metallic_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
-        r.srv_heap->GetGPUDescriptorHandleForHeapStart(&metallic_gpu_handle)
-        metallic_gpu_handle.ptr +=
-            u64(metallic_index) * u64(r.srv_descriptor_size)
+        metallic_gpu_handle := renderer_texture_srv(draw_metallic[i])
 
         r.command_list->SetGraphicsRootDescriptorTable(
             11, metallic_gpu_handle,
         )
 
         mesh_index := int(draw_meshes[i])
-        assert(mesh_index >= 0 && mesh_index < MESH_COUNT)
+        assert(mesh_index > 0 && mesh_index < len(r.meshes))
 
         gpu_mesh := &r.meshes[mesh_index]
         r.command_list->IASetVertexBuffers(0, 1, &gpu_mesh.vertex_buffer_view)
@@ -193,12 +171,12 @@ renderer_render_post_process :: proc(scene: ^Scene) {
 
     hdr_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetGPUDescriptorHandleForHeapStart(&hdr_gpu_handle)
-    hdr_gpu_handle.ptr += u64(HDR_SRV_INDEX) * u64(r.srv_descriptor_size)
+    hdr_gpu_handle.ptr += u64(r.hdr_srv_index) * u64(r.srv_descriptor_size)
     r.command_list->SetGraphicsRootDescriptorTable(1, hdr_gpu_handle)
 
     bloom_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetGPUDescriptorHandleForHeapStart(&bloom_gpu_handle)
-    bloom_gpu_handle.ptr += u64(BLOOM_SRV_START) *
+    bloom_gpu_handle.ptr += u64(r.bloom_srv_start) *
                             u64(r.srv_descriptor_size)
     r.command_list->SetGraphicsRootDescriptorTable(2, bloom_gpu_handle)
 

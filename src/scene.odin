@@ -4,47 +4,7 @@ import alg "core:math/linalg"
 import "core:math"
 
 MAX_ENTITIES :: 16
-TEXTURE_COUNT :: 9
-MESH_COUNT :: 3
 MAX_LIGHTS :: 4
-
-Texture_Asset :: enum u32 {
-    Portrait,
-    Checkerboard,
-    Stone_Albedo,
-    Stone_Normal,
-    Stone_Roughness,
-
-    Barrel_Albedo,
-    Barrel_Normal,
-    Barrel_Roughness,
-    Barrel_Metallic,
-}
-
-texture_asset_is_albedo :: proc(asset: Texture_Asset) -> bool {
-    return asset == .Portrait ||
-           asset == .Checkerboard ||
-           asset == .Stone_Albedo ||
-           asset == .Barrel_Albedo
-}
-
-texture_asset_is_normal :: proc(asset: Texture_Asset) -> bool {
-    return asset == .Stone_Normal || asset == .Barrel_Normal
-}
-
-texture_asset_is_roughness :: proc(asset: Texture_Asset) -> bool {
-    return asset == .Stone_Roughness || asset == .Barrel_Roughness
-}
-
-texture_asset_is_metallic :: proc(asset: Texture_Asset) -> bool {
-    return asset == .Barrel_Metallic
-}
-
-Mesh_Asset :: enum u32 {
-    Cube,
-    Pyramid,
-    Barrel,
-}
 
 Entity :: distinct int
 
@@ -72,24 +32,24 @@ DirectionalLight :: struct{
 
 Material :: struct{
     tint: [3]f32,
-    texture: Texture_Asset,
+    texture: TextureHandle,
     unlit: bool,
     roughness: f32,
     metallic: f32,
 
-    normal_texture: Texture_Asset,
-    normal_strength, f32,
+    normal_texture: TextureHandle,
+    normal_strength: f32,
     uv_scale: f32,
 
-    roughness_texture: Texture_Asset,
+    roughness_texture: TextureHandle,
     use_roughness_map: bool,
 
-    metallic_texture: Texture_Asset,
+    metallic_texture: TextureHandle,
     use_metallic_map: bool,
 }
 
 MeshRenderer :: struct {
-    mesh: Mesh_Asset,
+    mesh: MeshHandle,
 }
 
 Scene :: struct{
@@ -199,6 +159,7 @@ scene_add_camera :: proc(scene: ^Scene, entity: Entity, camera: Camera){
 scene_add_material :: proc(scene: ^Scene, entity: Entity, material: Material){
     index := int(entity)
     scene.materials[index] = material
+    if scene.materials[index].texture == 0 do scene.materials[index].texture = g_assets.white
     if scene.materials[index].uv_scale == 0{
         scene.materials[index].uv_scale = 1.0
     }
@@ -218,16 +179,16 @@ scene_init :: proc(){
         {1.0, 1.0, 1.0},
     }
 
-    textures := [3]Texture_Asset{
-        .Portrait,
-        .Checkerboard,
-        .Portrait,
+    textures := [3]TextureHandle{
+        assets_texture("portrait"),
+        assets_texture("checkerboard"),
+        assets_texture("portrait"),
     }
 
-    meshes := [3]Mesh_Asset{
-        .Cube,
-        .Pyramid,
-        .Cube,
+    meshes := [3]MeshHandle{
+        assets_mesh("cube"),
+        assets_mesh("pyramid"),
+        assets_mesh("cube"),
     }
 
     roughnesses := [3]f32{0.85, 0.28, 0.15}
@@ -261,17 +222,17 @@ scene_init :: proc(){
         scale = 8.0,
     })
     scene_add_mesh_renderer(&g_scene, ground_entity, MeshRenderer{
-        mesh = .Cube,
+        mesh = assets_mesh("cube"),
     })
     scene_add_material(&g_scene, ground_entity, Material{
         tint = {1, 1, 1},
-        texture = .Stone_Albedo,
+        texture = assets_texture("stone.albedo"),
         roughness = 1.0,
-        roughness_texture = .Stone_Roughness,
+        roughness_texture = assets_texture("stone.roughness"),
         use_roughness_map = true,
         metallic = 0.0,
 
-        normal_texture = .Stone_Normal,
+        normal_texture = assets_texture("stone.normal"),
         normal_strength = 1.0,
         uv_scale = 4.0
     })
@@ -295,11 +256,11 @@ scene_init :: proc(){
         orbit_enabled = true,
     })
     scene_add_mesh_renderer(&g_scene, light_entity, MeshRenderer{
-    mesh = .Cube,
+    mesh = assets_mesh("cube"),
     })
     scene_add_material(&g_scene, light_entity, Material{
         tint = g_scene.point_lights[int(light_entity)].color,
-        texture = .Checkerboard,
+        texture = assets_texture("checkerboard"),
         unlit = true,
     })
 
@@ -320,11 +281,11 @@ scene_init :: proc(){
     })
 
     scene_add_mesh_renderer(&g_scene, second_light_entity, MeshRenderer{
-    mesh = .Cube,
+    mesh = assets_mesh("cube"),
     })
     scene_add_material(&g_scene, second_light_entity, Material{
         tint = g_scene.point_lights[int(second_light_entity)].color,
-        texture = .Checkerboard,
+        texture = assets_texture("checkerboard"),
         unlit = true,
     })
 
@@ -342,33 +303,29 @@ scene_init :: proc(){
         sensitivity = 0.003,
     })
 
-    bounds := g_renderer.meshes[Mesh_Asset.Barrel].bounds
-    assert(bounds.valid)
+    if model := assets_mesh("barrel"); model != 0 {
+        bounds := g_assets.meshes[model].bounds
+        _ = scene_spawn_model(&g_scene, model, {position = {1, -0.5 - bounds.minimum.y * 1.5, 1.5}, scale = 1.5})
+    }
 
-    scale := f32(1.5)
-    barrel_entity := scene_create_entity(&g_scene, "Barrel")
+    entity := scene_spawn_model(
+        &g_scene,
+        assets_mesh("barrel"),
+        Transform{
+            position = {1, 0, 2},
+            scale = 1,
+        },
+    )
+}
 
-    scene_add_transform(&g_scene, barrel_entity, {
-        position = {1, -0.5 - bounds.minimum.y * scale, 1.5},
-        scale = scale,
-    })
-    scene_add_mesh_renderer(&g_scene, barrel_entity, {mesh = .Barrel})
-    scene_add_material(&g_scene, barrel_entity, {
-        tint = {1, 1, 1},
-        texture = .Barrel_Albedo,
-        uv_scale = 1,
-
-        normal_texture = .Barrel_Normal,
-        normal_strength = 1,
-
-        roughness_texture = .Barrel_Roughness,
-        use_roughness_map = true,
-        roughness = 1,
-
-        metallic_texture = .Barrel_Metallic,
-        use_metallic_map = true,
-        metallic = 1,
-    })
+scene_spawn_model :: proc(scene: ^Scene, mesh: MeshHandle, transform: Transform) -> Entity {
+    if !assets_mesh_valid(mesh) || scene.entity_count >= MAX_ENTITIES do return Entity(-1)
+    asset := &g_assets.meshes[mesh]
+    entity := scene_create_entity(scene, asset.desc.name if asset.desc.name != "" else asset.desc.id)
+    scene_add_transform(scene, entity, transform)
+    scene_add_mesh_renderer(scene, entity, {mesh = mesh})
+    scene_add_material(scene, entity, asset.material)
+    return entity
 }
 
 scene_update :: proc(scene: ^Scene, dt: f32){

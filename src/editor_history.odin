@@ -39,7 +39,15 @@ EditorField :: enum {
 EditorCommandKind :: enum {
     Edit_Field,
     Create_Mesh,
-    Delete_Mesh
+    Delete_Mesh,
+    Edit_Asset,
+}
+
+EditorAssetValue :: struct {
+    mesh: MeshHandle,
+    texture: TextureHandle,
+    strength: f32,
+    enabled: bool,
 }
 
 EditorMeshSnapshot :: struct {
@@ -57,11 +65,10 @@ EditorCommand :: struct {
 
     // Position uses all three values.
     // Scalar properties use the first value.
-    //Mesh/albedo:   {asset ID, 0, 0}
-    //Normal map:    {asset ID, strength, 0}
-    //Roughness map: {asset ID, enabled, 0}
+    // Asset references use the typed payload below.
     before: [3]f32,
     after: [3]f32,
+    asset_before, asset_after: EditorAssetValue,
 
     mesh_snapshot: EditorMeshSnapshot,
     source_entity: Entity,
@@ -162,34 +169,8 @@ editor_value :: proc(
             return {scene.materials[index].uv_scale, 0, 0}
         case .Material_Use_Roughness_Map:
             return editor_bool_value(scene.materials[index].use_roughness_map)
-        case .Material_Albedo_Texture:
-            return {f32(u32(scene.materials[index].texture)), 0, 0}
-        case .Material_Normal_Map:
-            return {
-                f32(u32(scene.materials[index].normal_texture)),
-                scene.materials[index].normal_strength,
-                0,
-            }
-        case .Material_Roughness_Map:
-            enabled := editor_bool_value(
-                scene.materials[index].use_roughness_map,
-            )
-            return {
-                f32(u32(scene.materials[index].roughness_texture)),
-                enabled[0],
-                0,
-            }
-        case .Material_Metallic_Map:
-            enabled := editor_bool_value(
-                scene.materials[index].use_metallic_map,
-            )
-            return {
-                f32(u32(scene.materials[index].metallic_texture)),
-                enabled[0],
-                0,
-            }
-        case .Mesh_Asset:
-            return {f32(u32(scene.mesh_renderers[index].mesh)), 0, 0}
+        case .Material_Albedo_Texture, .Material_Normal_Map, .Material_Roughness_Map, .Material_Metallic_Map, .Mesh_Asset:
+            panic("Use typed asset history for asset references")
 
         case .Point_Color:
             return scene.point_lights[index].color
@@ -248,62 +229,8 @@ editor_apply_value :: proc(
             scene.materials[index].uv_scale = value[0]
         case .Material_Use_Roughness_Map:
             scene.materials[index].use_roughness_map = value[0] != 0
-        case .Material_Albedo_Texture:
-            asset, ok := editor_decode_asset_index(value[0], TEXTURE_COUNT)
-            if !ok || !texture_asset_is_albedo(Texture_Asset(u32(asset))) {
-                return false
-            }
-            scene.materials[index].texture = Texture_Asset(u32(asset))
-
-        case .Material_Normal_Map:
-            asset, ok := editor_decode_asset_index(value[0], TEXTURE_COUNT)
-            if !ok || !(value[1] >= 0) {
-                return false
-            }
-
-            texture := Texture_Asset(u32(asset))
-            if value[1] > 0 && !texture_asset_is_normal(texture) {
-                return false
-            }
-
-            scene.materials[index].normal_texture = texture
-            scene.materials[index].normal_strength = value[1]
-
-        case .Material_Roughness_Map:
-            asset, ok := editor_decode_asset_index(value[0], TEXTURE_COUNT)
-            if !ok || (value[1] != 0 && value[1] != 1) {
-                return false
-            }
-
-            texture := Texture_Asset(u32(asset))
-            enabled := value[1] != 0
-            if enabled && !texture_asset_is_roughness(texture) {
-                return false
-            }
-
-            scene.materials[index].roughness_texture = texture
-            scene.materials[index].use_roughness_map = enabled
-        
-        case .Material_Metallic_Map:
-            asset, ok := editor_decode_asset_index(value[0], TEXTURE_COUNT)
-            if !ok || (value[1] != 0 && value[1] != 1) {
-                return false
-            }
-
-            texture := Texture_Asset(u32(asset))
-            enabled := value[1] != 0
-            if enabled && !texture_asset_is_metallic(texture) {
-                return false
-            }
-
-            scene.materials[index].metallic_texture = texture
-            scene.materials[index].use_metallic_map = enabled
-        case .Mesh_Asset:
-            asset, ok := editor_decode_asset_index(value[0], MESH_COUNT)
-            if !ok {
-                return false
-            }
-            scene.mesh_renderers[index].mesh = Mesh_Asset(u32(asset))
+        case .Material_Albedo_Texture, .Material_Normal_Map, .Material_Roughness_Map, .Material_Metallic_Map, .Mesh_Asset:
+            return false
 
         case .Point_Color:
             scene.point_lights[index].color = value
@@ -337,6 +264,7 @@ editor_push_command :: proc(command: EditorCommand) {
     if command.kind == .Edit_Field && command.before == command.after {
         return
     }
+    if command.kind == .Edit_Asset && command.asset_before == command.asset_after do return
 
     // An edit after undo starts a new branch and discards the redo commands.
     g_editor_history_count = g_editor_history_cursor
@@ -455,6 +383,9 @@ editor_undo :: proc(scene: ^Scene) {
     applied := false
 
     switch command.kind {
+        case .Edit_Asset:
+            applied = editor_apply_asset(scene, int(command.entity), command.field, command.asset_before)
+            if applied do g_editor_selected = command.entity
         case .Edit_Field:
             applied = editor_apply_value(
                 scene, command.entity, command.field, command.before,
@@ -494,6 +425,8 @@ editor_redo :: proc(scene: ^Scene) {
     applied := false
 
     switch command.kind {
+        case .Edit_Asset:
+            applied = editor_apply_asset(scene, int(command.entity), command.field, command.asset_after)
         case .Edit_Field:
             applied = editor_apply_value(
                 scene, command.entity, command.field, command.after,
@@ -517,16 +450,6 @@ editor_redo :: proc(scene: ^Scene) {
             g_editor_selected = command.entity
         }
     }
-}
-
-editor_decode_asset_index :: proc(
-    value: f32,
-    count: int,
-) -> (index: int, ok: bool) {
-    if !(value >= 0 && value < f32(count)) || value != math.floor(value) {
-        return 0, false
-    }
-    return int(value), true
 }
 
 // Dropdown selections are discrete actions, unlike a multi-frame slider drag.
@@ -562,4 +485,51 @@ editor_clear_history :: proc() {
     g_editor_history_cursor = 0
     g_editor_pending_active = false
     g_editor_pending_changed = false
+}
+
+editor_asset_value :: proc(scene: ^Scene, index: int, field: EditorField) -> EditorAssetValue {
+    #partial switch field {
+        case .Mesh_Asset: return {mesh = scene.mesh_renderers[index].mesh}
+        case .Material_Albedo_Texture: return {texture = scene.materials[index].texture}
+        case .Material_Normal_Map: return {texture = scene.materials[index].normal_texture, strength = scene.materials[index].normal_strength, enabled = scene.materials[index].normal_strength > 0}
+        case .Material_Roughness_Map: return {texture = scene.materials[index].roughness_texture, enabled = scene.materials[index].use_roughness_map}
+        case .Material_Metallic_Map: return {texture = scene.materials[index].metallic_texture, enabled = scene.materials[index].use_metallic_map}
+        case: panic("Not an asset field")
+    }
+}
+
+editor_apply_asset :: proc(scene: ^Scene, index: int, field: EditorField, value: EditorAssetValue) -> bool {
+    if !editor_field_exists(scene, index, field) do return false
+    #partial switch field {
+        case .Mesh_Asset:
+            if !assets_mesh_valid(value.mesh) do return false
+            scene.mesh_renderers[index].mesh = value.mesh
+        case .Material_Albedo_Texture:
+            if !texture_asset_is_albedo(value.texture) do return false
+            scene.materials[index].texture = value.texture
+        case .Material_Normal_Map:
+            if !assets_optional_texture_valid(value.texture) || !(value.strength >= 0) || value.enabled != (value.strength > 0) do return false
+            if value.strength > 0 && !texture_asset_is_normal(value.texture) do return false
+            scene.materials[index].normal_texture = value.texture
+            scene.materials[index].normal_strength = value.strength
+        case .Material_Roughness_Map:
+            if !assets_optional_texture_valid(value.texture) || (value.enabled && !texture_asset_is_roughness(value.texture)) do return false
+            scene.materials[index].roughness_texture = value.texture
+            scene.materials[index].use_roughness_map = value.enabled
+        case .Material_Metallic_Map:
+            if !assets_optional_texture_valid(value.texture) || (value.enabled && !texture_asset_is_metallic(value.texture)) do return false
+            scene.materials[index].metallic_texture = value.texture
+            scene.materials[index].use_metallic_map = value.enabled
+        case: return false
+    }
+    return true
+}
+
+editor_commit_asset :: proc(scene: ^Scene, index: int, field: EditorField, value: EditorAssetValue) -> bool {
+    if !editor_field_exists(scene, index, field) do return false
+    editor_finish_edit()
+    before := editor_asset_value(scene, index, field)
+    if before == value || !editor_apply_asset(scene, index, field, value) do return false
+    editor_push_command({kind = .Edit_Asset, entity = Entity(index), field = field, asset_before = before, asset_after = editor_asset_value(scene, index, field)})
+    return true
 }

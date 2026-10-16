@@ -130,7 +130,7 @@ editor_pick_mesh :: proc(scene: ^Scene, ray: EditorRay) -> Entity{
 
         local_ray := editor_ray_to_local(ray, transform)
         asset := scene.mesh_renderers[i].mesh
-        mesh := g_renderer.meshes[asset].cpu
+        mesh := g_assets.meshes[asset].data
 
         for triangle in 0..<len(mesh.indices) / 3 {
             offset := triangle * 3

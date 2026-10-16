@@ -257,4 +257,9 @@ bool dx12_ui_combo(const char* label, std::int32_t* selected,
     return ImGui::Combo(label, selected, items, count);
 }
 
+bool dx12_ui_begin_combo(const char* label, const char* preview) {
+    return ImGui::BeginCombo(label, preview);
+}
+void dx12_ui_end_combo() { ImGui::EndCombo(); }
+
 } // extern "C"

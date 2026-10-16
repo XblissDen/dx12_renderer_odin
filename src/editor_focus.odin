@@ -18,7 +18,7 @@ editor_selection_bounds :: proc(scene: ^Scene) -> (
         return {}, {}, false
     }
 
-    bounds = g_renderer.meshes[scene.mesh_renderers[index].mesh].bounds
+    bounds = g_assets.meshes[scene.mesh_renderers[index].mesh].bounds
     return bounds, scene.transforms[index], bounds.valid
 }
 

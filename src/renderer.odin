@@ -15,22 +15,16 @@ import "core:image/png"
 FRAME_COUNT :: 2
 
 SHADOW_MAP_SIZE :: 2048
-SHADOW_SRV_INDEX  :: TEXTURE_COUNT
-HDR_SRV_INDEX  :: TEXTURE_COUNT + 1
+SRV_HEAP_CAPACITY :: 4096
 
 BLOOM_TARGET_COUNT :: 2
-BLOOM_SRV_START :: HDR_SRV_INDEX + 1
-
-ENVIRONMENT_SRV_INDEX :: BLOOM_SRV_START + BLOOM_TARGET_COUNT
 
 IRRADIANCE_WIDTH :: 64
 IRRADIANCE_HEIGHT :: 32
-IRRADIANCE_SRV_INDEX :: ENVIRONMENT_SRV_INDEX + 1
 
 PREFILTER_WIDTH :: 512
 PREFILTER_HEIGHT :: 256
 PREFILTER_MIP_COUNT :: 5
-PREFILTER_SRV_INDEX :: IRRADIANCE_SRV_INDEX + 1
 
 GPU_PASS_COUNT :: 6
 GPU_TIMESTAMP_COUNT :: GPU_PASS_COUNT * 2
@@ -66,9 +60,25 @@ GpuMesh :: struct {
     index_buffer_view: d3d12.INDEX_BUFFER_VIEW,
     index_count: u32,
 
-    // Owned CPU geometry, shared by every entity using this mesh asset.
-    cpu: MeshData,
-    bounds: MeshBounds,
+}
+
+GpuTexture :: struct {resource: ^d3d12.IResource, srv_index: u32}
+
+renderer_alloc_srv :: proc(count: u32 = 1) -> u32 {
+    r := &g_renderer
+    assert(r.srv_next + count <= SRV_HEAP_CAPACITY, "SRV heap capacity exceeded")
+    result := r.srv_next
+    r.srv_next += count
+    return result
+}
+
+renderer_texture_srv :: proc(texture: TextureHandle) -> d3d12.GPU_DESCRIPTOR_HANDLE {
+    r := &g_renderer
+    assert(assets_texture_valid(texture))
+    handle: d3d12.GPU_DESCRIPTOR_HANDLE
+    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&handle)
+    handle.ptr += u64(r.textures[texture].srv_index) * u64(r.srv_descriptor_size)
+    return handle
 }
 
 SceneConstants :: struct #align(256) {
@@ -152,11 +162,14 @@ Renderer :: struct {
     depth_buffer: ^d3d12.IResource,
     dsv_heap: ^d3d12.IDescriptorHeap,
 
-    meshes: [MESH_COUNT]GpuMesh,
+    meshes: []GpuMesh,
 
-    textures: [TEXTURE_COUNT]^d3d12.IResource,
+    textures: []GpuTexture,
     srv_heap: ^d3d12.IDescriptorHeap,
     srv_descriptor_size: u32,
+    srv_next: u32,
+    shadow_srv_index, hdr_srv_index, bloom_srv_start: u32,
+    environment_srv_index, irradiance_srv_index, prefilter_srv_index: u32,
 
     shadow_map: ^d3d12.IResource,
     shadow_dsv_heap: ^d3d12.IDescriptorHeap,
@@ -930,16 +943,9 @@ renderer_load_assets :: proc(){
         ))
     }
 
-    for i in 0..<MESH_COUNT {
-        mesh, ok := mesh_load_obj(
-            MESH_PATHS[i],
-            flip_v = Mesh_Asset(i) == .Barrel,
-        )
-        if !ok {
-            fmt.panicf("Failed to load mesh: %s", MESH_PATHS[i])
-        }
-
-        renderer_upload_mesh(&r.meshes[i], mesh)
+    r.meshes = make([]GpuMesh, len(g_assets.meshes))
+    for i in 1..<len(g_assets.meshes) {
+        renderer_upload_mesh(&r.meshes[i], g_assets.meshes[i].data)
     }
 
     // CONSTANT BUFFER
@@ -1028,8 +1034,6 @@ renderer_upload_mesh :: proc(gpu: ^GpuMesh, mesh: MeshData) {
     }
 
     gpu.index_count = u32(len(mesh.indices))
-    gpu.cpu = mesh
-    gpu.bounds = mesh_compute_bounds(mesh)
 }
 
 renderer_create_depth_buffer :: proc(){
@@ -1151,7 +1155,7 @@ renderer_load_textures :: proc(){
     r := &g_renderer
 
     srv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{
-        NumDescriptors = TEXTURE_COUNT + 7,
+        NumDescriptors = SRV_HEAP_CAPACITY,
         Type = .CBV_SRV_UAV,
         Flags = {.SHADER_VISIBLE},
     }
@@ -1164,80 +1168,27 @@ renderer_load_textures :: proc(){
 
     r.srv_descriptor_size = r.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV)
 
-    for i in 0..<TEXTURE_COUNT {
-        renderer_load_texture(i)
+    r.shadow_srv_index = renderer_alloc_srv()
+    r.hdr_srv_index = renderer_alloc_srv()
+    r.bloom_srv_start = renderer_alloc_srv(BLOOM_TARGET_COUNT)
+    r.environment_srv_index = renderer_alloc_srv()
+    r.irradiance_srv_index = renderer_alloc_srv()
+    r.prefilter_srv_index = renderer_alloc_srv()
+    r.textures = make([]GpuTexture, len(g_assets.textures))
+    for i in 1..<len(g_assets.textures) {
+        r.textures[i].srv_index = renderer_alloc_srv()
+        renderer_load_texture(TextureHandle(i))
     }
 }
 
-renderer_load_texture :: proc(index: int){
+renderer_load_texture :: proc(index: TextureHandle){
     r := &g_renderer
 
-    // LOADING PNG
-    path := TEXTURE_PATHS[index]
-    asset := Texture_Asset(index)
-
-    is_normal_map := texture_asset_is_normal(asset)
-    is_linear_data := texture_asset_is_roughness(asset) ||
-                      texture_asset_is_metallic(asset)
-
-    img, err := image.load_from_file(path)
-
-    if err != nil{
-        fmt.panicf("Failed to load texture: %v", err)
-    }
-    defer image.destroy(img)
-
-    if img.channels == 3{
-        ok := image.alpha_add_if_missing(img)
-        if !ok{
-            panic("Failed to add alpha channel")
-        }
-    }
-
-    width := u64(img.width)
-    height := u64(img.height)
-    pixels := img.pixels.buf[:]
-
-    if img.depth == 16 {
-        source16 := ([^]u16)(raw_data(pixels))
-        converted := make(
-            []u8,
-            int(width * height * 4),
-            context.temp_allocator,
-        )
-
-        for i in 0..<len(converted) {
-            converted[i] = u8((u32(source16[i]) + 128) / 257)
-        }
-
-        pixels = converted
-    }
-
-    if asset == .Barrel_Normal {
-        for pixel in 0..<int(width * height) {
-            pixels[pixel * 4 + 1] = 255 - pixels[pixel * 4 + 1]
-        }
-    }
-
-    if index == int(Texture_Asset.Checkerboard) {
-        for y in 0..<int(img.height) {
-            for x in 0..<int(img.width) {
-                pixel := (y * int(img.width) + x) * 4
-                light_square := ((x / 32 + y / 32) % 2) == 0
-
-                if light_square {
-                    pixels[pixel + 0] = 240
-                    pixels[pixel + 1] = 240
-                    pixels[pixel + 2] = 240
-                } else {
-                    pixels[pixel + 0] = 35
-                    pixels[pixel + 1] = 55
-                    pixels[pixel + 2] = 100
-                }
-                pixels[pixel + 3] = 255
-            }
-        }
-    }
+    desc := g_assets.textures[index].desc
+    is_normal_map := desc.usage == .normal
+    is_linear_data := desc.usage != .albedo
+    pixels, width32, height32 := assets_texture_pixels(desc, context.temp_allocator)
+    width, height := u64(width32), u64(height32)
 
     mips := make([dynamic][]u8, context.temp_allocator)
     append(&mips, pixels) // Level 0 belongs to img; do not free it here.
@@ -1279,7 +1230,7 @@ renderer_load_texture :: proc(index: int){
         { .COPY_DEST },
         nil,
         d3d12.IResource_UUID,
-        (^rawptr)(&r.textures[index]),
+        (^rawptr)(&r.textures[index].resource),
     ))
 
     // UPLOAD BUFFER
@@ -1360,7 +1311,7 @@ renderer_load_texture :: proc(index: int){
         src_location.PlacedFootprint = layouts[mip]
 
         dst_location := d3d12.TEXTURE_COPY_LOCATION{
-            pResource = r.textures[index],
+            pResource = r.textures[index].resource,
             Type = .SUBRESOURCE_INDEX,
             SubresourceIndex = u32(mip),
         }
@@ -1373,7 +1324,7 @@ renderer_load_texture :: proc(index: int){
     // Transition: COPY_DEST → SHADER_RESOURCE
     copy_barrier := d3d12.RESOURCE_BARRIER { Type = .TRANSITION }
     copy_barrier.Transition = {
-        pResource   = r.textures[index],
+        pResource   = r.textures[index].resource,
         StateBefore = { .COPY_DEST },
         StateAfter  = { .PIXEL_SHADER_RESOURCE },
         Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
@@ -1397,9 +1348,9 @@ renderer_load_texture :: proc(index: int){
 
     srv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv_handle)
-    srv_handle.ptr += uint(index) * uint(r.srv_descriptor_size)
+    srv_handle.ptr += uint(r.textures[index].srv_index) * uint(r.srv_descriptor_size)
 
-    r.device->CreateShaderResourceView(r.textures[index], &srv_desc, srv_handle)
+    r.device->CreateShaderResourceView(r.textures[index].resource, &srv_desc, srv_handle)
 
 }
 
@@ -1509,18 +1460,17 @@ renderer_destroy :: proc(){
     r.depth_buffer->Release()
     r.dsv_heap->Release()
 
-    for &mesh in r.meshes {
+    for &mesh in r.meshes[1:] {
         mesh.vertex_buffer->Release()
         mesh.index_buffer->Release()
 
-        delete(mesh.cpu.vertices)
-        delete(mesh.cpu.indices)
-        mesh.cpu = {}
     }
 
-    for texture in r.textures{
-        texture->Release()
+    for texture in r.textures[1:] {
+        texture.resource->Release()
     }
+    delete(r.meshes)
+    delete(r.textures)
     r.srv_heap->Release()
 
     r.shadow_pipeline_state->Release()

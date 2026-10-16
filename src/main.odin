@@ -7,12 +7,15 @@ main :: proc(){
     window_create()
     defer window_unlock_cursor()
     window_lock_cursor()
+    if error := assets_init("assets.json"); error != "" do panic(error)
+    defer assets_destroy()
     
     renderer_init()
     renderer_create_depth_buffer()
     renderer_load_assets()
 
     scene_init()
+    if error := scene_file_validate(&g_scene); error != "" do panic(error)
     defer scene_file_destroy()
 
     renderer_create_selection_pipeline()

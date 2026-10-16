@@ -1,7 +1,7 @@
 {
-  "version": 2,
+  "version": 3,
   "scene": {
-    "entity_count": 9,
+    "entity_count": 10,
     "alive": [
       true,
       true,
@@ -11,8 +11,8 @@
       true,
       true,
       true,
-      false,
-      false,
+      true,
+      true,
       false,
       false,
       false,
@@ -29,8 +29,8 @@
       "Warm point light",
       "Cool point light",
       "",
-      "",
-      "",
+      "Barrel",
+      "Barrel",
       "",
       "",
       "",
@@ -45,7 +45,7 @@
           0.00000000,
           0.00000000
         ],
-        "rotation": 55.26601028,
+        "rotation": 138.97509766,
         "rotation_speed": 0.60000002,
         "scale": 1.00000000
       },
@@ -55,7 +55,7 @@
           0.00000000,
           0.00000000
         ],
-        "rotation": 55.26601028,
+        "rotation": 138.97509766,
         "rotation_speed": 0.60000002,
         "scale": 1.00000000
       },
@@ -65,7 +65,7 @@
           0.00000000,
           0.00000000
         ],
-        "rotation": 55.26601028,
+        "rotation": 138.97509766,
         "rotation_speed": 0.60000002,
         "scale": 1.00000000
       },
@@ -91,9 +91,9 @@
       },
       {
         "position": [
-          0.56833661,
+          1.47014749,
           1.50000000,
-          -1.91754878
+          1.35597432
         ],
         "rotation": 0.00000000,
         "rotation_speed": 0.00000000,
@@ -101,9 +101,9 @@
       },
       {
         "position": [
-          -0.56820738,
+          -1.47063184,
           1.50000000,
-          1.91758716
+          -1.35544896
         ],
         "rotation": 0.00000000,
         "rotation_speed": 0.00000000,
@@ -111,9 +111,9 @@
       },
       {
         "position": [
-          0.40822133,
-          0.78489745,
-          -3.52739120
+          -2.20595789,
+          1.73087132,
+          -6.13003969
         ],
         "rotation": 0.00000000,
         "rotation_speed": 0.00000000,
@@ -121,23 +121,23 @@
       },
       {
         "position": [
-          0.00000000,
-          0.00000000,
-          0.00000000
+          1.00000000,
+          -0.49007899,
+          1.50000000
         ],
         "rotation": 0.00000000,
         "rotation_speed": 0.00000000,
-        "scale": 0.00000000
+        "scale": 1.50000000
       },
       {
         "position": [
-          0.00000000,
-          0.00000000,
-          0.00000000
+          -1.34700000,
+          0.50199997,
+          -2.19499993
         ],
         "rotation": 0.00000000,
         "rotation_speed": 0.00000000,
-        "scale": 0.00000000
+        "scale": 1.00000000
       },
       {
         "position": [
@@ -209,8 +209,8 @@
       true,
       true,
       true,
-      false,
-      false,
+      true,
+      true,
       false,
       false,
       false,
@@ -220,52 +220,52 @@
     ],
     "mesh_renderers": [
       {
-        "mesh": "Cube"
+        "mesh": "cube"
       },
       {
-        "mesh": "Pyramid"
+        "mesh": "pyramid"
       },
       {
-        "mesh": "Cube"
+        "mesh": "cube"
       },
       {
-        "mesh": "Cube"
+        "mesh": "cube"
       },
       {
-        "mesh": "Cube"
+        "mesh": ""
       },
       {
-        "mesh": "Cube"
+        "mesh": "cube"
       },
       {
-        "mesh": "Cube"
+        "mesh": "cube"
       },
       {
-        "mesh": "Cube"
+        "mesh": ""
       },
       {
-        "mesh": "Cube"
+        "mesh": "barrel"
       },
       {
-        "mesh": "Cube"
+        "mesh": "barrel"
       },
       {
-        "mesh": "Cube"
+        "mesh": ""
       },
       {
-        "mesh": "Cube"
+        "mesh": ""
       },
       {
-        "mesh": "Cube"
+        "mesh": ""
       },
       {
-        "mesh": "Cube"
+        "mesh": ""
       },
       {
-        "mesh": "Cube"
+        "mesh": ""
       },
       {
-        "mesh": "Cube"
+        "mesh": ""
       }
     ],
     "has_mesh_renderer": [
@@ -277,8 +277,8 @@
       true,
       true,
       false,
-      false,
-      false,
+      true,
+      true,
       false,
       false,
       false,
@@ -355,7 +355,7 @@
         ],
         "intensity": 3.00000000,
         "orbit_radius": 2.00000000,
-        "orbit_angle": 55.26601028,
+        "orbit_angle": 138.97509766,
         "orbit_speed": 0.60000002,
         "orbit_enabled": true
       },
@@ -367,7 +367,7 @@
         ],
         "intensity": 3.00000000,
         "orbit_radius": 2.00000000,
-        "orbit_angle": 58.40753555,
+        "orbit_angle": 142.11633301,
         "orbit_speed": 0.60000002,
         "orbit_enabled": true
       },
@@ -549,11 +549,11 @@
         "far_clip": 0.00000000
       },
       {
-        "yaw": 1.76879549,
-        "pitch": -0.25500000,
+        "yaw": 1.30679584,
+        "pitch": -0.20099963,
         "speed": 3.00000000,
         "sensitivity": 0.00300000,
-        "far_clip": 0.00000000
+        "far_clip": 100.00000000
       },
       {
         "yaw": 0.00000000,
@@ -637,16 +637,17 @@
           1.00000000,
           1.00000000
         ],
-        "texture": "Portrait",
+        "texture": "portrait",
         "unlit": false,
         "roughness": 0.85000002,
         "metallic": 0.00000000,
-        "normal_texture": "Portrait",
+        "normal_texture": "",
         "normal_strength": 0.00000000,
-        "f32": 0.00000000,
         "uv_scale": 1.00000000,
-        "roughness_texture": "Portrait",
-        "use_roughness_map": false
+        "roughness_texture": "",
+        "use_roughness_map": false,
+        "metallic_texture": "",
+        "use_metallic_map": false
       },
       {
         "tint": [
@@ -654,16 +655,17 @@
           1.00000000,
           1.00000000
         ],
-        "texture": "Stone_Albedo",
+        "texture": "checkerboard",
         "unlit": false,
         "roughness": 0.28000000,
         "metallic": 0.75000000,
-        "normal_texture": "Stone_Normal",
-        "normal_strength": 1.00000000,
-        "f32": 0.00000000,
+        "normal_texture": "",
+        "normal_strength": 0.00000000,
         "uv_scale": 1.00000000,
-        "roughness_texture": "Stone_Roughness",
-        "use_roughness_map": true
+        "roughness_texture": "",
+        "use_roughness_map": false,
+        "metallic_texture": "",
+        "use_metallic_map": false
       },
       {
         "tint": [
@@ -671,16 +673,17 @@
           1.00000000,
           1.00000000
         ],
-        "texture": "Portrait",
+        "texture": "portrait",
         "unlit": false,
         "roughness": 0.15000001,
         "metallic": 0.00000000,
-        "normal_texture": "Portrait",
+        "normal_texture": "",
         "normal_strength": 0.00000000,
-        "f32": 0.00000000,
         "uv_scale": 1.00000000,
-        "roughness_texture": "Portrait",
-        "use_roughness_map": false
+        "roughness_texture": "",
+        "use_roughness_map": false,
+        "metallic_texture": "",
+        "use_metallic_map": false
       },
       {
         "tint": [
@@ -688,16 +691,17 @@
           1.00000000,
           1.00000000
         ],
-        "texture": "Stone_Albedo",
+        "texture": "stone.albedo",
         "unlit": false,
         "roughness": 1.00000000,
         "metallic": 0.00000000,
-        "normal_texture": "Stone_Normal",
+        "normal_texture": "stone.normal",
         "normal_strength": 1.00000000,
-        "f32": 0.00000000,
         "uv_scale": 4.00000000,
-        "roughness_texture": "Stone_Roughness",
-        "use_roughness_map": true
+        "roughness_texture": "stone.roughness",
+        "use_roughness_map": true,
+        "metallic_texture": "",
+        "use_metallic_map": false
       },
       {
         "tint": [
@@ -705,16 +709,17 @@
           0.00000000,
           0.00000000
         ],
-        "texture": "Portrait",
+        "texture": "",
         "unlit": false,
         "roughness": 0.00000000,
         "metallic": 0.00000000,
-        "normal_texture": "Portrait",
+        "normal_texture": "",
         "normal_strength": 0.00000000,
-        "f32": 0.00000000,
         "uv_scale": 0.00000000,
-        "roughness_texture": "Portrait",
-        "use_roughness_map": false
+        "roughness_texture": "",
+        "use_roughness_map": false,
+        "metallic_texture": "",
+        "use_metallic_map": false
       },
       {
         "tint": [
@@ -722,16 +727,17 @@
           0.55000001,
           0.40000001
         ],
-        "texture": "Checkerboard",
+        "texture": "checkerboard",
         "unlit": true,
         "roughness": 0.00000000,
         "metallic": 0.00000000,
-        "normal_texture": "Portrait",
+        "normal_texture": "",
         "normal_strength": 0.00000000,
-        "f32": 0.00000000,
         "uv_scale": 1.00000000,
-        "roughness_texture": "Portrait",
-        "use_roughness_map": false
+        "roughness_texture": "",
+        "use_roughness_map": false,
+        "metallic_texture": "",
+        "use_metallic_map": false
       },
       {
         "tint": [
@@ -739,16 +745,17 @@
           0.55000001,
           1.00000000
         ],
-        "texture": "Checkerboard",
+        "texture": "checkerboard",
         "unlit": true,
         "roughness": 0.00000000,
         "metallic": 0.00000000,
-        "normal_texture": "Portrait",
+        "normal_texture": "",
         "normal_strength": 0.00000000,
-        "f32": 0.00000000,
         "uv_scale": 1.00000000,
-        "roughness_texture": "Portrait",
-        "use_roughness_map": false
+        "roughness_texture": "",
+        "use_roughness_map": false,
+        "metallic_texture": "",
+        "use_metallic_map": false
       },
       {
         "tint": [
@@ -756,16 +763,53 @@
           0.00000000,
           0.00000000
         ],
-        "texture": "Portrait",
+        "texture": "",
         "unlit": false,
         "roughness": 0.00000000,
         "metallic": 0.00000000,
-        "normal_texture": "Portrait",
+        "normal_texture": "",
         "normal_strength": 0.00000000,
-        "f32": 0.00000000,
         "uv_scale": 0.00000000,
-        "roughness_texture": "Portrait",
-        "use_roughness_map": false
+        "roughness_texture": "",
+        "use_roughness_map": false,
+        "metallic_texture": "",
+        "use_metallic_map": false
+      },
+      {
+        "tint": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ],
+        "texture": "barrel.albedo",
+        "unlit": false,
+        "roughness": 1.00000000,
+        "metallic": 1.00000000,
+        "normal_texture": "barrel.normal",
+        "normal_strength": 1.00000000,
+        "uv_scale": 1.00000000,
+        "roughness_texture": "barrel.roughness",
+        "use_roughness_map": true,
+        "metallic_texture": "barrel.metallic",
+        "use_metallic_map": true
+      },
+      {
+        "tint": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ],
+        "texture": "barrel.albedo",
+        "unlit": false,
+        "roughness": 1.00000000,
+        "metallic": 1.00000000,
+        "normal_texture": "barrel.normal",
+        "normal_strength": 1.00000000,
+        "uv_scale": 1.00000000,
+        "roughness_texture": "barrel.roughness",
+        "use_roughness_map": true,
+        "metallic_texture": "barrel.metallic",
+        "use_metallic_map": true
       },
       {
         "tint": [
@@ -773,16 +817,17 @@
           0.00000000,
           0.00000000
         ],
-        "texture": "Portrait",
+        "texture": "",
         "unlit": false,
         "roughness": 0.00000000,
         "metallic": 0.00000000,
-        "normal_texture": "Portrait",
+        "normal_texture": "",
         "normal_strength": 0.00000000,
-        "f32": 0.00000000,
         "uv_scale": 0.00000000,
-        "roughness_texture": "Portrait",
-        "use_roughness_map": false
+        "roughness_texture": "",
+        "use_roughness_map": false,
+        "metallic_texture": "",
+        "use_metallic_map": false
       },
       {
         "tint": [
@@ -790,16 +835,17 @@
           0.00000000,
           0.00000000
         ],
-        "texture": "Portrait",
+        "texture": "",
         "unlit": false,
         "roughness": 0.00000000,
         "metallic": 0.00000000,
-        "normal_texture": "Portrait",
+        "normal_texture": "",
         "normal_strength": 0.00000000,
-        "f32": 0.00000000,
         "uv_scale": 0.00000000,
-        "roughness_texture": "Portrait",
-        "use_roughness_map": false
+        "roughness_texture": "",
+        "use_roughness_map": false,
+        "metallic_texture": "",
+        "use_metallic_map": false
       },
       {
         "tint": [
@@ -807,16 +853,17 @@
           0.00000000,
           0.00000000
         ],
-        "texture": "Portrait",
+        "texture": "",
         "unlit": false,
         "roughness": 0.00000000,
         "metallic": 0.00000000,
-        "normal_texture": "Portrait",
+        "normal_texture": "",
         "normal_strength": 0.00000000,
-        "f32": 0.00000000,
         "uv_scale": 0.00000000,
-        "roughness_texture": "Portrait",
-        "use_roughness_map": false
+        "roughness_texture": "",
+        "use_roughness_map": false,
+        "metallic_texture": "",
+        "use_metallic_map": false
       },
       {
         "tint": [
@@ -824,16 +871,17 @@
           0.00000000,
           0.00000000
         ],
-        "texture": "Portrait",
+        "texture": "",
         "unlit": false,
         "roughness": 0.00000000,
         "metallic": 0.00000000,
-        "normal_texture": "Portrait",
+        "normal_texture": "",
         "normal_strength": 0.00000000,
-        "f32": 0.00000000,
         "uv_scale": 0.00000000,
-        "roughness_texture": "Portrait",
-        "use_roughness_map": false
+        "roughness_texture": "",
+        "use_roughness_map": false,
+        "metallic_texture": "",
+        "use_metallic_map": false
       },
       {
         "tint": [
@@ -841,16 +889,17 @@
           0.00000000,
           0.00000000
         ],
-        "texture": "Portrait",
+        "texture": "",
         "unlit": false,
         "roughness": 0.00000000,
         "metallic": 0.00000000,
-        "normal_texture": "Portrait",
+        "normal_texture": "",
         "normal_strength": 0.00000000,
-        "f32": 0.00000000,
         "uv_scale": 0.00000000,
-        "roughness_texture": "Portrait",
-        "use_roughness_map": false
+        "roughness_texture": "",
+        "use_roughness_map": false,
+        "metallic_texture": "",
+        "use_metallic_map": false
       },
       {
         "tint": [
@@ -858,50 +907,17 @@
           0.00000000,
           0.00000000
         ],
-        "texture": "Portrait",
+        "texture": "",
         "unlit": false,
         "roughness": 0.00000000,
         "metallic": 0.00000000,
-        "normal_texture": "Portrait",
+        "normal_texture": "",
         "normal_strength": 0.00000000,
-        "f32": 0.00000000,
         "uv_scale": 0.00000000,
-        "roughness_texture": "Portrait",
-        "use_roughness_map": false
-      },
-      {
-        "tint": [
-          0.00000000,
-          0.00000000,
-          0.00000000
-        ],
-        "texture": "Portrait",
-        "unlit": false,
-        "roughness": 0.00000000,
-        "metallic": 0.00000000,
-        "normal_texture": "Portrait",
-        "normal_strength": 0.00000000,
-        "f32": 0.00000000,
-        "uv_scale": 0.00000000,
-        "roughness_texture": "Portrait",
-        "use_roughness_map": false
-      },
-      {
-        "tint": [
-          0.00000000,
-          0.00000000,
-          0.00000000
-        ],
-        "texture": "Portrait",
-        "unlit": false,
-        "roughness": 0.00000000,
-        "metallic": 0.00000000,
-        "normal_texture": "Portrait",
-        "normal_strength": 0.00000000,
-        "f32": 0.00000000,
-        "uv_scale": 0.00000000,
-        "roughness_texture": "Portrait",
-        "use_roughness_map": false
+        "roughness_texture": "",
+        "use_roughness_map": false,
+        "metallic_texture": "",
+        "use_metallic_map": false
       }
     ],
     "has_material": [
@@ -913,8 +929,8 @@
       true,
       true,
       false,
-      false,
-      false,
+      true,
+      true,
       false,
       false,
       false,

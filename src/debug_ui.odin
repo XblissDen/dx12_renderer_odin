@@ -59,6 +59,8 @@ foreign imgui_lib {
     ui_item_activated :: proc() -> bool ---
     ui_item_deactivated :: proc() -> bool ---
     ui_any_item_active :: proc() -> bool ---
+    ui_begin_combo :: proc(label, preview: cstring) -> bool ---
+    ui_end_combo :: proc() ---
     ui_combo :: proc(
         label: cstring,
         selected: ^i32,

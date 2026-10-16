@@ -59,7 +59,7 @@ renderer_create_hdr_target :: proc() {
 
     hdr_srv: d3d12.CPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetCPUDescriptorHandleForHeapStart(&hdr_srv)
-    hdr_srv.ptr += uint(HDR_SRV_INDEX) * uint(r.srv_descriptor_size)
+    hdr_srv.ptr += uint(r.hdr_srv_index) * uint(r.srv_descriptor_size)
     r.device->CreateShaderResourceView(r.hdr_texture, &hdr_srv_desc, hdr_srv)
 }
 
@@ -122,7 +122,7 @@ renderer_create_bloom_targets :: proc() {
 
         srv: d3d12.CPU_DESCRIPTOR_HANDLE
         r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv)
-        srv.ptr += uint(BLOOM_SRV_START + i) *
+        srv.ptr += uint(r.bloom_srv_start + u32(i)) *
                    uint(r.srv_descriptor_size)
         r.device->CreateShaderResourceView(r.bloom_targets[i], &srv_desc, srv)
     }
@@ -218,21 +218,21 @@ renderer_render_bloom :: proc() {
     renderer_begin_gpu_pass(.Bloom_Extract)
     // HDR -> bright areas in bloom target 0.
     renderer_bloom_pass(
-        0, HDR_SRV_INDEX, r.bloom_pipeline_states[0],
+        0, int(r.hdr_srv_index), r.bloom_pipeline_states[0],
     )
     renderer_end_gpu_pass(.Bloom_Extract)
 
     // Target 0 -> horizontal blur in target 1.
     renderer_begin_gpu_pass(.Bloom_Horizontal)
     renderer_bloom_pass(
-        1, BLOOM_SRV_START, r.bloom_pipeline_states[1],
+        1, int(r.bloom_srv_start), r.bloom_pipeline_states[1],
     )
     renderer_end_gpu_pass(.Bloom_Horizontal)
 
     // Target 1 -> vertical blur back in target 0.
     renderer_begin_gpu_pass(.Bloom_Vertical)
     renderer_bloom_pass(
-        0, BLOOM_SRV_START + 1, r.bloom_pipeline_states[2],
+        0, int(r.bloom_srv_start) + 1, r.bloom_pipeline_states[2],
     )
     renderer_end_gpu_pass(.Bloom_Vertical)
 }

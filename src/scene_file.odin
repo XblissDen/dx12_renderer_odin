@@ -7,7 +7,7 @@ import "core:strings"
 import alg "core:math/linalg"
 
 SCENE_FILE_PATH :: "scene.json"
-SCENE_FILE_VERSION :: 2
+SCENE_FILE_VERSION :: 3
 
 ScenePostSettings :: struct{
     exposure: f32,
@@ -90,7 +90,7 @@ scene_file_validate :: proc(scene: ^Scene) -> string{
             if scene.transforms[i].scale <= 0{
                 return "Mesh scale must be positive."
             }
-            if u32(scene.mesh_renderers[i].mesh) >= MESH_COUNT{
+            if !assets_mesh_valid(scene.mesh_renderers[i].mesh) {
                 return "Unknown mesh asset."
             }
         }
@@ -98,10 +98,10 @@ scene_file_validate :: proc(scene: ^Scene) -> string{
         if scene.has_material[i]{
             material := scene.materials[i]
 
-            if u32(material.texture) >= TEXTURE_COUNT ||
-               u32(material.normal_texture) >= TEXTURE_COUNT ||
-               u32(material.roughness_texture) >= TEXTURE_COUNT ||
-               u32(material.metallic_texture) >= TEXTURE_COUNT {
+            if !assets_texture_valid(material.texture) ||
+               !assets_optional_texture_valid(material.normal_texture) ||
+               !assets_optional_texture_valid(material.roughness_texture) ||
+               !assets_optional_texture_valid(material.metallic_texture) {
                 return "Unknown texture asset."
             }
 
@@ -160,6 +160,14 @@ scene_save_to_file :: proc(scene: ^Scene, path: string) -> (ok: bool, message: s
             bloom_strength = g_renderer.post_strength,
         },
     }
+    for i in 0..<MAX_ENTITIES {
+        if !file.scene.alive[i] {
+            scene_clear_entity_slot(&file.scene, i)
+        } else {
+            if !file.scene.has_mesh_renderer[i] do file.scene.mesh_renderers[i] = {}
+            if !file.scene.has_material[i] do file.scene.materials[i] = {}
+        }
+    }
 
     data, encode_error := json.marshal(file, json.Marshal_Options{
         spec = .JSON,
@@ -188,6 +196,13 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
     if read_error != nil{
         return false, "Could not read scene file."
     }
+    if !json.is_valid(data, .JSON, true) do return false, "Invalid scene JSON."
+    header: struct {version: u32}
+    if json.unmarshal(data, &header) != nil || header.version < 1 || header.version > SCENE_FILE_VERSION {
+        return false, "Unsupported scene-file version."
+    }
+    g_asset_read_legacy = header.version <= 2
+    defer g_asset_read_legacy = false
 
     // Decode into separate storage before changing the active scene.
     arena: mem.Dynamic_Arena
@@ -206,7 +221,7 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
         allocator = mem.dynamic_arena_allocator(&arena),
     )
     if decode_error != nil{
-        return false, "Could not decode scene file."
+        return false, "Could not decode scene or resolve an asset ID."
     }
 
     if file.scene.entity_count < 1 ||
@@ -219,12 +234,9 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
         for i in 0..<file.scene.entity_count {
             file.scene.alive[i] = true
         }
-        file.version = SCENE_FILE_VERSION
     }
 
-    if file.version != SCENE_FILE_VERSION {
-        return false, "Unsupported scene-file version."
-    }
+    file.version = SCENE_FILE_VERSION
 
     validation := scene_file_validate(&file.scene)
     if len(validation) > 0 {
