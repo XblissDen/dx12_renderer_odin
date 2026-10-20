@@ -23,6 +23,10 @@ paths resolve correctly. HDR environments are local assets registered in
 Renderer controls environment picker. Set `default_environment` in `assets.json`
 to the desired environment ID to change the startup default.
 
+If `assets.json` is missing, startup creates a base catalog with the starter
+meshes/textures and both environments listed above, then loads it normally.
+Additional assets can be registered through the editor's import panel.
+
 ## Debug UI
 
 The **Renderer controls** panel has exposure/bloom sliders, FPS, wall-clock frame

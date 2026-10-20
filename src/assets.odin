@@ -343,6 +343,48 @@ assets_destroy :: proc() {
     g_asset_unmarshalers = {}
 }
 
+assets_create_base_catalog :: proc(path: string) -> string {
+    // The starter scene requires these IDs. Imported assets are added later
+    // through the editor and are not part of the base catalog.
+    manifest := AssetManifest{
+        version = 1,
+        default_environment = "autumn_field_puresky",
+        environments = []EnvironmentDesc{
+            {id = "autumn_field_puresky", name = "Autumn Field Pure Sky", path = "textures/environments/autumn_field_puresky_4k.hdr"},
+            {id = "kloofendal_43d_clear_puresky", name = "Kloofendal 43d Clear Pure Sky", path = "textures/environments/kloofendal_43d_clear_puresky_4k.hdr"},
+        },
+        models = []MeshDesc{
+            {id = "cube", name = "Cube", path = "models/cube.obj", material = {albedo = "portrait", roughness = f32(0.8)}},
+            {id = "pyramid", name = "Pyramid", path = "models/pyramid.obj", material = {albedo = "checkerboard", roughness = f32(0.28), metallic = f32(0.75)}},
+        },
+        textures = []TextureDesc{
+            {id = "portrait", name = "Portrait", path = "textures/2.png", usage = .albedo, source = .file},
+            {id = "checkerboard", name = "Checkerboard", usage = .albedo, source = .checkerboard, width = 512, height = 512, tile_size = 32},
+            {id = "stone.albedo", name = "Stone Albedo", path = "textures/stone/albedo.png", usage = .albedo, source = .file},
+            {id = "stone.normal", name = "Stone Normal", path = "textures/stone/normal.png", usage = .normal, source = .file},
+            {id = "stone.roughness", name = "Stone Roughness", path = "textures/stone/roughness.png", usage = .roughness, source = .file},
+        },
+    }
+    bytes, encode_error := json.marshal(manifest, {
+        pretty = true, use_spaces = true, spaces = 2, use_enum_names = true,
+    })
+    if encode_error != nil do return "Could not encode the base asset catalog."
+    defer delete(bytes)
+
+    // Exclusive creation also protects a catalog created since the failed read.
+    file, create_error := os.open(path, {.Write, .Create, .Excl})
+    if create_error == os.General_Error.Exist do return ""
+    if create_error != nil do return "Cannot create the base asset catalog."
+    count, write_error := os.write(file, bytes)
+    sync_error := os.sync(file)
+    close_error := os.close(file)
+    if write_error != nil || sync_error != nil || close_error != nil || count != len(bytes) {
+        os.remove(path)
+        return "Cannot write the base asset catalog."
+    }
+    return ""
+}
+
 assets_init :: proc(path: string) -> (message: string) {
     assert(!g_assets.active)
     mem.dynamic_arena_init(&g_assets.arena)
@@ -351,6 +393,10 @@ assets_init :: proc(path: string) -> (message: string) {
     allocator := mem.dynamic_arena_allocator(&g_assets.arena)
     g_assets.catalog_path = strings.clone(path, allocator) or_else panic("Catalog path allocation failed")
     data, error := os.read_entire_file(path, context.temp_allocator)
+    if error == os.General_Error.Not_Exist {
+        if create_error := assets_create_base_catalog(path); create_error != "" do return create_error
+        data, error = os.read_entire_file(path, context.temp_allocator)
+    }
     if error != nil do return "Cannot read asset catalog."
     g_assets.catalog_text = strings.clone(string(data)) or_else panic("Catalog snapshot allocation failed")
     if !json.is_valid(data, .JSON, true) do return "Invalid asset catalog JSON."
