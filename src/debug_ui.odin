@@ -204,21 +204,54 @@ debug_ui_render :: proc() {
 
 debug_ui_environment_controls :: proc() {
     r := &g_renderer
+    settings := r.environment_settings
+    if pending, ok := r.environment_pending.(EnvironmentSettings); ok do settings = pending
+    changed := false
     ui_separator()
-    debug_ui_text("Environment lighting")
+    debug_ui_text("Ambient lighting")
+    ambient_labels := [2]cstring{"HDRI", "Ambient Color"}
+    ambient_mode := i32(settings.ambient_mode)
+    if ui_combo("Lighting mode", &ambient_mode, raw_data(ambient_labels[:]), i32(len(ambient_labels))) {
+        settings.ambient_mode = AmbientLightingMode(ambient_mode)
+        changed = true
+    }
+    if settings.ambient_mode == .Color {
+        if ui_color_edit3("Ambient color", &settings.ambient_color) do changed = true
+        if ui_slider_float("Ambient intensity", &settings.ambient_intensity, 0, 8) do changed = true
+    } else {
+        if ui_slider_float("IBL intensity", &settings.intensity, 0, 8) do changed = true
+    }
+
+    background_labels := [2]cstring{"HDRI", "Solid Color"}
+    background_mode := i32(settings.background_mode)
+    if ui_combo("Background", &background_mode, raw_data(background_labels[:]), i32(len(background_labels))) {
+        settings.background_mode = BackgroundMode(background_mode)
+        changed = true
+    }
+    if settings.background_mode == .Solid {
+        if ui_color_edit3("Background color", &settings.background_color) do changed = true
+    }
+    if ui_slider_float("Background brightness", &settings.background_brightness, 0, 8) do changed = true
+
+    // Keep selection available in color mode so a missing HDRI can be replaced
+    // before enabling it. Selecting it here does not load an unused HDR file.
     preview: cstring = "Select environment"
-    if assets_environment_valid(r.environment_settings.asset) do preview = g_assets.environments[r.environment_settings.asset].label
+    if assets_environment_valid(settings.asset) do preview = g_assets.environments[settings.asset].label
     if ui_begin_combo("HDRI", preview) {
         for i in 1..<len(g_assets.environments) {
             ui_push_id(i32(i))
-            if ui_selectable(g_assets.environments[i].label, r.environment_settings.asset == EnvironmentHandle(i)) do r.environment_pending = EnvironmentHandle(i)
+            if ui_selectable(g_assets.environments[i].label, settings.asset == EnvironmentHandle(i)) {
+                settings.asset = EnvironmentHandle(i)
+                changed = true
+            }
             ui_pop_id()
         }
         ui_end_combo()
     }
-    ui_slider_float("IBL intensity", &r.environment_settings.intensity, 0, 8)
-    ui_slider_float("Environment rotation", &r.environment_settings.rotation_degrees, -180, 180)
-    ui_slider_float("Sky brightness", &r.environment_settings.background_brightness, 0, 8)
+    if renderer_environment_needs_hdri(settings) {
+        if ui_slider_float("Environment rotation", &settings.rotation_degrees, -180, 180) do changed = true
+    }
+    if changed do r.environment_pending = settings
     debug_ui_text("Edit sun and point lights in the Inspector.")
     if r.environment_status != "" do debug_ui_text(r.environment_status)
 }

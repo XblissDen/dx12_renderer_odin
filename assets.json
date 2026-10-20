@@ -36,6 +36,24 @@
         "normal_strength": null,
         "uv_scale": null
       }
+    },
+    {
+      "id": "model.cannon_01_2k.2",
+      "name": "cannon_01_2k",
+      "path": "models/imported/model.cannon_01_2k.2.obj",
+      "import": {
+        "flip_v": true
+      },
+      "material": {
+        "albedo": "texture.albedo.cannon_01_diff_2k.1",
+        "normal": "texture.normal.cannon_01_nor_dx_2k.1",
+        "roughness_map": "texture.roughness.cannon_01_rough_2k.1",
+        "metallic_map": "texture.metallic.cannon_01_metal_2k.1",
+        "roughness": null,
+        "metallic": null,
+        "normal_strength": null,
+        "uv_scale": null
+      }
     }
   ],
   "textures": [
@@ -119,6 +137,82 @@
       "id": "stone.roughness",
       "name": "Stone Roughness",
       "path": "textures/stone/roughness.png",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "texture.albedo.cannon_01_diff_2k.1",
+      "name": "cannon_01_diff_2k",
+      "path": "textures/imported/texture.albedo.cannon_01_diff_2k.1.png",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "texture.metallic.cannon_01_metal_2k.1",
+      "name": "cannon_01_metal_2k",
+      "path": "textures/imported/texture.metallic.cannon_01_metal_2k.1.png",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "texture.normal.cannon_01_nor_dx_2k.1",
+      "name": "cannon_01_nor_dx_2k",
+      "path": "textures/imported/texture.normal.cannon_01_nor_dx_2k.1.png",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "texture.roughness.cannon_01_rough_2k.1",
+      "name": "cannon_01_rough_2k",
+      "path": "textures/imported/texture.roughness.cannon_01_rough_2k.1.png",
       "usage": "roughness",
       "source": "file",
       "import": {

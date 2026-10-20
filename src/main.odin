@@ -23,8 +23,6 @@ main :: proc(){
     renderer_create_shadow_map()
     renderer_create_hdr_target()
     renderer_create_bloom_targets()
-    renderer_create_irradiance_map()
-    renderer_create_prefiltered_environment()
     if error := renderer_set_environment(renderer_default_environment_settings()); error != "" do panic(error)
 
     defer renderer_destroy()

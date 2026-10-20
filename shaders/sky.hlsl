@@ -14,6 +14,8 @@ cbuffer SkyConstants : register(b2)
     float environment_sin;
     float environment_cos;
     float2 _pad1;
+    float3 background_color;
+    uint background_mode;
 };
 
 struct VSOutput
@@ -24,6 +26,10 @@ struct VSOutput
 
 float4 PSMain(VSOutput input) : SV_TARGET
 {
+    [branch]
+    if (background_mode == 1u) // Solid
+        return float4(background_color * background_brightness, 1.0f);
+
     // From screen coordinates to a direction leaving the camera.
     float screen_x = (input.uv.x * 2.0f - 1.0f) * aspect * tan_half_fov;
     float screen_y = (1.0f - input.uv.y * 2.0f) * tan_half_fov;

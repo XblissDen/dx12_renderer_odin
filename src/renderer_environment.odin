@@ -3,23 +3,51 @@ package main
 import c "core:c"
 import "base:runtime"
 import "core:math"
+import "core:os"
 import "core:strings"
 import d3d12 "vendor:directx/d3d12"
 import stbi "vendor:stb/image"
+
+AmbientLightingMode :: enum u32 {HDRI, Color}
+BackgroundMode :: enum u32 {HDRI, Solid}
 
 EnvironmentSettings :: struct {
     asset: EnvironmentHandle,
     intensity: f32,
     rotation_degrees: f32,
     background_brightness: f32,
+    ambient_mode: AmbientLightingMode,
+    ambient_color: [3]f32,
+    ambient_intensity: f32,
+    background_mode: BackgroundMode,
+    background_color: [3]f32,
 }
 
-renderer_default_environment_settings :: proc() -> EnvironmentSettings {
-    return {asset = g_assets.default_environment, intensity = 1, background_brightness = 1}
+renderer_default_environment_settings :: proc() -> (settings: EnvironmentSettings) {
+    settings = {
+        asset = g_assets.default_environment, intensity = 1, background_brightness = 1,
+        ambient_color = {0.15, 0.18, 0.22}, ambient_intensity = 1,
+        background_color = {0.05, 0.06, 0.08},
+    }
+    if !assets_environment_valid(settings.asset) || !os.exists(g_assets.environments[settings.asset].desc.path) {
+        settings.ambient_mode = .Color
+        settings.background_mode = .Solid
+    }
+    return
+}
+
+renderer_environment_needs_hdri :: proc(settings: EnvironmentSettings) -> bool {
+    return settings.ambient_mode == .HDRI || settings.background_mode == .HDRI
 }
 
 renderer_environment_settings_valid :: proc(settings: EnvironmentSettings) -> bool {
-    return assets_environment_valid(settings.asset) &&
+    if settings.ambient_mode != .HDRI && settings.ambient_mode != .Color do return false
+    if settings.background_mode != .HDRI && settings.background_mode != .Solid do return false
+    if settings.asset != 0 && !assets_environment_valid(settings.asset) do return false
+    if renderer_environment_needs_hdri(settings) && !assets_environment_valid(settings.asset) do return false
+    for color in settings.ambient_color do if !(color >= 0 && color <= 1) do return false
+    for color in settings.background_color do if !(color >= 0 && color <= 1) do return false
+    return settings.ambient_intensity >= 0 && settings.ambient_intensity <= 32 &&
            settings.intensity >= 0 && settings.intensity <= 32 &&
            settings.background_brightness >= 0 && settings.background_brightness <= 32 &&
            !math.is_nan(settings.rotation_degrees) && !math.is_inf(settings.rotation_degrees)
@@ -28,12 +56,21 @@ renderer_environment_settings_valid :: proc(settings: EnvironmentSettings) -> bo
 renderer_set_environment :: proc(settings: EnvironmentSettings) -> string {
     r := &g_renderer
     if !renderer_environment_settings_valid(settings) do return "Invalid environment settings."
-    if r.irradiance_texture == nil || r.prefilter_texture == nil do return "Environment maps are not initialized."
-    if r.environment_texture == nil || r.environment_settings.asset != settings.asset {
-        error := renderer_load_environment(g_assets.environments[settings.asset].desc.path)
-        if error != "" do return error
+    if renderer_environment_needs_hdri(settings) &&
+       (r.environment_texture == nil || r.environment_loaded_asset != settings.asset) {
+        if error := renderer_load_environment(g_assets.environments[settings.asset].desc.path); error != "" do return error
+        r.environment_loaded_asset = settings.asset
+        r.environment_filtered_asset = 0
+    }
+    if settings.ambient_mode == .HDRI && r.environment_filtered_asset != settings.asset {
+        // A background-only HDRI may already be cached while earlier frames
+        // still reference the null/old IBL descriptors and upload allocator.
+        renderer_wait_for_gpu()
+        if r.irradiance_texture == nil do renderer_create_irradiance_map()
+        if r.prefilter_texture == nil do renderer_create_prefiltered_environment()
         renderer_generate_irradiance()
         renderer_generate_prefiltered_environment()
+        r.environment_filtered_asset = settings.asset
     }
     r.environment_settings = settings
     return ""
@@ -41,10 +78,9 @@ renderer_set_environment :: proc(settings: EnvironmentSettings) -> string {
 
 renderer_process_environment_change :: proc() {
     r := &g_renderer
-    if r.environment_pending == 0 do return
-    settings := r.environment_settings
-    settings.asset = r.environment_pending
-    r.environment_pending = 0
+    settings, pending := r.environment_pending.(EnvironmentSettings)
+    if !pending do return
+    r.environment_pending = nil
     r.environment_status = renderer_set_environment(settings)
 }
 

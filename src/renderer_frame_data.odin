@@ -56,6 +56,8 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
     sky.background_brightness = r.environment_settings.background_brightness
     sky.environment_sin = environment_sin
     sky.environment_cos = environment_cos
+    sky.background_color = r.environment_settings.background_color
+    sky.background_mode = r.environment_settings.background_mode
 
     view := camera_view_matrix(camera, camera_position)
     proj := camera_projection(camera, f32(r.width) / f32(r.height))
@@ -186,6 +188,9 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
             environment_intensity = r.environment_settings.intensity,
             environment_sin = environment_sin,
             environment_cos = environment_cos,
+            ambient_color = r.environment_settings.ambient_color,
+            ambient_intensity = r.environment_settings.ambient_intensity,
+            ambient_mode = r.environment_settings.ambient_mode,
         }
 
         data.draw_textures[data.draw_count] = scene.materials[i].texture

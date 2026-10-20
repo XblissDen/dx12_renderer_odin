@@ -108,7 +108,13 @@ SceneConstants :: struct #align(256) {
     environment_intensity: f32,
     environment_sin, environment_cos: f32,
     sun_view_projection : alg.Matrix4f32,
+    ambient_color: [3]f32,
+    ambient_intensity: f32,
+    ambient_mode: AmbientLightingMode,
+    _lighting_pad: [3]f32,
 }
+
+#assert(size_of(SceneConstants) == 512)
 
 PostConstants :: struct #align(256) {
     exposure: f32,
@@ -128,7 +134,11 @@ SkyConstants :: struct #align(256) {
     background_brightness: f32,
     environment_sin, environment_cos: f32,
     _pad1: [2]f32,
+    background_color: [3]f32,
+    background_mode: BackgroundMode,
 }
+
+#assert(size_of(SkyConstants) == 256)
 
 PrefilterConstants :: struct #align(256) {
     roughness: f32,
@@ -210,8 +220,9 @@ Renderer :: struct {
 
     environment_texture: ^d3d12.IResource,
     environment_settings: EnvironmentSettings,
-    environment_pending: EnvironmentHandle,
+    environment_pending: Maybe(EnvironmentSettings),
     environment_status: string,
+    environment_loaded_asset, environment_filtered_asset: EnvironmentHandle,
     sky_pipeline_state: ^d3d12.IPipelineState,
 
     sky_constant_buffer: ^d3d12.IResource,
@@ -1199,6 +1210,19 @@ renderer_load_textures :: proc(){
     r.environment_srv_index = renderer_alloc_srv()
     r.irradiance_srv_index = renderer_alloc_srv()
     r.prefilter_srv_index = renderer_alloc_srv()
+    // These slots stay valid before an HDRI is loaded or its IBL maps are baked.
+    null_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
+        Format = .R16G16B16A16_FLOAT, ViewDimension = .TEXTURE2D,
+        Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
+        Texture2D = {MipLevels = 1},
+    }
+    environment_slots := [3]u32{r.environment_srv_index, r.irradiance_srv_index, r.prefilter_srv_index}
+    for index in environment_slots {
+        srv: d3d12.CPU_DESCRIPTOR_HANDLE
+        r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv)
+        srv.ptr += uint(index) * uint(r.srv_descriptor_size)
+        r.device->CreateShaderResourceView(nil, &null_desc, srv)
+    }
     r.textures = make([]GpuTexture, len(g_assets.textures))
     for i in 1..<len(g_assets.textures) {
         r.textures[i].srv_index = renderer_alloc_srv()
@@ -1552,18 +1576,18 @@ renderer_destroy :: proc(){
     r.timestamp_readback->Release()
     r.timestamp_heap->Release()
 
-    r.environment_texture->Release()
+    if r.environment_texture != nil do r.environment_texture->Release()
     r.sky_pipeline_state->Release()
     r.sky_constant_buffer->Release()
 
-    r.irradiance_texture->Release()
-    r.irradiance_rtv_heap->Release()
+    if r.irradiance_texture != nil do r.irradiance_texture->Release()
+    if r.irradiance_rtv_heap != nil do r.irradiance_rtv_heap->Release()
     r.irradiance_pipeline_state->Release()
 
-    r.prefilter_texture->Release()
-    r.prefilter_rtv_heap->Release()
+    if r.prefilter_texture != nil do r.prefilter_texture->Release()
+    if r.prefilter_rtv_heap != nil do r.prefilter_rtv_heap->Release()
     r.prefilter_pipeline_state->Release()
-    r.prefilter_constant_buffer->Release()
+    if r.prefilter_constant_buffer != nil do r.prefilter_constant_buffer->Release()
 
     r.device->Release()
 }

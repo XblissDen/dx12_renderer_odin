@@ -26,12 +26,24 @@ to the desired environment ID to change the startup default.
 If `assets.json` is missing, startup creates a base catalog with the starter
 meshes/textures and both environments listed above, then loads it normally.
 Additional assets can be registered through the editor's import panel.
+If the default HDR file is unavailable, startup uses ambient-color lighting and
+a solid background instead.
 
 ## Debug UI
 
 The **Renderer controls** panel has exposure/bloom sliders, FPS, wall-clock frame
 time, and all six GPU-pass timings. Changes reach the post-process constants in
 the same frame. The final GPU timing includes tone mapping and the UI draw.
+
+- **Lighting mode**: choose HDRI lighting or an ambient color/intensity. Ambient
+  color lights both diffuse and specular materials; zero intensity gives direct
+  sun/point lighting only.
+- **Background**: independently choose the HDRI panorama or a solid color, with
+  its own brightness. It does not change the lighting on scene geometry.
+- HDR files load only when lighting or the background uses HDRI. Lighting maps
+  are filtered only when HDRI lighting needs them; switching back reuses them.
+- **Save Scene / Load Scene** preserves both modes and their settings, including
+  the inactive HDRI/color controls. Older scenes retain HDRI lighting/backgrounds.
 
 - **L**: release/capture the mouse. Release it to interact with the panel;
   capture it for the existing WASD/mouse camera controls.

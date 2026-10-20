@@ -7,7 +7,7 @@ import "core:strings"
 import alg "core:math/linalg"
 
 SCENE_FILE_PATH :: "scene.json"
-SCENE_FILE_VERSION :: 4
+SCENE_FILE_VERSION :: 5
 
 ScenePostSettings :: struct{
     exposure: f32,
@@ -252,7 +252,18 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
         return false, "Invalid post-process settings."
     }
     environment, has_environment := file.environment.(EnvironmentSettings)
-    if !has_environment do environment = renderer_default_environment_settings()
+    defaults := renderer_default_environment_settings()
+    if !has_environment {
+        environment = defaults
+    } else if header.version <= 4 {
+        // Older environment settings always used HDRI lighting/backgrounds.
+        // Seed the inactive color controls so switching modes is useful too.
+        environment.ambient_mode = .HDRI
+        environment.background_mode = .HDRI
+        environment.ambient_color = defaults.ambient_color
+        environment.ambient_intensity = defaults.ambient_intensity
+        environment.background_color = defaults.background_color
+    }
     if !renderer_environment_settings_valid(environment) do return false, "Invalid environment settings."
 
     for i in 0..<file.scene.entity_count{
@@ -269,7 +280,7 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
 
     // Transfer ownership of the new allocations to the active scene.
     if error := renderer_set_environment(environment); error != "" do return false, error
-    g_renderer.environment_pending = 0
+    g_renderer.environment_pending = nil
     g_renderer.environment_status = ""
     scene_file_destroy()
     g_scene_file_arena = arena

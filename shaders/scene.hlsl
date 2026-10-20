@@ -37,6 +37,11 @@ cbuffer SceneConstants : register(b0)
     float environment_sin;
     float environment_cos;
     float4x4 sun_view_projection;
+
+    float3 ambient_color;
+    float ambient_intensity;
+    uint ambient_mode;
+    float3 _lighting_pad;
 };
 
 Texture2D    g_texture : register(t0);
@@ -253,16 +258,31 @@ float4 PSMain(PSInput input) : SV_TARGET
     float3 V = normalize(view_position - input.world_pos);
     float3 sun_L = normalize(-sun_direction);
 
-    // indirect/environment lighting.
-    float3 environment_normal = EnvironmentDirection(N);
-    float2 normal_uv = float2(
-        atan2(environment_normal.z, environment_normal.x) / (2.0f * PI) + 0.5f,
-        acos(clamp(environment_normal.y, -1.0f, 1.0f)) / PI
-    );
+    // A constant-color environment supplies both diffuse and specular radiance,
+    // keeping metals illuminated even without a panorama.
+    float3 incoming_diffuse = ambient_color * ambient_intensity;
+    float3 prefiltered_color = incoming_diffuse;
+    [branch]
+    if (ambient_mode == 0u) // HDRI
+    {
+        float3 environment_normal = EnvironmentDirection(N);
+        float2 normal_uv = float2(
+            atan2(environment_normal.z, environment_normal.x) / (2.0f * PI) + 0.5f,
+            acos(clamp(environment_normal.y, -1.0f, 1.0f)) / PI
+        );
+        incoming_diffuse = g_irradiance.SampleLevel(
+            g_environment_sampler, normal_uv, 0
+        ).rgb * environment_intensity;
 
-    float3 incoming_diffuse = g_irradiance.SampleLevel(
-        g_environment_sampler, normal_uv, 0
-    ).rgb;
+        float3 reflection = EnvironmentDirection(reflect(-V, N));
+        float2 reflection_uv = float2(
+            atan2(reflection.z, reflection.x) / (2.0f * PI) + 0.5f,
+            acos(clamp(reflection.y, -1.0f, 1.0f)) / PI
+        );
+        prefiltered_color = g_prefiltered_environment.SampleLevel(
+            g_environment_sampler, reflection_uv, material_roughness * 4.0f
+        ).rgb * environment_intensity;
+    }
 
     float3 ambient_F0 = lerp(
         float3(0.04f, 0.04f, 0.04f),
@@ -277,21 +297,6 @@ float4 PSMain(PSInput input) : SV_TARGET
 
     float3 result = ambient_kD * albedo * incoming_diffuse;
 
-    // sample reflections by roughness
-    float3 reflection = EnvironmentDirection(reflect(-V, N));
-
-    float2 reflection_uv = float2(
-        atan2(reflection.z, reflection.x) /
-            (2.0f * 3.14159265f) + 0.5f,
-        acos(clamp(reflection.y, -1.0f, 1.0f)) / 3.14159265f
-    );
-
-    float3 prefiltered_color = g_prefiltered_environment.SampleLevel(
-        g_environment_sampler,
-        reflection_uv,
-        material_roughness * 4.0f
-    ).rgb;
-
     float2 environment_brdf = EnvBRDFApprox(
         max(dot(N, V), 0.0f),
         material_roughness
@@ -299,7 +304,6 @@ float4 PSMain(PSInput input) : SV_TARGET
 
     result += prefiltered_color *
             (ambient_F0 * environment_brdf.x + environment_brdf.y);
-    result *= environment_intensity;
 
 
     float sun_visibility = 1.0f;
