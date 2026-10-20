@@ -11,6 +11,7 @@ import "core:image/png"
 
 MeshHandle :: distinct u32
 TextureHandle :: distinct u32
+EnvironmentHandle :: distinct u32
 TextureUsage :: enum {albedo, normal, roughness, metallic, data}
 TextureSource :: enum {file, checkerboard, solid}
 MeshImport :: struct {flip_v: bool}
@@ -34,25 +35,232 @@ TextureDesc :: struct {
     width, height, tile_size: u32,
     color: [4]u8,
 }
-AssetManifest :: struct {version: u32, models: []MeshDesc, textures: []TextureDesc}
+EnvironmentDesc :: struct {id, name, path: string}
+EnvironmentAsset :: struct {desc: EnvironmentDesc, label: cstring}
+AssetManifest :: struct {
+    version: u32,
+    models: []MeshDesc,
+    textures: []TextureDesc,
+    environments: []EnvironmentDesc,
+    default_environment: string,
+}
 MeshAsset :: struct {desc: MeshDesc, label: cstring, data: MeshData, bounds: MeshBounds, material: Material}
 TextureAsset :: struct {desc: TextureDesc, label: cstring, hidden: bool}
 AssetRegistry :: struct {
     arena: mem.Dynamic_Arena,
     active: bool,
+    catalog_path, catalog_text: string,
+    import_arenas: [dynamic]mem.Dynamic_Arena,
     meshes: [dynamic]MeshAsset,
     textures: [dynamic]TextureAsset,
+    environments: [dynamic]EnvironmentAsset,
     mesh_ids: map[string]MeshHandle,
     texture_ids: map[string]TextureHandle,
+    environment_ids: map[string]EnvironmentHandle,
+    default_environment: EnvironmentHandle,
     white, flat_normal, one: TextureHandle,
 }
 g_assets: AssetRegistry
+
+AssetImportRequest :: struct {
+    model: bool,
+    path, name: string,
+    usage: TextureUsage,
+    flip_v, flip_green: bool,
+    material: AssetMaterial,
+}
+
+assets_clone_import :: proc(value: $T, allocator: mem.Allocator) -> T {
+    bytes, error := json.marshal(value, {use_enum_names = true})
+    assert(error == nil)
+    defer delete(bytes)
+    result: T
+    assert(json.unmarshal(bytes, &result, allocator = allocator) == nil)
+    return result
+}
+
+assets_prepare_catalog :: proc(model: ^MeshDesc = nil, texture: ^TextureDesc = nil) -> (path, contents: string, ok: bool) {
+    manifest := AssetManifest{version = 1}
+    models := make([dynamic]MeshDesc, context.temp_allocator)
+    textures := make([dynamic]TextureDesc, context.temp_allocator)
+    environments := make([dynamic]EnvironmentDesc, context.temp_allocator)
+    for asset in g_assets.meshes[1:] do append(&models, asset.desc)
+    for asset in g_assets.textures[1:] {
+        if !asset.hidden do append(&textures, asset.desc)
+    }
+    if model != nil do append(&models, model^)
+    if texture != nil do append(&textures, texture^)
+    manifest.models, manifest.textures = models[:], textures[:]
+    for asset in g_assets.environments[1:] do append(&environments, asset.desc)
+    manifest.environments = environments[:]
+    manifest.default_environment = assets_environment_id(g_assets.default_environment)
+    bytes, error := json.marshal(manifest, {
+        pretty = true, use_spaces = true, spaces = 2, use_enum_names = true,
+    }, context.temp_allocator)
+    if error != nil do return "", "", false
+    contents = string(bytes)
+    directory := os.dir(g_assets.catalog_path)
+    if directory == "" do directory = "."
+    file, file_error := os.create_temp_file(directory, "assets-*.tmp")
+    if file_error != nil do return "", "", false
+    path = strings.clone(os.name(file), context.temp_allocator) or_else panic("Temporary path allocation failed")
+    count, write_error := os.write(file, bytes)
+    sync_error := os.sync(file)
+    close_error := os.close(file)
+    ok = write_error == nil && sync_error == nil && close_error == nil && count == len(bytes)
+    if !ok do os.remove(path)
+    return
+}
+
+assets_import_id :: proc(source: string, model: bool, usage: TextureUsage) -> (id, destination: string) {
+    slug := make([dynamic]u8, context.temp_allocator)
+    for byte in transmute([]u8)os.stem(source) {
+        c := byte
+        if c >= 'A' && c <= 'Z' do c += 'a' - 'A'
+        valid := (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-'
+        append(&slug, c if valid else u8('_'))
+    }
+    if len(slug) == 0 do append(&slug, 'a')
+    prefix := "model" if model else fmt.tprintf("texture.%v", usage)
+    directory := "models/imported" if model else "textures/imported"
+    extension := ".obj" if model else ".png"
+    for number := 0; ; number += 1 {
+        suffix := "" if number == 0 else fmt.tprintf(".%d", number)
+        id = fmt.tprintf("%s.%s%s", prefix, string(slug[:]), suffix)
+        destination = fmt.tprintf("%s/%s%s", directory, id, extension)
+        if assets_mesh(id) == 0 && assets_texture(id) == 0 && !os.exists(destination) do return
+    }
+}
+
+// Process imports between UI construction and renderer_begin_frame.
+assets_import :: proc(request: AssetImportRequest) -> (model: MeshHandle, texture: TextureHandle, message: string) {
+    if request.path == "" do return 0, 0, "Choose a source file."
+    extension := ".obj" if request.model else ".png"
+    if !strings.equal_fold(os.ext(request.path), extension) do return 0, 0, "Choose an OBJ model or PNG texture."
+    if !request.model && g_renderer.srv_next >= SRV_HEAP_CAPACITY do return 0, 0, "The texture descriptor heap is full."
+
+    scratch, owner: mem.Dynamic_Arena
+    mem.dynamic_arena_init(&scratch)
+    defer mem.dynamic_arena_destroy(&scratch)
+    context.temp_allocator = mem.dynamic_arena_allocator(&scratch)
+    mem.dynamic_arena_init(&owner)
+    committed := false
+    defer if !committed do mem.dynamic_arena_destroy(&owner)
+    allocator := mem.dynamic_arena_allocator(&owner)
+    id, destination := assets_import_id(request.path, request.model, request.usage)
+    if os.make_directory_all(os.dir(destination)) != nil do return 0, 0, "Cannot create the project import folder."
+    defer if !committed do os.remove(destination)
+    if os.copy_file(destination, request.path) != nil do return 0, 0, "Could not copy the source file into the project."
+    name := strings.trim_space(request.name)
+    if name == "" do name = os.stem(request.path)
+
+    mesh_desc: MeshDesc
+    texture_desc: TextureDesc
+    mesh_data: MeshData
+    gpu_mesh: GpuMesh
+    gpu_texture: GpuTexture
+    meshes: []GpuMesh
+    textures: []GpuTexture
+    defer if !committed {
+        delete(mesh_data.vertices)
+        delete(mesh_data.indices)
+        if gpu_mesh.vertex_buffer != nil do gpu_mesh.vertex_buffer->Release()
+        if gpu_mesh.index_buffer != nil do gpu_mesh.index_buffer->Release()
+        if gpu_texture.resource != nil do gpu_texture.resource->Release()
+        delete(meshes)
+        delete(textures)
+    }
+
+    pixels: []u8
+    width, height: u32
+    bounds: MeshBounds
+    material: Material
+    if request.model {
+        mesh_desc = assets_clone_import(MeshDesc{
+            id = id, name = name, path = destination,
+            settings = {flip_v = request.flip_v}, material = request.material,
+        }, allocator)
+        loaded: bool
+        mesh_data, loaded = mesh_load_obj(destination, flip_v = request.flip_v)
+        if !loaded do return 0, 0, "Invalid or empty OBJ geometry."
+        bounds = mesh_compute_bounds(mesh_data)
+        material_ok: bool
+        material, material_ok = assets_material(mesh_desc.material)
+        if !material_ok do return 0, 0, "Invalid default material references."
+    } else {
+        texture_desc = assets_clone_import(TextureDesc{
+            id = id, name = name, path = destination, usage = request.usage,
+            settings = {flip_green = request.flip_green && request.usage == .normal},
+        }, allocator)
+        pixels, width, height, message = assets_try_texture_pixels(texture_desc, context.temp_allocator)
+        if message != "" do return 0, 0, message
+    }
+
+    catalog_tmp, catalog_contents: string
+    prepared: bool
+    if request.model {
+        catalog_tmp, catalog_contents, prepared = assets_prepare_catalog(model = &mesh_desc)
+    } else {
+        catalog_tmp, catalog_contents, prepared = assets_prepare_catalog(texture = &texture_desc)
+    }
+    if !prepared do return 0, 0, "Could not write the updated asset catalog."
+    defer os.remove(catalog_tmp)
+
+    // Startup uploads reuse allocator 0; drain prior frame work before using it.
+    renderer_wait_for_gpu()
+    if request.model {
+        if renderer_upload_mesh(&gpu_mesh, mesh_data) < 0 do return 0, 0, "GPU model upload failed."
+        meshes = make([]GpuMesh, len(g_renderer.meshes) + 1)
+        copy(meshes, g_renderer.meshes)
+        meshes[len(meshes) - 1] = gpu_mesh
+    } else {
+        gpu_texture.srv_index = g_renderer.srv_next
+        if renderer_upload_texture(&gpu_texture, texture_desc, pixels, width, height) < 0 do return 0, 0, "GPU texture upload failed."
+        textures = make([]GpuTexture, len(g_renderer.textures) + 1)
+        copy(textures, g_renderer.textures)
+        textures[len(textures) - 1] = gpu_texture
+    }
+
+    label := strings.clone_to_cstring(name, allocator) or_else panic("Asset label allocation failed")
+    current, read_error := os.read_entire_file(g_assets.catalog_path, context.temp_allocator)
+    if read_error != nil || string(current) != g_assets.catalog_text do return 0, 0, "Catalog changed on disk. Restart to load those edits before importing."
+    saved_text := strings.clone(catalog_contents) or_else panic("Catalog snapshot allocation failed")
+    defer if !committed do delete(saved_text)
+    if os.rename(catalog_tmp, g_assets.catalog_path) != nil do return 0, 0, "Cannot replace assets.json; check whether it is writable."
+
+    if request.model {
+        model = MeshHandle(len(g_assets.meshes))
+        append(&g_assets.meshes, MeshAsset{
+            desc = mesh_desc, label = label, data = mesh_data, bounds = bounds, material = material,
+        })
+        g_assets.mesh_ids[mesh_desc.id] = model
+        delete(g_renderer.meshes)
+        g_renderer.meshes = meshes
+    } else {
+        texture = TextureHandle(len(g_assets.textures))
+        append(&g_assets.textures, TextureAsset{desc = texture_desc, label = label})
+        g_assets.texture_ids[texture_desc.id] = texture
+        delete(g_renderer.textures)
+        g_renderer.textures = textures
+        g_renderer.srv_next += 1
+    }
+    append(&g_assets.import_arenas, owner)
+    delete(g_assets.catalog_text)
+    g_assets.catalog_text = saved_text
+    committed = true
+    return model, texture, ""
+}
 
 assets_mesh_valid :: proc(h: MeshHandle) -> bool {return h != 0 && int(h) < len(g_assets.meshes)}
 assets_texture_valid :: proc(h: TextureHandle) -> bool {return h != 0 && int(h) < len(g_assets.textures)}
 assets_optional_texture_valid :: proc(h: TextureHandle) -> bool {return h == 0 || assets_texture_valid(h)}
 assets_mesh :: proc(id: string) -> MeshHandle {return g_assets.mesh_ids[id]}
 assets_texture :: proc(id: string) -> TextureHandle {return g_assets.texture_ids[id]}
+assets_environment :: proc(id: string) -> EnvironmentHandle {return g_assets.environment_ids[id]}
+assets_environment_valid :: proc(h: EnvironmentHandle) -> bool {return h != 0 && int(h) < len(g_assets.environments)}
+assets_environment_id :: proc(h: EnvironmentHandle) -> string {
+    return g_assets.environments[h].desc.id if assets_environment_valid(h) else ""
+}
 assets_mesh_id :: proc(h: MeshHandle) -> string {return g_assets.meshes[h].desc.id if assets_mesh_valid(h) else ""}
 assets_texture_id :: proc(h: TextureHandle) -> string {return g_assets.textures[h].desc.id if assets_texture_valid(h) else ""}
 assets_texture_usage :: proc(h: TextureHandle, usage: TextureUsage) -> bool {
@@ -120,9 +328,14 @@ assets_destroy :: proc() {
     }
     delete(g_assets.meshes)
     delete(g_assets.textures)
+    delete(g_assets.environments)
     delete(g_assets.mesh_ids)
     delete(g_assets.texture_ids)
+    delete(g_assets.environment_ids)
     if g_assets.active do mem.dynamic_arena_destroy(&g_assets.arena)
+    for &arena in g_assets.import_arenas do mem.dynamic_arena_destroy(&arena)
+    delete(g_assets.import_arenas)
+    delete(g_assets.catalog_text)
     g_assets = {}
     delete(g_asset_marshalers)
     delete(g_asset_unmarshalers)
@@ -136,8 +349,10 @@ assets_init :: proc(path: string) -> (message: string) {
     g_assets.active = true
     defer if message != "" do assets_destroy()
     allocator := mem.dynamic_arena_allocator(&g_assets.arena)
+    g_assets.catalog_path = strings.clone(path, allocator) or_else panic("Catalog path allocation failed")
     data, error := os.read_entire_file(path, context.temp_allocator)
     if error != nil do return "Cannot read asset catalog."
+    g_assets.catalog_text = strings.clone(string(data)) or_else panic("Catalog snapshot allocation failed")
     if !json.is_valid(data, .JSON, true) do return "Invalid asset catalog JSON."
     manifest: AssetManifest
     decode_error := json.unmarshal(data, &manifest, allocator = allocator)
@@ -147,6 +362,23 @@ assets_init :: proc(path: string) -> (message: string) {
     }
     append(&g_assets.meshes, MeshAsset{}) // Zero is an invalid handle.
     append(&g_assets.textures, TextureAsset{})
+    append(&g_assets.environments, EnvironmentAsset{})
+    for desc in manifest.environments {
+        if desc.id == "" || desc.path == "" || assets_environment(desc.id) != 0 {
+            return "Empty/duplicate environment ID or missing HDR path."
+        }
+        h := EnvironmentHandle(len(g_assets.environments))
+        append(&g_assets.environments, EnvironmentAsset{desc = desc, label = assets_label(desc.name, desc.id)})
+        g_assets.environment_ids[desc.id] = h
+    }
+    if len(g_assets.environments) == 1 {
+        // Compatibility with catalogs created before environments were registered.
+        desc := EnvironmentDesc{id = "autumn_field_puresky", name = "Autumn Field Pure Sky", path = "textures/environments/autumn_field_puresky_4k.hdr"}
+        append(&g_assets.environments, EnvironmentAsset{desc = desc, label = assets_label(desc.name, desc.id)})
+        g_assets.environment_ids[desc.id] = EnvironmentHandle(1)
+    }
+    g_assets.default_environment = assets_environment(manifest.default_environment) if manifest.default_environment != "" else EnvironmentHandle(1)
+    if !assets_environment_valid(g_assets.default_environment) do return "Unknown default environment ID."
     g_assets.white = assets_register_texture({id = "builtin.white", usage = .albedo, source = .solid, width = 1, height = 1, color = {255,255,255,255}}, true)
     g_assets.flat_normal = assets_register_texture({id = "builtin.normal", usage = .normal, source = .solid, width = 1, height = 1, color = {128,128,255,255}}, true)
     g_assets.one = assets_register_texture({id = "builtin.one", usage = .data, source = .solid, width = 1, height = 1, color = {255,255,255,255}}, true)
@@ -180,7 +412,8 @@ assets_init :: proc(path: string) -> (message: string) {
 }
 
 // Return owned RGBA8 pixels to the startup uploader, including generated assets.
-assets_texture_pixels :: proc(desc: TextureDesc, allocator := context.allocator) -> (pixels: []u8, width, height: u32) {
+assets_try_texture_pixels :: proc(desc: TextureDesc, allocator := context.allocator) ->
+(pixels: []u8, width, height: u32, message: string) {
     if desc.source != .file {
         width, height = desc.width, desc.height
         pixels = make([]u8, int(width * height) * 4, allocator)
@@ -195,10 +428,17 @@ assets_texture_pixels :: proc(desc: TextureDesc, allocator := context.allocator)
         }
         return
     }
+
     img, err := image.load_from_file(desc.path, {.alpha_add_if_missing})
-    if err != nil do fmt.panicf("Texture import failed: %s: %v", desc.path, err)
+    if err != nil {
+        return nil, 0, 0, "Could not decode the texture. Choose a valid PNG."
+    }
     defer image.destroy(img)
-    assert(img.channels == 4 && (img.depth == 8 || img.depth == 16))
+
+    if img.channels != 4 || (img.depth != 8 && img.depth != 16) {
+        return nil, 0, 0, "Unsupported texture pixel format."
+    }
+
     width, height = u32(img.width), u32(img.height)
     pixels = make([]u8, int(width * height) * 4, allocator)
     if img.depth == 16 {
@@ -226,8 +466,10 @@ assets_json_init :: proc() {
     }
     g_asset_marshalers[typeid_of(MeshHandle)] = assets_marshal_mesh
     g_asset_marshalers[typeid_of(TextureHandle)] = assets_marshal_texture
+    g_asset_marshalers[typeid_of(EnvironmentHandle)] = assets_marshal_environment
     g_asset_unmarshalers[typeid_of(MeshHandle)] = assets_unmarshal_mesh
     g_asset_unmarshalers[typeid_of(TextureHandle)] = assets_unmarshal_texture
+    g_asset_unmarshalers[typeid_of(EnvironmentHandle)] = assets_unmarshal_environment
 }
 assets_marshal_mesh :: proc(w: io.Writer, value: any, options: ^json.Marshal_Options) -> json.Marshal_Error {
     h := value.(MeshHandle)
@@ -275,5 +517,32 @@ assets_unmarshal_texture :: proc(parser: ^json.Parser, value: any) -> json.Unmar
     handle := assets_texture(id)
     if id != "" && handle == 0 do return json.Unmarshal_Data_Error.Invalid_Data
     (^TextureHandle)(value.data)^ = handle
+    return nil
+}
+
+assets_texture_pixels :: proc(
+    desc: TextureDesc,
+    allocator := context.allocator,
+) -> (pixels: []u8, width, height: u32) {
+    data, w, h, message := assets_try_texture_pixels(desc, allocator)
+    if message != "" {
+        panic(message)
+    }
+    return data, w, h
+}
+
+assets_marshal_environment :: proc(w: io.Writer, value: any, options: ^json.Marshal_Options) -> json.Marshal_Error {
+    h := value.(EnvironmentHandle)
+    if h != 0 && !assets_environment_valid(h) do return json.Marshal_Data_Error.Unsupported_Type
+    return json.marshal_to_writer(w, assets_environment_id(h), options)
+}
+
+assets_unmarshal_environment :: proc(parser: ^json.Parser, value: any) -> json.Unmarshal_Error {
+    token := json.parse_value(parser) or_return
+    id, ok := token.(string)
+    if !ok do return json.Unmarshal_Data_Error.Invalid_Data
+    handle := assets_environment(id)
+    if id != "" && handle == 0 do return json.Unmarshal_Data_Error.Invalid_Data
+    (^EnvironmentHandle)(value.data)^ = handle
     return nil
 }

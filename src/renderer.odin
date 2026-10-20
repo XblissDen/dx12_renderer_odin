@@ -22,8 +22,8 @@ BLOOM_TARGET_COUNT :: 2
 IRRADIANCE_WIDTH :: 64
 IRRADIANCE_HEIGHT :: 32
 
-PREFILTER_WIDTH :: 512
-PREFILTER_HEIGHT :: 256
+PREFILTER_WIDTH :: 1024
+PREFILTER_HEIGHT :: 512
 PREFILTER_MIP_COUNT :: 5
 
 GPU_PASS_COUNT :: 6
@@ -105,7 +105,8 @@ SceneConstants :: struct #align(256) {
     sun_intensity: f32,
 
     use_metallic_map: u32,
-    _sun_matrix_pad: [3]f32,
+    environment_intensity: f32,
+    environment_sin, environment_cos: f32,
     sun_view_projection : alg.Matrix4f32,
 }
 
@@ -124,7 +125,9 @@ SkyConstants :: struct #align(256) {
     aspect: f32,
 
     up: [3]f32,
-    _pad0: f32,
+    background_brightness: f32,
+    environment_sin, environment_cos: f32,
+    _pad1: [2]f32,
 }
 
 PrefilterConstants :: struct #align(256) {
@@ -206,6 +209,9 @@ Renderer :: struct {
     culling_stats: CullingStats,
 
     environment_texture: ^d3d12.IResource,
+    environment_settings: EnvironmentSettings,
+    environment_pending: EnvironmentHandle,
+    environment_status: string,
     sky_pipeline_state: ^d3d12.IPipelineState,
 
     sky_constant_buffer: ^d3d12.IResource,
@@ -544,6 +550,10 @@ renderer_load_assets :: proc(){
         ShaderVisibility = .PIXEL,
     }
 
+    environment_sampler := static_sampler
+    environment_sampler.ShaderRegister = 3
+    environment_sampler.AddressV = .CLAMP
+
     params := []d3d12.ROOT_PARAMETER{
         cbv_param,
         srv_param,
@@ -562,6 +572,7 @@ renderer_load_assets :: proc(){
         static_sampler,
         shadow_sampler,
         material_sampler,
+        environment_sampler,
     }
     rs_desc := d3d12.ROOT_SIGNATURE_DESC{
         NumParameters = u32(len(params)),
@@ -945,7 +956,10 @@ renderer_load_assets :: proc(){
 
     r.meshes = make([]GpuMesh, len(g_assets.meshes))
     for i in 1..<len(g_assets.meshes) {
-        renderer_upload_mesh(&r.meshes[i], g_assets.meshes[i].data)
+        dx_check(renderer_upload_mesh(
+            &r.meshes[i],
+            g_assets.meshes[i].data,
+        ))
     }
 
     // CONSTANT BUFFER
@@ -964,8 +978,14 @@ renderer_load_assets :: proc(){
     }
 }
 
-renderer_upload_mesh :: proc(gpu: ^GpuMesh, mesh: MeshData) {
+renderer_upload_mesh :: proc(gpu: ^GpuMesh, mesh: MeshData) -> (hr: win32.HRESULT) {
     r := &g_renderer
+
+    defer if hr < 0 {
+        if gpu.vertex_buffer != nil do gpu.vertex_buffer->Release()
+        if gpu.index_buffer != nil do gpu.index_buffer->Release()
+        gpu^ = {}
+    }
 
     vb_size := u64(len(mesh.vertices) * size_of(Vertex))
 
@@ -980,19 +1000,21 @@ renderer_upload_mesh :: proc(gpu: ^GpuMesh, mesh: MeshData) {
         Layout = .ROW_MAJOR,
     }
 
-    dx_check(r.device->CreateCommittedResource(
+    hr = r.device->CreateCommittedResource(
         &heap_props,
         {},
         &vb_desc,
-        {.VERTEX_AND_CONSTANT_BUFFER, .INDEX_BUFFER},
+        d3d12.RESOURCE_STATE_GENERIC_READ,
         nil,
         d3d12.IResource_UUID,
         (^rawptr)(&gpu.vertex_buffer),
-    ))
+    )
+    if hr < 0 do return
 
     mapped: rawptr
     write_range := d3d12.RANGE{Begin = 0, End = 0}
-    dx_check(gpu.vertex_buffer->Map(0, &write_range, &mapped))
+    hr = gpu.vertex_buffer->Map(0, &write_range, &mapped)
+    if hr < 0 do return
     runtime.mem_copy(mapped, raw_data(mesh.vertices), int(vb_size))
     gpu.vertex_buffer->Unmap(0, nil)
 
@@ -1013,17 +1035,19 @@ renderer_upload_mesh :: proc(gpu: ^GpuMesh, mesh: MeshData) {
         Layout = .ROW_MAJOR,
     }
 
-    dx_check(r.device->CreateCommittedResource(
+    hr = r.device->CreateCommittedResource(
         &heap_props,
         {},
         &ib_desc,
-        {.VERTEX_AND_CONSTANT_BUFFER},
+        d3d12.RESOURCE_STATE_GENERIC_READ,
         nil,
         d3d12.IResource_UUID,
         (^rawptr)(&gpu.index_buffer),
-    ))
+    )
+    if hr < 0 do return
 
-    dx_check(gpu.index_buffer->Map(0, &write_range, &mapped))
+    hr = gpu.index_buffer->Map(0, &write_range, &mapped)
+    if hr < 0 do return
     runtime.mem_copy(mapped, raw_data(mesh.indices), int(ib_size))
     gpu.index_buffer->Unmap(0, nil)
 
@@ -1034,6 +1058,7 @@ renderer_upload_mesh :: proc(gpu: ^GpuMesh, mesh: MeshData) {
     }
 
     gpu.index_count = u32(len(mesh.indices))
+    return
 }
 
 renderer_create_depth_buffer :: proc(){
@@ -1181,17 +1206,39 @@ renderer_load_textures :: proc(){
     }
 }
 
-renderer_load_texture :: proc(index: TextureHandle){
+renderer_load_texture :: proc(index: TextureHandle) {
+    desc := g_assets.textures[index].desc
+    pixels, width, height := assets_texture_pixels(
+        desc, context.temp_allocator,
+    )
+    dx_check(renderer_upload_texture(
+        &g_renderer.textures[index],
+        desc,
+        pixels,
+        width,
+        height,
+    ))
+}
+
+renderer_upload_texture :: proc(
+    gpu: ^GpuTexture,
+    desc: TextureDesc,
+    pixels: []u8,
+    width32, height32: u32,
+) -> (hr: win32.HRESULT) {
     r := &g_renderer
 
-    desc := g_assets.textures[index].desc
+    defer if hr < 0 && gpu.resource != nil {
+        gpu.resource->Release()
+        gpu.resource = nil
+    }
+
+    width, height := u64(width32), u64(height32)
     is_normal_map := desc.usage == .normal
     is_linear_data := desc.usage != .albedo
-    pixels, width32, height32 := assets_texture_pixels(desc, context.temp_allocator)
-    width, height := u64(width32), u64(height32)
 
     mips := make([dynamic][]u8, context.temp_allocator)
-    append(&mips, pixels) // Level 0 belongs to img; do not free it here.
+    append(&mips, pixels)
 
     mip_width := u32(width)
     mip_height := u32(height)
@@ -1223,15 +1270,16 @@ renderer_load_texture :: proc(index: TextureHandle){
     }
 
     default_heap := d3d12.HEAP_PROPERTIES{ Type = .DEFAULT }
-    dx_check(r.device->CreateCommittedResource(
+    hr = r.device->CreateCommittedResource(
         &default_heap,
         {},
         &tex_desc,
         { .COPY_DEST },
         nil,
         d3d12.IResource_UUID,
-        (^rawptr)(&r.textures[index].resource),
-    ))
+        (^rawptr)(&gpu.resource),
+    )
+    if hr < 0 do return
 
     // UPLOAD BUFFER
     layouts := make(
@@ -1266,19 +1314,21 @@ renderer_load_texture :: proc(index: TextureHandle){
     }
 
     upload_buffer: ^d3d12.IResource
-    dx_check(r.device->CreateCommittedResource(
+    hr = r.device->CreateCommittedResource(
         &upload_heap,
         {},
         &upload_desc,
-        { .VERTEX_AND_CONSTANT_BUFFER },
+        d3d12.RESOURCE_STATE_GENERIC_READ,
         nil,
         d3d12.IResource_UUID,
         (^rawptr)(&upload_buffer),
-    ))
+    )
+    if hr < 0 do return
     defer upload_buffer->Release()
 
     mapped: rawptr
-    dx_check(upload_buffer->Map(0, nil, &mapped))
+    hr = upload_buffer->Map(0, nil, &mapped)
+    if hr < 0 do return
     for mip in 0..<len(mips) {
         layout := layouts[mip]
         source_address := uintptr(raw_data(mips[mip]))
@@ -1300,8 +1350,10 @@ renderer_load_texture :: proc(index: TextureHandle){
     }
     upload_buffer->Unmap(0, nil)
 
-    dx_check(r.command_allocators[0]->Reset())
-    dx_check(r.command_list->Reset(r.command_allocators[0], nil))
+    hr = r.command_allocators[0]->Reset()
+    if hr < 0 do return
+    hr = r.command_list->Reset(r.command_allocators[0], nil)
+    if hr < 0 do return
 
     for mip in 0..<len(mips) {
         src_location := d3d12.TEXTURE_COPY_LOCATION{
@@ -1311,7 +1363,7 @@ renderer_load_texture :: proc(index: TextureHandle){
         src_location.PlacedFootprint = layouts[mip]
 
         dst_location := d3d12.TEXTURE_COPY_LOCATION{
-            pResource = r.textures[index].resource,
+            pResource = gpu.resource,
             Type = .SUBRESOURCE_INDEX,
             SubresourceIndex = u32(mip),
         }
@@ -1324,14 +1376,15 @@ renderer_load_texture :: proc(index: TextureHandle){
     // Transition: COPY_DEST → SHADER_RESOURCE
     copy_barrier := d3d12.RESOURCE_BARRIER { Type = .TRANSITION }
     copy_barrier.Transition = {
-        pResource   = r.textures[index].resource,
+        pResource   = gpu.resource,
         StateBefore = { .COPY_DEST },
         StateAfter  = { .PIXEL_SHADER_RESOURCE },
         Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
     }
 
     r.command_list->ResourceBarrier(1, &copy_barrier)
-    dx_check(r.command_list->Close())
+    hr = r.command_list->Close()
+    if hr < 0 do return
 
     lists := []^d3d12.ICommandList{ r.command_list }
     r.command_queue->ExecuteCommandLists(u32(len(lists)), raw_data(lists))
@@ -1348,10 +1401,11 @@ renderer_load_texture :: proc(index: TextureHandle){
 
     srv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv_handle)
-    srv_handle.ptr += uint(r.textures[index].srv_index) * uint(r.srv_descriptor_size)
+    srv_handle.ptr += uint(gpu.srv_index) * uint(r.srv_descriptor_size)
 
-    r.device->CreateShaderResourceView(r.textures[index].resource, &srv_desc, srv_handle)
+    r.device->CreateShaderResourceView(gpu.resource, &srv_desc, srv_handle)
 
+    return
 }
 
 renderer_render_frame :: proc(scene: ^Scene) {

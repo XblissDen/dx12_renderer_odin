@@ -56,6 +56,10 @@ mesh_load_obj :: proc(
 
     out_vertices := make([dynamic]Vertex, allocator)
     out_indices := make([dynamic]u32, allocator)
+    defer if !ok {
+        delete(out_vertices)
+        delete(out_indices)
+    }
 
     Vertex_Key :: struct { pos_idx, tex_idx, norm_idx: int}
     vertex_cache := make(map[Vertex_Key]u32, context.temp_allocator)
@@ -72,20 +76,26 @@ mesh_load_obj :: proc(
 
         switch fields[0]{
             case "v":
-                x := strconv.parse_f32(fields[1]) or_else 0
-                y := strconv.parse_f32(fields[2]) or_else 0
-                z := strconv.parse_f32(fields[3]) or_else 0
+                if len(fields) < 4 do return {}, false
+                x, x_ok := strconv.parse_f32(fields[1])
+                y, y_ok := strconv.parse_f32(fields[2])
+                z, z_ok := strconv.parse_f32(fields[3])
+                if !x_ok || !y_ok || !z_ok || math.is_nan(x) || math.is_nan(y) || math.is_nan(z) || math.is_inf(x) || math.is_inf(y) || math.is_inf(z) do return {}, false
                 append(&positions, [3]f32{x, y, z})
 
             case "vn":
-                x := strconv.parse_f32(fields[1]) or_else 0
-                y := strconv.parse_f32(fields[2]) or_else 0
-                z := strconv.parse_f32(fields[3]) or_else 0
+                if len(fields) < 4 do return {}, false
+                x, x_ok := strconv.parse_f32(fields[1])
+                y, y_ok := strconv.parse_f32(fields[2])
+                z, z_ok := strconv.parse_f32(fields[3])
+                if !x_ok || !y_ok || !z_ok || math.is_nan(x) || math.is_nan(y) || math.is_nan(z) || math.is_inf(x) || math.is_inf(y) || math.is_inf(z) do return {}, false
                 append(&normals, [3]f32{x, y, z})
 
             case "vt":
-                u := strconv.parse_f32(fields[1]) or_else 0
-                v := strconv.parse_f32(fields[2]) or_else 0
+                if len(fields) < 3 do return {}, false
+                u, u_ok := strconv.parse_f32(fields[1])
+                v, v_ok := strconv.parse_f32(fields[2])
+                if !u_ok || !v_ok || math.is_nan(u) || math.is_nan(v) || math.is_inf(u) || math.is_inf(v) do return {}, false
                 if flip_v {
                     v = 1 - v
                 }
@@ -94,7 +104,19 @@ mesh_load_obj :: proc(
                 face_indices := make([dynamic]u32, context.temp_allocator)
 
                 for i in 1..<len(fields) {
-                    key := parse_face_vertex(fields[i])
+                    if fields[i][0] == '#' do break
+                    key, key_ok := parse_face_vertex(fields[i])
+                    if !key_ok do return {}, false
+                    key.pos_idx, key_ok = obj_resolve_index(key.pos_idx, len(positions))
+                    if !key_ok do return {}, false
+                    if key.tex_idx != 0 {
+                        key.tex_idx, key_ok = obj_resolve_index(key.tex_idx, len(texcoords))
+                        if !key_ok do return {}, false
+                    }
+                    if key.norm_idx != 0 {
+                        key.norm_idx, key_ok = obj_resolve_index(key.norm_idx, len(normals))
+                        if !key_ok do return {}, false
+                    }
 
                     if cached, found := vertex_cache[Vertex_Key(key)]; found {
                         append(&face_indices, cached)
@@ -122,6 +144,7 @@ mesh_load_obj :: proc(
                     }
                 }
 
+                if len(face_indices) < 3 do return {}, false
                 for i in 1..<len(face_indices) - 1 {
                     append(&out_indices, face_indices[0])
                     append(&out_indices, face_indices[i])
@@ -130,6 +153,7 @@ mesh_load_obj :: proc(
         }
     }
 
+    if len(out_vertices) == 0 || len(out_indices) == 0 do return {}, false
     mesh.vertices = out_vertices[:]
     mesh.indices  = out_indices[:]
     mesh_generate_tangents(mesh)
@@ -214,17 +238,26 @@ mesh_generate_tangents :: proc(mesh: MeshData) {
 }
 
 @(private)
-parse_face_vertex :: proc(s: string) -> (key: struct { pos_idx, tex_idx, norm_idx: int }) {
+parse_face_vertex :: proc(s: string) -> (key: struct { pos_idx, tex_idx, norm_idx: int }, ok: bool) {
     parts := strings.split(s, "/", context.temp_allocator)
 
-    key.pos_idx = strconv.parse_int(parts[0]) or_else 0
+    if len(parts) < 1 || len(parts) > 3 do return {}, false
+    key.pos_idx, ok = strconv.parse_int(parts[0])
+    if !ok || key.pos_idx == 0 do return {}, false
 
     if len(parts) > 1 && len(parts[1]) > 0 {
-        key.tex_idx = strconv.parse_int(parts[1]) or_else 0
+        key.tex_idx, ok = strconv.parse_int(parts[1])
+        if !ok || key.tex_idx == 0 do return {}, false
     }
     if len(parts) > 2 && len(parts[2]) > 0 {
-        key.norm_idx = strconv.parse_int(parts[2]) or_else 0
+        key.norm_idx, ok = strconv.parse_int(parts[2])
+        if !ok || key.norm_idx == 0 do return {}, false
     }
 
-    return
+    return key, true
+}
+
+obj_resolve_index :: proc(index, count: int) -> (int, bool) {
+    resolved := index if index > 0 else count + index + 1
+    return resolved, resolved > 0 && resolved <= count
 }

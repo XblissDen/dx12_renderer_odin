@@ -30,6 +30,8 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
     post := &r.post_cb_mapped_data[r.frame_slot]
     sky := &r.sky_cb_mapped_data[r.frame_slot]
     scene_cb_base := int(r.frame_slot) * MAX_ENTITIES
+    environment_sin := math.sin(math.to_radians(r.environment_settings.rotation_degrees))
+    environment_cos := math.cos(math.to_radians(r.environment_settings.rotation_degrees))
 
     post.exposure = r.post_exposure
     post.bloom_threshold = r.post_threshold
@@ -51,6 +53,9 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
     sky.up = up
     sky.tan_half_fov = math.tan(CAMERA_FOV_Y * 0.5)
     sky.aspect = f32(r.width) / f32(r.height)
+    sky.background_brightness = r.environment_settings.background_brightness
+    sky.environment_sin = environment_sin
+    sky.environment_cos = environment_cos
 
     view := camera_view_matrix(camera, camera_position)
     proj := camera_projection(camera, f32(r.width) / f32(r.height))
@@ -178,6 +183,9 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
             uv_scale = scene.materials[i].uv_scale,
             use_roughness_map = use_roughness_map,
             use_metallic_map = use_metallic_map,
+            environment_intensity = r.environment_settings.intensity,
+            environment_sin = environment_sin,
+            environment_cos = environment_cos,
         }
 
         data.draw_textures[data.draw_count] = scene.materials[i].texture

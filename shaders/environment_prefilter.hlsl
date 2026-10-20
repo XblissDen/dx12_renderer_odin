@@ -1,5 +1,5 @@
 Texture2D<float4> g_environment : register(t2);
-SamplerState g_sampler : register(s0);
+SamplerState g_sampler : register(s3);
 
 cbuffer PrefilterConstants : register(b3)
 {
@@ -34,11 +34,15 @@ float4 PSMain(VSOutput input) : SV_TARGET
         sin(theta) * sin(phi)
     );
 
-    // The smoothest mip is a direct reflection of the panorama.
+    uint source_width, source_height, source_mips;
+    g_environment.GetDimensions(0, source_width, source_height, source_mips);
+
+    // Downsample the mirror level with its output-pixel footprint too, rather
+    // than point-sampling a 4K sun into a lower-resolution reflection map.
     if (material_roughness < 0.001f)
     {
-        return g_environment.SampleLevel(
-            g_sampler, DirectionToUV(N), 0
+        return g_environment.SampleGrad(
+            g_sampler, input.uv, ddx(input.uv), ddy(input.uv)
         );
     }
 
@@ -54,12 +58,14 @@ float4 PSMain(VSOutput input) : SV_TARGET
     float a = max(material_roughness * material_roughness, 0.001f);
     float a2 = a * a;
 
-    // 16 × 8 samples, concentrated according to GGX roughness.
-    for (uint i = 0u; i < 128u; ++i)
+    const uint SAMPLE_COUNT = 1024u;
+    [loop]
+    for (uint i = 0u; i < SAMPLE_COUNT; ++i)
     {
+        // Hammersley samples cover the GGX lobe without the old 16 x 8 grid.
         float2 xi = float2(
-            (float(i & 15u) + 0.5f) / 16.0f,
-            (float(i >> 4) + 0.5f) / 8.0f
+            (float(i) + 0.5f) / float(SAMPLE_COUNT),
+            float(reversebits(i)) * 2.3283064365386963e-10f
         );
 
         float azimuth = 2.0f * PI * xi.x;
@@ -80,8 +86,27 @@ float4 PSMain(VSOutput input) : SV_TARGET
 
         if (weight > 0.0f)
         {
+            float NdotH = saturate(dot(N, H));
+            float VdotH = NdotH; // V = N for the split-sum prefilter.
+            float denominator = NdotH * NdotH * (a2 - 1.0f) + 1.0f;
+            float D = a2 / max(PI * denominator * denominator, 1.0e-10f);
+            float pdf = max(D * NdotH / max(4.0f * VdotH, 1.0e-6f), 1.0e-6f);
+
+            // A panorama texel's solid angle shrinks towards the poles.
+            float sin_theta_L = sqrt(saturate(1.0f - L.y * L.y));
+            float texel_solid_angle = (2.0f * PI * PI) *
+                max(sin_theta_L, sin(0.5f * PI / float(source_height))) /
+                (float(source_width) * float(source_height));
+            float sample_solid_angle = 1.0f / (float(SAMPLE_COUNT) * pdf);
+            // Overlap neighboring sample footprints to avoid resolving the
+            // finite sampling pattern around extremely concentrated lights.
+            float source_lod = clamp(
+                0.5f * log2(sample_solid_angle / texel_solid_angle) + 1.0f,
+                0.0f, float(source_mips - 1u)
+            );
+
             sum += g_environment.SampleLevel(
-                g_sampler, DirectionToUV(L), 0
+                g_sampler, DirectionToUV(L), source_lod
             ).rgb * weight;
             total_weight += weight;
         }

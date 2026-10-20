@@ -33,13 +33,16 @@ cbuffer SceneConstants : register(b0)
     float  sun_intensity;
 
     uint use_metallic_map;
-    float3 _sun_matrix_pad;
+    float environment_intensity;
+    float environment_sin;
+    float environment_cos;
     float4x4 sun_view_projection;
 };
 
 Texture2D    g_texture : register(t0);
 SamplerState g_sampler : register(s0);
 SamplerState g_material_sampler : register(s2);
+SamplerState g_environment_sampler : register(s3);
 Texture2D<float> g_shadow_map : register(t1);
 SamplerComparisonState g_shadow_sampler : register(s1);
 Texture2D<float4> g_irradiance : register(t3);
@@ -96,6 +99,16 @@ float4 VSShadow(VSInput input) : SV_POSITION
 }
 
 static const float PI = 3.14159265f;
+
+float3 EnvironmentDirection(float3 direction)
+{
+    // Inverse world Y rotation keeps lighting and the visible panorama aligned.
+    return float3(
+        environment_cos * direction.x - environment_sin * direction.z,
+        direction.y,
+        environment_sin * direction.x + environment_cos * direction.z
+    );
+}
 
 float3 FresnelSchlick(float cos_theta, float3 F0)
 {
@@ -167,6 +180,18 @@ float2 EnvBRDFApprox(float NdotV, float material_roughness)
     return max(float2(-1.04f, 1.04f) * a004 + r.zw, 0.0f);
 }
 
+float FilterSpecularRoughness(float material_roughness, float3 N)
+{
+    // Unresolved normal-map detail needs a wider specular lobe, not isolated
+    // subpixel glints. GGX alpha is perceptual roughness squared.
+    float3 normal_dx = ddx(N);
+    float3 normal_dy = ddy(N);
+    float variance = 0.5f * (dot(normal_dx, normal_dx) + dot(normal_dy, normal_dy));
+    float kernel = min(2.0f * variance, 0.18f);
+    float alpha = material_roughness * material_roughness;
+    return pow(saturate(alpha * alpha + kernel), 0.25f);
+}
+
 float4 PSMain(PSInput input) : SV_TARGET
 {
     if (unlit != 0)
@@ -224,17 +249,19 @@ float4 PSMain(PSInput input) : SV_TARGET
             N * tangent_normal.z
         );
     }
+    material_roughness = FilterSpecularRoughness(material_roughness, N);
     float3 V = normalize(view_position - input.world_pos);
     float3 sun_L = normalize(-sun_direction);
 
     // indirect/environment lighting.
+    float3 environment_normal = EnvironmentDirection(N);
     float2 normal_uv = float2(
-        atan2(N.z, N.x) / (2.0f * 3.14159265f) + 0.5f,
-        acos(clamp(N.y, -1.0f, 1.0f)) / 3.14159265f
+        atan2(environment_normal.z, environment_normal.x) / (2.0f * PI) + 0.5f,
+        acos(clamp(environment_normal.y, -1.0f, 1.0f)) / PI
     );
 
     float3 incoming_diffuse = g_irradiance.SampleLevel(
-        g_sampler, normal_uv, 0
+        g_environment_sampler, normal_uv, 0
     ).rgb;
 
     float3 ambient_F0 = lerp(
@@ -251,7 +278,7 @@ float4 PSMain(PSInput input) : SV_TARGET
     float3 result = ambient_kD * albedo * incoming_diffuse;
 
     // sample reflections by roughness
-    float3 reflection = reflect(-V, N);
+    float3 reflection = EnvironmentDirection(reflect(-V, N));
 
     float2 reflection_uv = float2(
         atan2(reflection.z, reflection.x) /
@@ -260,7 +287,7 @@ float4 PSMain(PSInput input) : SV_TARGET
     );
 
     float3 prefiltered_color = g_prefiltered_environment.SampleLevel(
-        g_sampler,
+        g_environment_sampler,
         reflection_uv,
         material_roughness * 4.0f
     ).rgb;
@@ -272,6 +299,7 @@ float4 PSMain(PSInput input) : SV_TARGET
 
     result += prefiltered_color *
             (ambient_F0 * environment_brdf.x + environment_brdf.y);
+    result *= environment_intensity;
 
 
     float sun_visibility = 1.0f;

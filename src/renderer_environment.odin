@@ -1,49 +1,122 @@
 package main
 
 import c "core:c"
-import "core:fmt"
+import "base:runtime"
+import "core:math"
+import "core:strings"
 import d3d12 "vendor:directx/d3d12"
 import stbi "vendor:stb/image"
 
-renderer_load_environment :: proc() {
+EnvironmentSettings :: struct {
+    asset: EnvironmentHandle,
+    intensity: f32,
+    rotation_degrees: f32,
+    background_brightness: f32,
+}
+
+renderer_default_environment_settings :: proc() -> EnvironmentSettings {
+    return {asset = g_assets.default_environment, intensity = 1, background_brightness = 1}
+}
+
+renderer_environment_settings_valid :: proc(settings: EnvironmentSettings) -> bool {
+    return assets_environment_valid(settings.asset) &&
+           settings.intensity >= 0 && settings.intensity <= 32 &&
+           settings.background_brightness >= 0 && settings.background_brightness <= 32 &&
+           !math.is_nan(settings.rotation_degrees) && !math.is_inf(settings.rotation_degrees)
+}
+
+renderer_set_environment :: proc(settings: EnvironmentSettings) -> string {
+    r := &g_renderer
+    if !renderer_environment_settings_valid(settings) do return "Invalid environment settings."
+    if r.irradiance_texture == nil || r.prefilter_texture == nil do return "Environment maps are not initialized."
+    if r.environment_texture == nil || r.environment_settings.asset != settings.asset {
+        error := renderer_load_environment(g_assets.environments[settings.asset].desc.path)
+        if error != "" do return error
+        renderer_generate_irradiance()
+        renderer_generate_prefiltered_environment()
+    }
+    r.environment_settings = settings
+    return ""
+}
+
+renderer_process_environment_change :: proc() {
+    r := &g_renderer
+    if r.environment_pending == 0 do return
+    settings := r.environment_settings
+    settings.asset = r.environment_pending
+    r.environment_pending = 0
+    r.environment_status = renderer_set_environment(settings)
+}
+
+renderer_load_environment :: proc(path: string) -> (message: string) {
     r := &g_renderer
 
     width, height, channels: c.int
     pixels := stbi.loadf(
-        "textures/environment_4k_2.hdr",
+        strings.clone_to_cstring(path, context.temp_allocator) or_else panic("Environment path allocation failed"),
         &width, &height, &channels,
         4, // Request RGBA floats.
     )
     if pixels == nil {
-        fmt.panicf("Failed to load environment HDR: %s",
-            stbi.failure_reason())
+        return "Could not decode the environment HDR file."
     }
     defer stbi.image_free(rawptr(pixels))
+    if width <= 0 || height <= 0 do return "The environment HDR has invalid dimensions."
+
+    mips := make([dynamic][]f32)
+    append(&mips, pixels[:int(width) * int(height) * 4])
+    defer {
+        for mip in mips[1:] do delete(mip)
+        delete(mips)
+    }
+    mip_width, mip_height := u32(width), u32(height)
+    for mip_width > 1 || mip_height > 1 {
+        next, next_width, next_height := texture_next_environment_mip(
+            mips[len(mips) - 1], mip_width, mip_height,
+        )
+        append(&mips, next)
+        mip_width, mip_height = next_width, next_height
+    }
+
+    renderer_wait_for_gpu()
+    candidate: ^d3d12.IResource
+    defer if message != "" && candidate != nil do candidate->Release()
 
     texture_desc := d3d12.RESOURCE_DESC{
         Dimension = .TEXTURE2D,
         Width = u64(width),
         Height = u32(height),
         DepthOrArraySize = 1,
-        MipLevels = 1,
-        Format = .R16G16B16A16_FLOAT,
+        MipLevels = u16(len(mips)),
+        // Keep the sun's full radiance while filtering, including values above
+        // half-float range. The convolved lighting maps remain RGBA16F.
+        Format = .R32G32B32A32_FLOAT,
         SampleDesc = {Count = 1},
     }
     default_heap := d3d12.HEAP_PROPERTIES{Type = .DEFAULT}
 
-    dx_check(r.device->CreateCommittedResource(
+    hr := r.device->CreateCommittedResource(
         &default_heap,
         {},
         &texture_desc,
         {.COPY_DEST},
         nil,
         d3d12.IResource_UUID,
-        (^rawptr)(&r.environment_texture),
-    ))
+        (^rawptr)(&candidate),
+    )
+    if hr < 0 do return "Could not allocate the environment texture."
 
-    // RGBA16F = 8 bytes per pixel; texture-copy rows require 256-byte alignment.
-    row_pitch := (u64(width) * 8 + 255) & ~u64(255)
-    upload_size := row_pitch * u64(height)
+    layouts := make([]d3d12.PLACED_SUBRESOURCE_FOOTPRINT, len(mips))
+    row_counts := make([]u32, len(mips))
+    row_sizes := make([]u64, len(mips))
+    defer delete(layouts)
+    defer delete(row_counts)
+    defer delete(row_sizes)
+    upload_size: u64
+    r.device->GetCopyableFootprints(
+        &texture_desc, 0, u32(len(mips)), 0,
+        raw_data(layouts), raw_data(row_counts), raw_data(row_sizes), &upload_size,
+    )
 
     upload_desc := d3d12.RESOURCE_DESC{
         Dimension = .BUFFER,
@@ -57,90 +130,84 @@ renderer_load_environment :: proc() {
     upload_heap := d3d12.HEAP_PROPERTIES{Type = .UPLOAD}
 
     upload_buffer: ^d3d12.IResource
-    dx_check(r.device->CreateCommittedResource(
+    hr = r.device->CreateCommittedResource(
         &upload_heap,
         {},
         &upload_desc,
-        {.VERTEX_AND_CONSTANT_BUFFER},
+        d3d12.RESOURCE_STATE_GENERIC_READ,
         nil,
         d3d12.IResource_UUID,
         (^rawptr)(&upload_buffer),
-    ))
+    )
+    if hr < 0 do return "Could not allocate the environment upload buffer."
     defer upload_buffer->Release()
 
     mapped: rawptr
-    dx_check(upload_buffer->Map(0, nil, &mapped))
+    hr = upload_buffer->Map(0, nil, &mapped)
+    if hr < 0 do return "Could not map the environment upload buffer."
 
-    for y in 0..<int(height) {
-        row_address := uintptr(mapped) + uintptr(u64(y) * row_pitch)
-        dst_row := ([^]f16)(rawptr(row_address))
-
-        for x in 0..<int(width) {
-            for channel in 0..<4 {
-                pixel_index := (y * int(width) + x) * 4 + channel
-                dst_row[x * 4 + channel] = f16(
-                    clamp(pixels[pixel_index], 0.0, 65504.0)
-                )
-            }
+    for mip in 0..<len(mips) {
+        layout := layouts[mip]
+        for y in 0..<int(row_counts[mip]) {
+            destination := uintptr(mapped) + uintptr(layout.Offset) +
+                uintptr(u64(y) * u64(layout.Footprint.RowPitch))
+            source := uintptr(raw_data(mips[mip])) + uintptr(u64(y) * row_sizes[mip])
+            runtime.mem_copy(rawptr(destination), rawptr(source), int(row_sizes[mip]))
         }
     }
     upload_buffer->Unmap(0, nil)
 
-    dx_check(r.command_allocators[0]->Reset())
-    dx_check(r.command_list->Reset(r.command_allocators[0], nil))
+    hr = r.command_allocators[0]->Reset()
+    if hr < 0 do return "Could not reset the environment upload allocator."
+    hr = r.command_list->Reset(r.command_allocators[0], nil)
+    if hr < 0 do return "Could not reset the environment upload command list."
 
-    source := d3d12.TEXTURE_COPY_LOCATION{
-        pResource = upload_buffer,
-        Type = .PLACED_FOOTPRINT,
+    for mip in 0..<len(mips) {
+        source := d3d12.TEXTURE_COPY_LOCATION{
+            pResource = upload_buffer,
+            Type = .PLACED_FOOTPRINT,
+            PlacedFootprint = layouts[mip],
+        }
+        destination := d3d12.TEXTURE_COPY_LOCATION{
+            pResource = candidate,
+            Type = .SUBRESOURCE_INDEX,
+            SubresourceIndex = u32(mip),
+        }
+        r.command_list->CopyTextureRegion(&destination, 0, 0, 0, &source, nil)
     }
-    source.PlacedFootprint = {
-        Footprint = {
-            Format = .R16G16B16A16_FLOAT,
-            Width = u32(width),
-            Height = u32(height),
-            Depth = 1,
-            RowPitch = u32(row_pitch),
-        },
-    }
-
-    destination := d3d12.TEXTURE_COPY_LOCATION{
-        pResource = r.environment_texture,
-        Type = .SUBRESOURCE_INDEX,
-        SubresourceIndex = 0,
-    }
-
-    r.command_list->CopyTextureRegion(
-        &destination, 0, 0, 0, &source, nil,
-    )
 
     barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
     barrier.Transition = {
-        pResource = r.environment_texture,
+        pResource = candidate,
         StateBefore = {.COPY_DEST},
         StateAfter = {.PIXEL_SHADER_RESOURCE},
         Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
     }
     r.command_list->ResourceBarrier(1, &barrier)
 
-    dx_check(r.command_list->Close())
+    hr = r.command_list->Close()
+    if hr < 0 do return "Could not close the environment upload command list."
     lists := []^d3d12.ICommandList{r.command_list}
     r.command_queue->ExecuteCommandLists(u32(len(lists)), raw_data(lists))
     renderer_wait_for_gpu()
 
     srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
-        Format = .R16G16B16A16_FLOAT,
+        Format = .R32G32B32A32_FLOAT,
         ViewDimension = .TEXTURE2D,
         Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
     }
-    srv_desc.Texture2D = {MipLevels = 1}
+    srv_desc.Texture2D = {MipLevels = u32(len(mips))}
 
     srv: d3d12.CPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv)
     srv.ptr += uint(r.environment_srv_index) *
                uint(r.srv_descriptor_size)
     r.device->CreateShaderResourceView(
-        r.environment_texture, &srv_desc, srv,
+        candidate, &srv_desc, srv,
     )
+    if r.environment_texture != nil do r.environment_texture->Release()
+    r.environment_texture = candidate
+    return ""
 }
 
 renderer_create_irradiance_map :: proc() {

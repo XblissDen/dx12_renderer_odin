@@ -67,6 +67,12 @@ foreign imgui_lib {
         items: [^]cstring,
         count: i32,
     ) -> bool ---
+
+    ui_input_text :: proc(
+        label: cstring,
+        buffer: [^]u8,
+        capacity: uint,
+    ) -> bool ---
 }
 
 g_debug_ui_ready: bool
@@ -131,6 +137,7 @@ debug_ui_update :: proc() {
         if ui_slider_float("Exposure", &r.post_exposure, 0.1, 5.0) do changed = true
         if ui_slider_float("Bloom threshold", &r.post_threshold, 0.1, 5.0) do changed = true
         if ui_slider_float("Bloom strength", &r.post_strength, 0.0, 2.0) do changed = true
+        debug_ui_environment_controls()
 
         ui_separator()
         debug_ui_text(fmt.bprintf(text_buffer[:], "FPS: %.0f | Frame: %.2f ms", r.fps, r.frame_ms))
@@ -177,6 +184,7 @@ debug_ui_update :: proc() {
 
     editor_draw_scene(&g_scene)
     editor_draw_inspector(&g_scene)
+    editor_draw_import_panel()
 
     if g_debug_ui_demo {
         ui_show_demo(&g_debug_ui_demo)
@@ -192,4 +200,25 @@ debug_ui_render :: proc() {
     if g_debug_ui_ready {
         ui_render(rawptr(g_renderer.command_list))
     }
+}
+
+debug_ui_environment_controls :: proc() {
+    r := &g_renderer
+    ui_separator()
+    debug_ui_text("Environment lighting")
+    preview: cstring = "Select environment"
+    if assets_environment_valid(r.environment_settings.asset) do preview = g_assets.environments[r.environment_settings.asset].label
+    if ui_begin_combo("HDRI", preview) {
+        for i in 1..<len(g_assets.environments) {
+            ui_push_id(i32(i))
+            if ui_selectable(g_assets.environments[i].label, r.environment_settings.asset == EnvironmentHandle(i)) do r.environment_pending = EnvironmentHandle(i)
+            ui_pop_id()
+        }
+        ui_end_combo()
+    }
+    ui_slider_float("IBL intensity", &r.environment_settings.intensity, 0, 8)
+    ui_slider_float("Environment rotation", &r.environment_settings.rotation_degrees, -180, 180)
+    ui_slider_float("Sky brightness", &r.environment_settings.background_brightness, 0, 8)
+    debug_ui_text("Edit sun and point lights in the Inspector.")
+    if r.environment_status != "" do debug_ui_text(r.environment_status)
 }

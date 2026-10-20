@@ -1,5 +1,5 @@
 Texture2D<float4> g_environment : register(t0);
-SamplerState g_sampler : register(s0);
+SamplerState g_sampler : register(s3);
 
 cbuffer SkyConstants : register(b2)
 {
@@ -10,7 +10,10 @@ cbuffer SkyConstants : register(b2)
     float  aspect;
 
     float3 sky_up;
-    float  _pad0;
+    float  background_brightness;
+    float environment_sin;
+    float environment_cos;
+    float2 _pad1;
 };
 
 struct VSOutput
@@ -30,8 +33,13 @@ float4 PSMain(VSOutput input) : SV_TARGET
     );
 
     // A direction on a sphere becomes a position in a 2:1 panorama.
+    direction = float3(
+        environment_cos * direction.x - environment_sin * direction.z,
+        direction.y,
+        environment_sin * direction.x + environment_cos * direction.z
+    );
     float u = atan2(direction.z, direction.x) / (2.0f * 3.14159265f) + 0.5f;
     float v = acos(clamp(direction.y, -1.0f, 1.0f)) / 3.14159265f;
 
-    return g_environment.Sample(g_sampler, float2(u, v));
+    return float4(g_environment.Sample(g_sampler, float2(u, v)).rgb * background_brightness, 1.0f);
 }

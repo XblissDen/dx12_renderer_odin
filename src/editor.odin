@@ -10,6 +10,7 @@ editor_draw_scene :: proc(scene: ^Scene){
     ui_next_window(16, 462, 300, 360)
 
     if ui_begin_panel("Scene"){
+        if ui_button("Import Assets...") do g_editor_import.open = true
         editor_model_picker("New model", &g_editor_model_to_add)
         ui_begin_disabled(!assets_mesh_valid(g_editor_model_to_add) || editor_find_available_mesh_slot(scene) < 0)
         if ui_button("Add Model") do editor_add_model(scene, g_editor_model_to_add)

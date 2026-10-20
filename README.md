@@ -17,8 +17,11 @@ dx12_renderer.exe
 ```
 
 Run from the project root so the relative `models/`, `textures/`, and `shaders/`
-paths resolve correctly. The HDR environment is a local asset and is not tracked;
-the current loader expects `textures/environment_4k_2.hdr`.
+paths resolve correctly. HDR environments are local assets registered in
+`assets.json`. The default is `textures/environments/autumn_field_puresky_4k.hdr`;
+`textures/environments/kloofendal_43d_clear_puresky_4k.hdr` is also available in the
+Renderer controls environment picker. Set `default_environment` in `assets.json`
+to the desired environment ID to change the startup default.
 
 ## Debug UI
 

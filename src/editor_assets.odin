@@ -1,5 +1,131 @@
 package main
 
+import "core:os"
+
+EditorImport :: struct {
+    open, pending: bool,
+    model: bool,
+    path: [4096]u8,
+    name: [256]u8,
+    usage: TextureUsage,
+    flip_v, flip_green: bool,
+    maps: [4]TextureHandle,
+    status: string,
+}
+
+g_editor_import := EditorImport{model = true, flip_v = true}
+
+editor_import_text :: proc(buffer: []u8) -> string {
+    return string(cstring(raw_data(buffer)))
+}
+
+editor_import_map :: proc(label: cstring, selected: ^TextureHandle, usage: TextureUsage) {
+    preview: cstring = "None"
+    if assets_texture_valid(selected^) do preview = g_assets.textures[selected^].label
+    if ui_begin_combo(label, preview) {
+        if ui_selectable("None", selected^ == 0) do selected^ = 0
+        for i in 1..<len(g_assets.textures) {
+            asset := &g_assets.textures[i]
+            if asset.hidden || asset.desc.usage != usage do continue
+            ui_push_id(i32(i))
+            if ui_selectable(asset.label, selected^ == TextureHandle(i)) do selected^ = TextureHandle(i)
+            ui_pop_id()
+        }
+        ui_end_combo()
+    }
+}
+
+editor_draw_import_panel :: proc() {
+    state := &g_editor_import
+    if !state.open do return
+    ui_next_window(788, 16, 440, 430)
+    if ui_begin_panel("Asset import") {
+        ui_begin_disabled(state.pending)
+        if ui_begin_combo("Type", "Model (OBJ)" if state.model else "Texture (PNG)") {
+            if ui_selectable("Model (OBJ)", state.model) {
+                state.model = true
+                state.path = {}
+                state.name = {}
+            }
+            if ui_selectable("Texture (PNG)", !state.model) {
+                state.model = false
+                state.path = {}
+                state.name = {}
+            }
+            ui_end_combo()
+        }
+        if ui_button("Choose file...") {
+            count := window_open_asset_file(state.model, state.path[:])
+            if count > 0 {
+                state.name = {}
+                stem := os.stem(editor_import_text(state.path[:]))
+                if len(stem) >= len(state.name) do stem = "Imported asset"
+                copy(state.name[:len(state.name)-1], transmute([]u8)stem)
+                state.status = ""
+            } else if count < 0 {
+                state.status = "File selection failed."
+            }
+        }
+        path := editor_import_text(state.path[:])
+        debug_ui_text(os.base(path) if path != "" else "Choose an OBJ or PNG file.")
+        ui_input_text("Name", raw_data(state.name[:]), uint(len(state.name)))
+        if state.model {
+            ui_checkbox("Flip V (Blender OBJ)", &state.flip_v)
+            debug_ui_text("Optional default material: import textures first.")
+            editor_import_map("Albedo", &state.maps[0], .albedo)
+            editor_import_map("Normal", &state.maps[1], .normal)
+            editor_import_map("Roughness", &state.maps[2], .roughness)
+            editor_import_map("Metallic", &state.maps[3], .metallic)
+        } else {
+            names := [4]cstring{"Albedo", "Normal", "Roughness", "Metallic"}
+            if ui_begin_combo("Usage", names[int(state.usage)]) {
+                for name, i in names {
+                    if ui_selectable(name, int(state.usage) == i) do state.usage = TextureUsage(i)
+                }
+                ui_end_combo()
+            }
+            if state.usage == .normal do ui_checkbox("Invert normal green channel", &state.flip_green)
+        }
+        ui_begin_disabled(path == "")
+        if ui_button("Import") do state.pending = true
+        ui_end_disabled()
+        if ui_button("Close") do state.open = false
+        ui_end_disabled()
+        if state.status != "" do debug_ui_text(state.status)
+    }
+    ui_end_panel()
+}
+
+editor_process_asset_import :: proc() {
+    state := &g_editor_import
+    if !state.pending do return
+    state.pending = false
+    editor_finish_edit()
+    material := AssetMaterial{
+        albedo = assets_texture_id(state.maps[0]),
+        normal = assets_texture_id(state.maps[1]),
+        roughness_map = assets_texture_id(state.maps[2]),
+        metallic_map = assets_texture_id(state.maps[3]),
+    }
+    model, texture, error := assets_import({
+        model = state.model,
+        path = editor_import_text(state.path[:]),
+        name = editor_import_text(state.name[:]),
+        usage = state.usage,
+        flip_v = state.flip_v,
+        flip_green = state.flip_green,
+        material = material,
+    })
+    state.status = error
+    if error == "" {
+        if model != 0 {
+            g_editor_model_to_add = model
+            state.status = "Model imported. Use Add Model in the Scene panel."
+        }
+        if texture != 0 do state.status = "Texture imported and available in material pickers."
+    }
+}
+
 g_editor_model_to_add: MeshHandle
 
 editor_model_picker :: proc(label: cstring, selected: ^MeshHandle) -> bool {

@@ -3,6 +3,51 @@ package main
 import "core:math"
 import linalg "core:math/linalg"
 
+// HDR panoramas are linear radiance. Weight latitude rows by their solid angle
+// so each level preserves spherical energy, including for odd-sized images.
+texture_next_environment_mip :: proc(
+    source: []f32,
+    width, height: u32,
+    allocator := context.allocator,
+) -> (result: []f32, next_width, next_height: u32) {
+    next_width = max(u32(1), width / 2)
+    next_height = max(u32(1), height / 2)
+    result = make([]f32, int(next_width) * int(next_height) * 4, allocator)
+
+    for y in 0..<next_height {
+        y0 := f64(y) * f64(height) / f64(next_height)
+        y1 := f64(y + 1) * f64(height) / f64(next_height)
+        first_y, end_y := u32(y0), min(u32(math.ceil(y1)), height)
+        // Halving a dimension overlaps at most three source rows.
+        row_weights: [3]f32
+        for sy in first_y..<end_y {
+            theta0 := max(y0, f64(sy)) * math.PI / f64(height)
+            theta1 := min(y1, f64(sy + 1)) * math.PI / f64(height)
+            row_weights[sy - first_y] = f32(math.cos(theta0) - math.cos(theta1))
+        }
+
+        for x in 0..<next_width {
+            x0 := f64(x) * f64(width) / f64(next_width)
+            x1 := f64(x + 1) * f64(width) / f64(next_width)
+            first_x, end_x := u32(x0), min(u32(math.ceil(x1)), width)
+            sum: [4]f32
+            total_weight: f32
+            for sy in first_y..<end_y {
+                for sx in first_x..<end_x {
+                    overlap := min(x1, f64(sx + 1)) - max(x0, f64(sx))
+                    weight := f32(overlap) * row_weights[sy - first_y]
+                    index := int((sy * width + sx) * 4)
+                    for channel in 0..<4 do sum[channel] += source[index + channel] * weight
+                    total_weight += weight
+                }
+            }
+            index := int((y * next_width + x) * 4)
+            for channel in 0..<4 do result[index + channel] = sum[channel] / total_weight
+        }
+    }
+    return
+}
+
 texture_next_mip :: proc(
     source: []u8,
     width, height: u32,

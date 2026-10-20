@@ -23,13 +23,9 @@ main :: proc(){
     renderer_create_shadow_map()
     renderer_create_hdr_target()
     renderer_create_bloom_targets()
-    renderer_load_environment()
-
     renderer_create_irradiance_map()
-    renderer_generate_irradiance()
-
     renderer_create_prefiltered_environment()
-    renderer_generate_prefiltered_environment()
+    if error := renderer_set_environment(renderer_default_environment_settings()); error != "" do panic(error)
 
     defer renderer_destroy()
     debug_ui_init()
@@ -64,6 +60,8 @@ main :: proc(){
 
         renderer_resize(g_client_width, g_client_height)
         debug_ui_update()
+        renderer_process_environment_change()
+        editor_process_asset_import()
         editor_update_picking(&g_scene)
         scene_update(&g_scene, dt)
         renderer_render_frame(&g_scene)

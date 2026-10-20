@@ -262,4 +262,8 @@ bool dx12_ui_begin_combo(const char* label, const char* preview) {
 }
 void dx12_ui_end_combo() { ImGui::EndCombo(); }
 
+bool dx12_ui_input_text(const char* label, char* buffer, std::size_t capacity) {
+    return ImGui::InputText(label, buffer, capacity);
+}
+
 } // extern "C"

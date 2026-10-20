@@ -7,7 +7,7 @@ import "core:strings"
 import alg "core:math/linalg"
 
 SCENE_FILE_PATH :: "scene.json"
-SCENE_FILE_VERSION :: 3
+SCENE_FILE_VERSION :: 4
 
 ScenePostSettings :: struct{
     exposure: f32,
@@ -19,6 +19,7 @@ SceneFile :: struct {
     version: u32,
     scene: Scene,
     post_process: ScenePostSettings,
+    environment: Maybe(EnvironmentSettings),
 }
 
 // Loaded names are allocated here and stay alive with the active scene.
@@ -150,6 +151,7 @@ scene_save_to_file :: proc(scene: ^Scene, path: string) -> (ok: bool, message: s
     if len(validation) > 0{
         return false, validation
     }
+    if !renderer_environment_settings_valid(g_renderer.environment_settings) do return false, "Invalid environment settings."
 
     file := SceneFile{
         version = SCENE_FILE_VERSION,
@@ -159,6 +161,7 @@ scene_save_to_file :: proc(scene: ^Scene, path: string) -> (ok: bool, message: s
             bloom_threshold = g_renderer.post_threshold,
             bloom_strength = g_renderer.post_strength,
         },
+        environment = g_renderer.environment_settings,
     }
     for i in 0..<MAX_ENTITIES {
         if !file.scene.alive[i] {
@@ -248,6 +251,9 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
         post.bloom_strength < 0.0 || post.bloom_strength > 2.0 {
         return false, "Invalid post-process settings."
     }
+    environment, has_environment := file.environment.(EnvironmentSettings)
+    if !has_environment do environment = renderer_default_environment_settings()
+    if !renderer_environment_settings_valid(environment) do return false, "Invalid environment settings."
 
     for i in 0..<file.scene.entity_count{
         if !file.scene.alive[i] {
@@ -262,6 +268,9 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
     }
 
     // Transfer ownership of the new allocations to the active scene.
+    if error := renderer_set_environment(environment); error != "" do return false, error
+    g_renderer.environment_pending = 0
+    g_renderer.environment_status = ""
     scene_file_destroy()
     g_scene_file_arena = arena
     g_scene_file_arena_active = true

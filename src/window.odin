@@ -114,6 +114,44 @@ window_unlock_cursor :: proc(){
     win32.ShowCursor(true)
 }
 
+// Positive = UTF-8 bytes written, zero = cancelled, negative = error.
+window_open_asset_file :: proc(model: bool, output: []u8) -> i32 {
+    if len(output) == 0 do return -1
+
+    path: [32768]u16
+    filter: win32.wstring =
+        win32.L("Wavefront OBJ (*.obj)\x00*.obj\x00\x00")
+
+    if !model {
+        filter = win32.L("PNG textures (*.png)\x00*.png\x00\x00")
+    }
+
+    dialog := win32.OPENFILENAMEW{
+        lStructSize = u32(size_of(win32.OPENFILENAMEW)),
+        hwndOwner = g_hwnd,
+        lpstrFile = win32.wstring(raw_data(path[:])),
+        nMaxFile = u32(len(path)),
+        lpstrFilter = filter,
+        Flags = win32.OFN_EXPLORER |
+                win32.OFN_FILEMUSTEXIST |
+                win32.OFN_PATHMUSTEXIST |
+                win32.OFN_NOCHANGEDIR,
+    }
+
+    if !win32.GetOpenFileNameW(&dialog) {
+        return 0 if win32.CommDlgExtendedError() == 0 else -1
+    }
+
+    // Converts into the caller's buffer and includes its null terminator.
+    selected := win32.wstring_to_utf8(
+        output,
+        win32.wstring(raw_data(path[:])),
+    )
+    if selected == "" do return -1
+
+    return i32(len(selected))
+}
+
 @(private)
 window_proc :: proc "stdcall" (hwnd: win32.HWND, msg: win32.UINT,
 wparam: win32.WPARAM, lparam: win32.LPARAM) -> win32.LRESULT{
@@ -126,14 +164,16 @@ wparam: win32.WPARAM, lparam: win32.LPARAM) -> win32.LRESULT{
     switch msg{
         case win32.WM_INPUT:
             if g_cursor_locked {
-                size: win32.UINT
-                win32.GetRawInputData(win32.HRAWINPUT(lparam), win32.RID_INPUT, nil, &size, size_of(win32.RAWINPUTHEADER))
-                
-                buf := make([]u8, size, context.temp_allocator)
-                win32.GetRawInputData(win32.HRAWINPUT(lparam), win32.RID_INPUT, raw_data(buf), &size, size_of(win32.RAWINPUTHEADER))
+                // GetRawInputData requires DWORD-aligned storage; a temporary
+                // byte slice only guarantees byte alignment. We register mice only.
+                raw: win32.RAWINPUT
+                size := win32.UINT(size_of(raw))
+                bytes_read := win32.GetRawInputData(
+                    win32.HRAWINPUT(lparam), win32.RID_INPUT,
+                    &raw, &size, size_of(win32.RAWINPUTHEADER),
+                )
 
-                raw := (^win32.RAWINPUT)(raw_data(buf))
-                if raw.header.dwType == win32.RIM_TYPEMOUSE {
+                if bytes_read == size_of(raw) && raw.header.dwType == win32.RIM_TYPEMOUSE {
                     g_mouse_delta_x += raw.data.mouse.lLastX
                     g_mouse_delta_y += raw.data.mouse.lLastY
                 }

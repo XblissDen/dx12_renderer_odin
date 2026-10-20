@@ -1,8 +1,9 @@
+models/*
 models/female_bust
 models/barrel_01_2k
 models/marble_burst
-textures/environment_4k.hdr
-textures/environment_4k_2.hdr
+textures/imported/*
+textures/environments/*
 dx12_renderer.exe
 *.pdb
 *.ilk
