@@ -3,16 +3,18 @@ package main
 import alg "core:math/linalg"
 import "core:math"
 
-MAX_ENTITIES :: 16
-MAX_LIGHTS :: 4
+MAX_ENTITIES :: 1024
+MAX_LIGHTS :: 16
 
 Entity :: distinct int
 
 Transform :: struct{
     position: alg.Vector3f32,
-    rotation: f32,
+    // Euler angles in radians, applied as roll (Z), then pitch (X), then yaw (Y).
+    rotation: alg.Vector3f32,
+    // Spin around the Y axis in radians per second.
     rotation_speed: f32,
-    scale: f32,
+    scale: alg.Vector3f32,
 }
 
 PointLight :: struct{
@@ -77,6 +79,19 @@ Scene :: struct{
 }
 
 g_scene: Scene
+
+transform_matrix :: proc(transform: Transform) -> alg.Matrix4f32 {
+    rotation := alg.matrix4_rotate_f32(transform.rotation.y, {0, 1, 0}) *
+                alg.matrix4_rotate_f32(transform.rotation.x, {1, 0, 0}) *
+                alg.matrix4_rotate_f32(transform.rotation.z, {0, 0, 1})
+    return alg.matrix4_translate_f32(transform.position) * rotation *
+           alg.matrix4_scale_f32(transform.scale)
+}
+
+// Positive axes keep triangle winding, culling, and picking consistent.
+transform_scale_valid :: proc(scale: alg.Vector3f32) -> bool {
+    return scale.x > 0 && scale.y > 0 && scale.z > 0
+}
 
 scene_clear_entity_slot :: proc(scene: ^Scene, index: int) {
     scene.names[index] = ""
@@ -335,7 +350,7 @@ scene_update :: proc(scene: ^Scene, dt: f32){
         }
 
         if scene.has_transform[i]{
-            scene.transforms[i].rotation += scene.transforms[i]. rotation_speed * dt
+            scene.transforms[i].rotation.y += scene.transforms[i].rotation_speed * dt
         }
 
         if scene.has_transform[i] && scene.has_point_light[i]{

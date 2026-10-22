@@ -32,10 +32,15 @@ renderer_create_frame_constant_buffers :: proc() {
     r := &g_renderer
     mapped: rawptr
 
-    r.constant_buffer, mapped = renderer_create_mapped_upload_buffer(
-        u64(FRAME_COUNT * MAX_ENTITIES * size_of(SceneConstants)),
+    r.object_constant_buffer, mapped = renderer_create_mapped_upload_buffer(
+        u64(FRAME_COUNT * MAX_ENTITIES * size_of(ObjectConstants)),
     )
-    r.cb_mapped_data = ([^]SceneConstants)(mapped)
+    r.object_cb_mapped_data = ([^]ObjectConstants)(mapped)
+
+    r.frame_constant_buffer, mapped = renderer_create_mapped_upload_buffer(
+        u64(FRAME_COUNT * size_of(FrameConstants)),
+    )
+    r.frame_cb_mapped_data = ([^]FrameConstants)(mapped)
 
     r.post_constant_buffer, mapped = renderer_create_mapped_upload_buffer(
         u64(FRAME_COUNT * size_of(PostConstants)),
@@ -77,11 +82,17 @@ renderer_create_timestamp_resources :: proc() {
     ))
 }
 
-renderer_scene_cb_address :: proc(draw_index: int) -> u64 {
+renderer_object_cb_address :: proc(draw_index: int) -> u64 {
     r := &g_renderer
     index := int(r.frame_slot) * MAX_ENTITIES + draw_index
-    return r.constant_buffer->GetGPUVirtualAddress() +
-           u64(index * size_of(SceneConstants))
+    return r.object_constant_buffer->GetGPUVirtualAddress() +
+           u64(index * size_of(ObjectConstants))
+}
+
+renderer_frame_cb_address :: proc() -> u64 {
+    r := &g_renderer
+    return r.frame_constant_buffer->GetGPUVirtualAddress() +
+           u64(r.frame_slot) * u64(size_of(FrameConstants))
 }
 
 renderer_post_cb_address :: proc() -> u64 {

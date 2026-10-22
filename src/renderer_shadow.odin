@@ -99,6 +99,10 @@ renderer_render_shadow_pass :: proc(draw_meshes: []MeshHandle, draw_indices: []u
     r.command_list->SetGraphicsRootSignature(r.root_signature)
     r.command_list->SetPipelineState(r.shadow_pipeline_state)
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
+    r.command_list->SetGraphicsRootConstantBufferView(
+        12,
+        renderer_frame_cb_address(),
+    )
 
     for draw_index in draw_indices {
         i := int(draw_index)
@@ -106,7 +110,7 @@ renderer_render_shadow_pass :: proc(draw_meshes: []MeshHandle, draw_indices: []u
 
         r.command_list->SetGraphicsRootConstantBufferView(
             0,
-            renderer_scene_cb_address(i),
+            renderer_object_cb_address(i),
         )
 
         mesh_index := int(draw_meshes[i])

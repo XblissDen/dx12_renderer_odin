@@ -96,15 +96,18 @@ renderer_render_scene_pass :: proc(
 
     // Geometry
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
-    
-    //r.command_list->DrawInstanced(3, 1, 0, 0)
+    r.command_list->SetGraphicsRootConstantBufferView(
+        12,
+        renderer_frame_cb_address(),
+    )
+
     for draw_index in draw_indices{
         i := int(draw_index)
         assert(i >= 0 && i < len(draw_meshes))
 
         r.command_list->SetGraphicsRootConstantBufferView(
             0,
-            renderer_scene_cb_address(i),
+            renderer_object_cb_address(i),
         )
 
         srv_gpu_handle := renderer_texture_srv(draw_textures[i])

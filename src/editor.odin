@@ -252,34 +252,11 @@ editor_draw_inspector :: proc(scene: ^Scene) {
                 )
                 ui_end_disabled()
 
-                before_rotation := editor_value(scene, index, .Y_Rotation)
-                rotation_degrees := math.to_degrees(transform.rotation)
-                rotation_changed := ui_drag_float(
-                    "Y rotation",
-                    &rotation_degrees,
-                    1.0,
-                    0.0,
-                    0.0,
+                editor_drag_vector(
+                    scene, index, .Rotation, "Rotation (degrees)", 1.0,
+                    degrees = true,
                 )
-                if rotation_changed {
-                    transform.rotation = math.to_radians(rotation_degrees)
-                }
-                editor_track_edit(
-                    scene, index, .Y_Rotation, before_rotation, rotation_changed,
-                )
-
-                before_scale := editor_value(scene, index, .Uniform_Scale)
-
-                scale_changed := ui_drag_float(
-                    "Uniform scale",
-                    &transform.scale,
-                    0.02,
-                    0.05,
-                    100.0,
-                )
-                editor_track_edit(
-                    scene, index, .Uniform_Scale, before_scale, scale_changed,
-                )
+                editor_drag_vector(scene, index, .Scale, "Scale", 0.02)
 
                 before_spin := editor_value(scene, index, .Spin)
                 spin_degrees := math.to_degrees(transform.rotation_speed)

@@ -137,9 +137,7 @@ renderer_render_selection :: proc(scene: ^Scene) {
     view := camera_view_matrix(camera, scene.transforms[camera_index].position)
     projection := camera_projection(camera, f32(r.width) / f32(r.height))
 
-    model := alg.matrix4_translate_f32(transform.position) *
-             alg.matrix4_rotate_f32(transform.rotation, {0, 1, 0}) *
-             alg.matrix4_scale_f32({transform.scale, transform.scale, transform.scale})
+    model := transform_matrix(transform)
 
     // Slightly expand the box so its lines do not fight the mesh surface.
     padding := max(

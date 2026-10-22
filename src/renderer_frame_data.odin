@@ -29,7 +29,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
 
     post := &r.post_cb_mapped_data[r.frame_slot]
     sky := &r.sky_cb_mapped_data[r.frame_slot]
-    scene_cb_base := int(r.frame_slot) * MAX_ENTITIES
+    object_cb_base := int(r.frame_slot) * MAX_ENTITIES
     environment_sin := math.sin(math.to_radians(r.environment_settings.rotation_degrees))
     environment_cos := math.cos(math.to_radians(r.environment_settings.rotation_degrees))
 
@@ -112,6 +112,24 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
     sun_view_projection := sun_view * sun_projection
     shadow_frustum := frustum_from_matrix(sun_view_projection)
 
+    r.frame_cb_mapped_data[r.frame_slot] = FrameConstants{
+        view = view,
+        projection = proj,
+        sun_view_projection = sun_view_projection,
+        view_position = camera_position,
+        light_count = u32(light_count),
+        sun_direction = sun.direction,
+        sun_intensity = sun.intensity,
+        sun_color = sun.color,
+        environment_intensity = r.environment_settings.intensity,
+        environment_sin = environment_sin,
+        environment_cos = environment_cos,
+        ambient_intensity = r.environment_settings.ambient_intensity,
+        ambient_mode = r.environment_settings.ambient_mode,
+        ambient_color = r.environment_settings.ambient_color,
+        lights = gpu_lights,
+    }
+
     for i in 0..<scene.entity_count{
         if !scene.alive[i] {
             continue
@@ -121,15 +139,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
             continue
         }
 
-        transform := scene.transforms[i]
-        rotation := alg.matrix4_rotate_f32(transform.rotation, {0, 1, 0})
-        scale := alg.matrix4_scale_f32({
-            transform.scale,
-            transform.scale,
-            transform.scale,
-        })
-
-        model := alg.matrix4_translate_f32(transform.position) * rotation * scale
+        model := transform_matrix(scene.transforms[i])
         mesh := scene.mesh_renderers[i].mesh
         bounds := bounds_to_world(g_assets.meshes[mesh].bounds, model)
         draw_index := u32(data.draw_count)
@@ -166,31 +176,18 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
             use_metallic_map = 1
         }
 
-        r.cb_mapped_data[scene_cb_base + data.draw_count] = SceneConstants{
+        r.object_cb_mapped_data[object_cb_base + data.draw_count] = ObjectConstants{
             model = alg.transpose(model),
-            view = view,
-            projection = proj,
-            view_position = camera_position,
+            // transpose(inverse_transpose(M)) is inverse(M).
+            normal_matrix = alg.matrix4_inverse_f32(model),
             material_tint = scene.materials[i].tint,
-            light_count = u32(light_count),
-            unlit = unlit,
-            lights = gpu_lights,
-            sun_direction = sun.direction,
-            sun_color = sun.color,
-            sun_intensity = sun.intensity,
-            sun_view_projection = sun_view_projection,
+            uv_scale = scene.materials[i].uv_scale,
             roughness = scene.materials[i].roughness,
             metallic = scene.materials[i].metallic,
             normal_strength = scene.materials[i].normal_strength,
-            uv_scale = scene.materials[i].uv_scale,
+            unlit = unlit,
             use_roughness_map = use_roughness_map,
             use_metallic_map = use_metallic_map,
-            environment_intensity = r.environment_settings.intensity,
-            environment_sin = environment_sin,
-            environment_cos = environment_cos,
-            ambient_color = r.environment_settings.ambient_color,
-            ambient_intensity = r.environment_settings.ambient_intensity,
-            ambient_mode = r.environment_settings.ambient_mode,
         }
 
         data.draw_textures[data.draw_count] = scene.materials[i].texture

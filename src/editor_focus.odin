@@ -14,7 +14,8 @@ editor_selection_bounds :: proc(scene: ^Scene) -> (
 
     index := int(g_editor_selected)
     if !scene.has_transform[index] || !scene.has_mesh_renderer[index] ||
-       !scene.has_material[index] || scene.transforms[index].scale <= 0 {
+       !scene.has_material[index] ||
+       !transform_scale_valid(scene.transforms[index].scale) {
         return {}, {}, false
     }
 
@@ -34,18 +35,16 @@ editor_focus_selected :: proc(scene: ^Scene) {
     editor_finish_edit()
 
     local_center := (bounds.minimum + bounds.maximum) * 0.5
-    model := alg.matrix4_translate_f32(transform.position) *
-             alg.matrix4_rotate_f32(transform.rotation, {0, 1, 0}) *
-             alg.matrix4_scale_f32({transform.scale, transform.scale, transform.scale})
-
-    center4 := alg.mul(model, alg.Vector4f32{
+    center4 := alg.mul(transform_matrix(transform), alg.Vector4f32{
         local_center.x, local_center.y, local_center.z, 1,
     })
     center := alg.Vector3f32{center4.x, center4.y, center4.z}
 
-    // A sphere enclosing the local box also encloses every rotated version.
+    // A sphere enclosing the local box, scaled by the largest axis, also
+    // encloses every rotated and non-uniformly scaled version.
+    largest_scale := max(transform.scale.x, transform.scale.y, transform.scale.z)
     radius := max(
-        alg.length(bounds.maximum - bounds.minimum) * transform.scale * 0.5,
+        alg.length(bounds.maximum - bounds.minimum) * largest_scale * 0.5,
         f32(0.05),
     )
 

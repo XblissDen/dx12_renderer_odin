@@ -7,7 +7,7 @@ import "core:strings"
 import alg "core:math/linalg"
 
 SCENE_FILE_PATH :: "scene.json"
-SCENE_FILE_VERSION :: 5
+SCENE_FILE_VERSION :: 6
 
 ScenePostSettings :: struct{
     exposure: f32,
@@ -15,11 +15,53 @@ ScenePostSettings :: struct{
     bloom_strength: f32,
 }
 
+// Version 6+ stores live entities only, each with its optional components.
+SceneFileEntity :: struct {
+    name: string,
+    transform: Maybe(Transform),
+    mesh_renderer: Maybe(MeshRenderer),
+    material: Maybe(Material),
+    point_light: Maybe(PointLight),
+    directional_light: Maybe(DirectionalLight),
+    camera: Maybe(Camera),
+}
+
 SceneFile :: struct {
     version: u32,
-    scene: Scene,
+    entities: []SceneFileEntity,
     post_process: ScenePostSettings,
     environment: Maybe(EnvironmentSettings),
+}
+
+// Versions 1-5 stored the in-memory component arrays directly, with 16 slots,
+// a Y-only rotation, and a uniform scale.
+LEGACY_SCENE_MAX_ENTITIES :: 16
+
+LegacyTransform :: struct {
+    position: alg.Vector3f32,
+    rotation: f32,
+    rotation_speed: f32,
+    scale: f32,
+}
+
+LegacySceneFile :: struct {
+    scene: struct {
+        entity_count: int,
+        alive: [LEGACY_SCENE_MAX_ENTITIES]bool,
+        names: [LEGACY_SCENE_MAX_ENTITIES]string,
+        transforms: [LEGACY_SCENE_MAX_ENTITIES]LegacyTransform,
+        has_transform: [LEGACY_SCENE_MAX_ENTITIES]bool,
+        mesh_renderers: [LEGACY_SCENE_MAX_ENTITIES]MeshRenderer,
+        has_mesh_renderer: [LEGACY_SCENE_MAX_ENTITIES]bool,
+        point_lights: [LEGACY_SCENE_MAX_ENTITIES]PointLight,
+        has_point_light: [LEGACY_SCENE_MAX_ENTITIES]bool,
+        cameras: [LEGACY_SCENE_MAX_ENTITIES]Camera,
+        has_camera: [LEGACY_SCENE_MAX_ENTITIES]bool,
+        materials: [LEGACY_SCENE_MAX_ENTITIES]Material,
+        has_material: [LEGACY_SCENE_MAX_ENTITIES]bool,
+        directional_lights: [LEGACY_SCENE_MAX_ENTITIES]DirectionalLight,
+        has_directional_light: [LEGACY_SCENE_MAX_ENTITIES]bool,
+    },
 }
 
 // Loaded names are allocated here and stay alive with the active scene.
@@ -88,8 +130,8 @@ scene_file_validate :: proc(scene: ^Scene) -> string{
             if !scene.has_transform[i] || !scene.has_material[i]{
                 return "Mesh needs Transform and Material."
             }
-            if scene.transforms[i].scale <= 0{
-                return "Mesh scale must be positive."
+            if !transform_scale_valid(scene.transforms[i].scale){
+                return "Mesh scale must be positive on every axis."
             }
             if !assets_mesh_valid(scene.mesh_renderers[i].mesh) {
                 return "Unknown mesh asset."
@@ -153,23 +195,34 @@ scene_save_to_file :: proc(scene: ^Scene, path: string) -> (ok: bool, message: s
     }
     if !renderer_environment_settings_valid(g_renderer.environment_settings) do return false, "Invalid environment settings."
 
+    // Inactive slots are dropped, so entity indices are compacted on reload.
+    entities := make([dynamic]SceneFileEntity, 0, scene.entity_count)
+    defer delete(entities)
+
+    for i in 0..<scene.entity_count {
+        if !scene.alive[i] {
+            continue
+        }
+
+        entity := SceneFileEntity{name = scene.names[i]}
+        if scene.has_transform[i] do entity.transform = scene.transforms[i]
+        if scene.has_mesh_renderer[i] do entity.mesh_renderer = scene.mesh_renderers[i]
+        if scene.has_material[i] do entity.material = scene.materials[i]
+        if scene.has_point_light[i] do entity.point_light = scene.point_lights[i]
+        if scene.has_directional_light[i] do entity.directional_light = scene.directional_lights[i]
+        if scene.has_camera[i] do entity.camera = scene.cameras[i]
+        append(&entities, entity)
+    }
+
     file := SceneFile{
         version = SCENE_FILE_VERSION,
-        scene = scene^,
+        entities = entities[:],
         post_process = {
             exposure = g_renderer.post_exposure,
             bloom_threshold = g_renderer.post_threshold,
             bloom_strength = g_renderer.post_strength,
         },
         environment = g_renderer.environment_settings,
-    }
-    for i in 0..<MAX_ENTITIES {
-        if !file.scene.alive[i] {
-            scene_clear_entity_slot(&file.scene, i)
-        } else {
-            if !file.scene.has_mesh_renderer[i] do file.scene.mesh_renderers[i] = {}
-            if !file.scene.has_material[i] do file.scene.materials[i] = {}
-        }
     }
 
     data, encode_error := json.marshal(file, json.Marshal_Options{
@@ -227,21 +280,43 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
         return false, "Could not decode scene or resolve an asset ID."
     }
 
-    if file.scene.entity_count < 1 ||
-    file.scene.entity_count > MAX_ENTITIES {
+    if header.version <= 5 {
+        legacy_entities, legacy_ok := scene_file_legacy_entities(
+            data, header.version, mem.dynamic_arena_allocator(&arena),
+        )
+        if !legacy_ok {
+            return false, "Could not decode scene or resolve an asset ID."
+        }
+        file.entities = legacy_entities
+    }
+
+    if len(file.entities) < 1 || len(file.entities) > MAX_ENTITIES {
         return false, "Invalid entity count."
     }
 
-    if file.version == 1 {
-        // Version 1 had no inactive slots.
-        for i in 0..<file.scene.entity_count {
-            file.scene.alive[i] = true
+    // The scene is too large for the stack; stage it on the heap.
+    staged := new(Scene)
+    defer free(staged)
+
+    for source in file.entities {
+        entity := scene_create_entity(staged, source.name)
+        index := int(entity)
+
+        if transform, ok := source.transform.?; ok do scene_add_transform(staged, entity, transform)
+        if mesh_renderer, ok := source.mesh_renderer.?; ok do scene_add_mesh_renderer(staged, entity, mesh_renderer)
+        if point_light, ok := source.point_light.?; ok do scene_add_point_light(staged, entity, point_light)
+        if directional_light, ok := source.directional_light.?; ok do scene_add_directional_light(staged, entity, directional_light)
+        if camera, ok := source.camera.?; ok do scene_add_camera(staged, entity, camera)
+
+        // Stored as-is, without scene_add_material's defaults, so validation
+        // still rejects missing textures and invalid UV scales.
+        if material, ok := source.material.?; ok {
+            staged.materials[index] = material
+            staged.has_material[index] = true
         }
     }
 
-    file.version = SCENE_FILE_VERSION
-
-    validation := scene_file_validate(&file.scene)
+    validation := scene_file_validate(staged)
     if len(validation) > 0 {
         return false, validation
     }
@@ -266,14 +341,10 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
     }
     if !renderer_environment_settings_valid(environment) do return false, "Invalid environment settings."
 
-    for i in 0..<file.scene.entity_count{
-        if !file.scene.alive[i] {
-            continue
-        }
-        
-        if file.scene.has_directional_light[i]{
-            file.scene.directional_lights[i].direction = alg.normalize(
-                file.scene.directional_lights[i].direction,
+    for i in 0..<staged.entity_count{
+        if staged.has_directional_light[i]{
+            staged.directional_lights[i].direction = alg.normalize(
+                staged.directional_lights[i].direction,
             )
        }
     }
@@ -285,7 +356,7 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
     scene_file_destroy()
     g_scene_file_arena = arena
     g_scene_file_arena_active = true
-    g_scene = file.scene
+    g_scene = staged^
 
     g_renderer.post_exposure = post.exposure
     g_renderer.post_threshold = post.bloom_threshold
@@ -293,4 +364,48 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
 
     commited = true
     return true, "Scene loaded."
+}
+
+// Converts the version 1-5 component arrays into version 6 entity records.
+scene_file_legacy_entities :: proc(
+    data: []byte,
+    version: u32,
+    allocator: mem.Allocator,
+) -> (entities: []SceneFileEntity, ok: bool) {
+    legacy: LegacySceneFile
+    if json.unmarshal(data, &legacy, spec = .JSON, allocator = allocator) != nil {
+        return nil, false
+    }
+
+    scene := &legacy.scene
+    if scene.entity_count < 1 || scene.entity_count > LEGACY_SCENE_MAX_ENTITIES {
+        return nil, false
+    }
+
+    result := make([dynamic]SceneFileEntity, 0, scene.entity_count, allocator)
+    for i in 0..<scene.entity_count {
+        // Version 1 had no inactive slots.
+        if version > 1 && !scene.alive[i] {
+            continue
+        }
+
+        entity := SceneFileEntity{name = scene.names[i]}
+        if scene.has_transform[i] {
+            old := scene.transforms[i]
+            entity.transform = Transform{
+                position = old.position,
+                rotation = {0, old.rotation, 0},
+                rotation_speed = old.rotation_speed,
+                scale = {old.scale, old.scale, old.scale},
+            }
+        }
+        if scene.has_mesh_renderer[i] do entity.mesh_renderer = scene.mesh_renderers[i]
+        if scene.has_material[i] do entity.material = scene.materials[i]
+        if scene.has_point_light[i] do entity.point_light = scene.point_lights[i]
+        if scene.has_directional_light[i] do entity.directional_light = scene.directional_lights[i]
+        if scene.has_camera[i] do entity.camera = scene.cameras[i]
+        append(&result, entity)
+    }
+
+    return result[:], true
 }

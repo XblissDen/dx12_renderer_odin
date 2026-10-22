@@ -58,10 +58,7 @@ editor_mouse_ray :: proc(
 }
 
 editor_ray_to_local :: proc(ray: EditorRay, transform: Transform) -> EditorRay {
-    model := alg.matrix4_translate_f32(transform.position) *
-             alg.matrix4_rotate_f32(transform.rotation, {0, 1, 0}) *
-             alg.matrix4_scale_f32({transform.scale, transform.scale, transform.scale})
-    inverse := alg.matrix4_inverse_f32(model)
+    inverse := alg.matrix4_inverse_f32(transform_matrix(transform))
 
     origin := alg.mul(inverse, alg.Vector4f32{
         ray.origin.x, ray.origin.y, ray.origin.z, 1,
@@ -124,7 +121,7 @@ editor_pick_mesh :: proc(scene: ^Scene, ray: EditorRay) -> Entity{
         }
 
         transform := scene.transforms[i]
-        if transform.scale <= 0 {
+        if !transform_scale_valid(transform.scale) {
             continue
         }
 

@@ -4,11 +4,12 @@ import alg "core:math/linalg"
 import "core:math"
 
 MAX_EDITOR_HISTORY :: 128
+MIN_TRANSFORM_SCALE :: f32(0.01)
 
 EditorField :: enum {
     Position,
-    Y_Rotation,
-    Uniform_Scale,
+    Rotation,
+    Scale,
     Spin,
 
     Material_Tint,
@@ -102,7 +103,7 @@ editor_field_exists :: proc(
     }
 
     switch field {
-        case .Position, .Y_Rotation, .Uniform_Scale, .Spin:
+        case .Position, .Rotation, .Scale, .Spin:
             return scene.has_transform[index]
 
         case .Material_Tint,
@@ -150,10 +151,10 @@ editor_value :: proc(
     switch field {
         case .Position:
             return scene.transforms[index].position
-        case .Y_Rotation:
-            return {scene.transforms[index].rotation, 0, 0}
-        case .Uniform_Scale:
-            return {scene.transforms[index].scale, 0, 0}
+        case .Rotation:
+            return scene.transforms[index].rotation
+        case .Scale:
+            return scene.transforms[index].scale
         case .Spin:
             return {scene.transforms[index].rotation_speed, 0, 0}
 
@@ -210,10 +211,15 @@ editor_apply_value :: proc(
     switch field {
         case .Position:
             scene.transforms[index].position = value
-        case .Y_Rotation:
-            scene.transforms[index].rotation = value[0]
-        case .Uniform_Scale:
-            scene.transforms[index].scale = value[0]
+        case .Rotation:
+            scene.transforms[index].rotation = value
+        case .Scale:
+            // Clamp instead of rejecting so dragging past zero stops at the minimum.
+            scene.transforms[index].scale = {
+                max(value.x, MIN_TRANSFORM_SCALE),
+                max(value.y, MIN_TRANSFORM_SCALE),
+                max(value.z, MIN_TRANSFORM_SCALE),
+            }
         case .Spin:
             scene.transforms[index].rotation_speed = value[0]
 

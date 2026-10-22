@@ -57,12 +57,21 @@ editor_drag_vector :: proc(
     field: EditorField,
     label: cstring,
     speed: f32,
+    degrees := false,
 ) {
     before := editor_value(scene, index, field)
     value := before
 
+    if degrees {
+        value = {math.to_degrees(value.x), math.to_degrees(value.y), math.to_degrees(value.z)}
+    }
+
     changed := ui_drag_float3(label, &value, speed)
     if changed {
+        if degrees {
+            value = {math.to_radians(value.x), math.to_radians(value.y), math.to_radians(value.z)}
+        }
+
         changed = editor_apply_value(scene, Entity(index), field, value)
     }
 

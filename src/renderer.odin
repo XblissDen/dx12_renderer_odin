@@ -81,40 +81,54 @@ renderer_texture_srv :: proc(texture: TextureHandle) -> d3d12.GPU_DESCRIPTOR_HAN
     return handle
 }
 
-SceneConstants :: struct #align(256) {
-    model: alg.Matrix4f32,
+// Written once per frame and shared by every draw (b4).
+FrameConstants :: struct #align(256) {
     view: alg.Matrix4f32,
     projection: alg.Matrix4f32,
+    sun_view_projection: alg.Matrix4f32,
 
     view_position: [3]f32,
-    normal_strength: f32,
+    light_count: u32,
+
+    sun_direction: [3]f32,
+    sun_intensity: f32,
+
+    sun_color: [3]f32,
+    environment_intensity: f32,
+
+    environment_sin, environment_cos: f32,
+    ambient_intensity: f32,
+    ambient_mode: AmbientLightingMode,
+
+    ambient_color: [3]f32,
+    _pad0: f32,
+
+    lights: [MAX_LIGHTS]GpuPointLight,
+}
+
+#assert(size_of(FrameConstants) == 1024)
+
+// Written per draw (b0).
+ObjectConstants :: struct #align(256) {
+    model: alg.Matrix4f32,
+    // Inverse model matrix; its upper 3x3 transforms normals under
+    // non-uniform scale when used with the shader's row-vector convention.
+    normal_matrix: alg.Matrix4f32,
 
     material_tint: [3]f32,
     uv_scale: f32,
 
-    light_count: u32,
-    unlit: u32,
     roughness: f32,
     metallic: f32,
+    normal_strength: f32,
+    unlit: u32,
 
-    lights: [MAX_LIGHTS]GpuPointLight,
-
-    sun_direction: [3]f32,
     use_roughness_map: u32,
-    sun_color: [3]f32,
-    sun_intensity: f32,
-
     use_metallic_map: u32,
-    environment_intensity: f32,
-    environment_sin, environment_cos: f32,
-    sun_view_projection : alg.Matrix4f32,
-    ambient_color: [3]f32,
-    ambient_intensity: f32,
-    ambient_mode: AmbientLightingMode,
-    _lighting_pad: [3]f32,
+    _pad0: [2]f32,
 }
 
-#assert(size_of(SceneConstants) == 512)
+#assert(size_of(ObjectConstants) == 256)
 
 PostConstants :: struct #align(256) {
     exposure: f32,
@@ -169,8 +183,11 @@ Renderer :: struct {
     viewport: d3d12.VIEWPORT,
     scissor_rect: d3d12.RECT,
 
-    constant_buffer: ^d3d12.IResource,
-    cb_mapped_data: [^]SceneConstants,
+    object_constant_buffer: ^d3d12.IResource,
+    object_cb_mapped_data: [^]ObjectConstants,
+
+    frame_constant_buffer: ^d3d12.IResource,
+    frame_cb_mapped_data: [^]FrameConstants,
 
     depth_buffer: ^d3d12.IResource,
     dsv_heap: ^d3d12.IDescriptorHeap,
@@ -527,6 +544,11 @@ renderer_load_assets :: proc(){
     prefilter_cbv_param.ShaderVisibility = .PIXEL
     prefilter_cbv_param.Descriptor = {ShaderRegister = 3}
 
+    frame_cbv_param := d3d12.ROOT_PARAMETER{}
+    frame_cbv_param.ParameterType = .CBV
+    frame_cbv_param.ShaderVisibility = .ALL
+    frame_cbv_param.Descriptor = {ShaderRegister = 4}
+
     static_sampler := d3d12.STATIC_SAMPLER_DESC{
         Filter = .MIN_MAG_MIP_LINEAR,
         AddressU = .WRAP,
@@ -578,6 +600,7 @@ renderer_load_assets :: proc(){
         normal_param,    // Root slot 9 -> t5
         roughness_param, // Root slot 10 -> t6
         metallic_param,  // Root slot 11 -> t7
+        frame_cbv_param, // Root slot 12 -> b4
     }
     samplers := []d3d12.STATIC_SAMPLER_DESC{
         static_sampler,
@@ -1533,7 +1556,8 @@ renderer_destroy :: proc(){
 
     r.root_signature->Release()
 
-    r.constant_buffer->Release()
+    r.object_constant_buffer->Release()
+    r.frame_constant_buffer->Release()
 
     r.depth_buffer->Release()
     r.dsv_heap->Release()

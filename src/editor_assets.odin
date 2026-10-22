@@ -198,7 +198,7 @@ editor_add_model :: proc(scene: ^Scene, model: MeshHandle) {
     asset := &g_assets.meshes[model]
     name, ok := scene_store_owned_name(asset.desc.name if asset.desc.name != "" else asset.desc.id)
     if !ok do return
-    transform := Transform{scale = 1}
+    transform := Transform{scale = {1, 1, 1}}
     camera := camera_find_active(scene)
     if camera >= 0 {
         transform.position = scene.transforms[camera].position + camera_forward(&scene.cameras[camera]) * 3 - (asset.bounds.minimum + asset.bounds.maximum) * 0.5

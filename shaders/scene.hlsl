@@ -1,4 +1,4 @@
-#define MAX_LIGHTS 4
+#define MAX_LIGHTS 16
 
 struct GpuPointLight
 {
@@ -8,40 +8,52 @@ struct GpuPointLight
     float  intensity;
 };
 
-cbuffer SceneConstants : register(b0)
+// Per-draw data.
+cbuffer ObjectConstants : register(b0)
 {
     float4x4 model;
-    float4x4 view;
-    float4x4 projection;
-
-    float3 view_position;
-    float  normal_strength;
+    // Upper 3x3 is the inverse model matrix; mul(normal, it) applies the
+    // inverse transpose, which keeps normals correct under non-uniform scale.
+    float4x4 normal_matrix;
 
     float3 material_tint;
     float  uv_scale;
 
-    uint  light_count;
-    uint  unlit;
     float roughness;
     float metallic;
+    float normal_strength;
+    uint  unlit;
 
-    GpuPointLight lights[MAX_LIGHTS];
-
-    float3 sun_direction;
-    uint   use_roughness_map;
-    float3 sun_color;
-    float  sun_intensity;
-
+    uint use_roughness_map;
     uint use_metallic_map;
-    float environment_intensity;
-    float environment_sin;
-    float environment_cos;
+    float2 _object_pad;
+};
+
+// Shared by every draw in a frame.
+cbuffer FrameConstants : register(b4)
+{
+    float4x4 view;
+    float4x4 projection;
     float4x4 sun_view_projection;
 
-    float3 ambient_color;
+    float3 view_position;
+    uint   light_count;
+
+    float3 sun_direction;
+    float  sun_intensity;
+
+    float3 sun_color;
+    float  environment_intensity;
+
+    float environment_sin;
+    float environment_cos;
     float ambient_intensity;
-    uint ambient_mode;
-    float3 _lighting_pad;
+    uint  ambient_mode;
+
+    float3 ambient_color;
+    float  _frame_pad;
+
+    GpuPointLight lights[MAX_LIGHTS];
 };
 
 Texture2D    g_texture : register(t0);
@@ -87,7 +99,7 @@ PSInput VSMain(VSInput input)
     pos = mul(pos, projection);
     output.position = pos;
 
-    output.normal = mul(input.normal, (float3x3)model);
+    output.normal = mul(input.normal, (float3x3)normal_matrix);
     output.texcoord = input.texcoord;
     output.tangent = float4(
         mul(input.tangent.xyz, (float3x3)model),
