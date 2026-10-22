@@ -36,6 +36,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
     post.exposure = r.post_exposure
     post.bloom_threshold = r.post_threshold
     post.bloom_strength = r.post_strength
+    post.tone_mapper = r.post_tone_mapper
 
     camera_index := camera_find_active(scene)
     assert(camera_index >= 0)
@@ -100,7 +101,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
 
     assert(sun_found)
 
-    sun_eye := -sun.direction * 12.0
+    sun_eye := -sun.direction * SHADOW_EYE_DISTANCE
 
     sun_up := alg.Vector3f32{0, 1, 0}
     if math.abs(sun.direction.y) > 0.99{
@@ -108,7 +109,11 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
     }
 
     sun_view := look_at_lh(sun_eye, {0,0,0}, sun_up)
-    sun_projection := orthographic_lh(-8, 8, -8, 8, 0.1, 30.0)
+    sun_projection := orthographic_lh(
+        -SHADOW_HALF_EXTENT, SHADOW_HALF_EXTENT,
+        -SHADOW_HALF_EXTENT, SHADOW_HALF_EXTENT,
+        SHADOW_NEAR, SHADOW_FAR,
+    )
     sun_view_projection := sun_view * sun_projection
     shadow_frustum := frustum_from_matrix(sun_view_projection)
 
@@ -127,6 +132,8 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
         ambient_intensity = r.environment_settings.ambient_intensity,
         ambient_mode = r.environment_settings.ambient_mode,
         ambient_color = r.environment_settings.ambient_color,
+        shadow_bias_constant = r.shadow_bias_constant * renderer_shadow_texel_depth(),
+        shadow_bias_slope = r.shadow_bias_slope * renderer_shadow_texel_depth(),
         lights = gpu_lights,
     }
 

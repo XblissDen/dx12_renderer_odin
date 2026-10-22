@@ -101,7 +101,11 @@ FrameConstants :: struct #align(256) {
     ambient_mode: AmbientLightingMode,
 
     ambient_color: [3]f32,
-    _pad0: f32,
+    // Shadow-map depth units (NDC z), already scaled from texels.
+    shadow_bias_constant: f32,
+
+    shadow_bias_slope: f32,
+    _pad0: [3]f32,
 
     lights: [MAX_LIGHTS]GpuPointLight,
 }
@@ -130,11 +134,14 @@ ObjectConstants :: struct #align(256) {
 
 #assert(size_of(ObjectConstants) == 256)
 
+// Missing from older scene files, which therefore keep Reinhard.
+ToneMapper :: enum u32 {Reinhard, ACES, AgX}
+
 PostConstants :: struct #align(256) {
     exposure: f32,
     bloom_threshold: f32,
     bloom_strength: f32,
-    _pad0: f32,
+    tone_mapper: ToneMapper,
 }
 
 SkyConstants :: struct #align(256) {
@@ -223,6 +230,12 @@ Renderer :: struct {
     post_exposure: f32,
     post_threshold: f32,
     post_strength: f32,
+    post_tone_mapper: ToneMapper,
+
+    // Shadow depth bias in shadow-map texels: constant, and scaled by the
+    // receiver's slope towards the sun.
+    shadow_bias_constant: f32,
+    shadow_bias_slope: f32,
 
     timestamp_heap: ^d3d12.IQueryHeap,
     timestamp_readback: ^d3d12.IResource,
@@ -281,6 +294,10 @@ renderer_init :: proc() {
     r.post_exposure = 1.0
     r.post_threshold = 1.0
     r.post_strength = 0.6
+    r.post_tone_mapper = .ACES
+
+    r.shadow_bias_constant = DEFAULT_SHADOW_BIAS_CONSTANT
+    r.shadow_bias_slope = DEFAULT_SHADOW_BIAS_SLOPE
 
     r.frustum_culling_enabled = true
 
@@ -893,8 +910,7 @@ renderer_load_assets :: proc(){
     shadow_pso_desc.PS = {}
     shadow_pso_desc.NumRenderTargets = 0
     shadow_pso_desc.RTVFormats[0] = .UNKNOWN
-    shadow_pso_desc.RasterizerState.DepthBias = 100
-    shadow_pso_desc.RasterizerState.SlopeScaledDepthBias = 1.0
+    // No rasterizer bias: scene.hlsl applies the adjustable receiver bias.
 
     dx_check(r.device->CreateGraphicsPipelineState(
         &shadow_pso_desc,
@@ -1021,10 +1037,11 @@ renderer_upload_mesh :: proc(gpu: ^GpuMesh, mesh: MeshData) -> (hr: win32.HRESUL
         gpu^ = {}
     }
 
+    // Vertex size keeps the index data 4-byte aligned in the staging buffer.
     vb_size := u64(len(mesh.vertices) * size_of(Vertex))
+    ib_size := u64(len(mesh.indices) * size_of(u32))
 
-    heap_props := d3d12.HEAP_PROPERTIES{Type = .UPLOAD}
-    vb_desc := d3d12.RESOURCE_DESC{
+    buffer_desc := d3d12.RESOURCE_DESC{
         Dimension = .BUFFER,
         Width = vb_size,
         Height = 1,
@@ -1034,63 +1051,89 @@ renderer_upload_mesh :: proc(gpu: ^GpuMesh, mesh: MeshData) -> (hr: win32.HRESUL
         Layout = .ROW_MAJOR,
     }
 
+    // Static geometry lives in GPU-local memory. Buffers start in COMMON and
+    // are implicitly promoted to COPY_DEST by the copy below.
+    default_heap := d3d12.HEAP_PROPERTIES{Type = .DEFAULT}
     hr = r.device->CreateCommittedResource(
-        &heap_props,
-        {},
-        &vb_desc,
-        d3d12.RESOURCE_STATE_GENERIC_READ,
-        nil,
-        d3d12.IResource_UUID,
-        (^rawptr)(&gpu.vertex_buffer),
+        &default_heap, {}, &buffer_desc, d3d12.RESOURCE_STATE_COMMON, nil,
+        d3d12.IResource_UUID, (^rawptr)(&gpu.vertex_buffer),
     )
     if hr < 0 do return
 
+    buffer_desc.Width = ib_size
+    hr = r.device->CreateCommittedResource(
+        &default_heap, {}, &buffer_desc, d3d12.RESOURCE_STATE_COMMON, nil,
+        d3d12.IResource_UUID, (^rawptr)(&gpu.index_buffer),
+    )
+    if hr < 0 do return
+
+    buffer_desc.Width = vb_size + ib_size
+    upload_heap := d3d12.HEAP_PROPERTIES{Type = .UPLOAD}
+    upload_buffer: ^d3d12.IResource
+    hr = r.device->CreateCommittedResource(
+        &upload_heap, {}, &buffer_desc, d3d12.RESOURCE_STATE_GENERIC_READ, nil,
+        d3d12.IResource_UUID, (^rawptr)(&upload_buffer),
+    )
+    if hr < 0 do return
+    defer upload_buffer->Release()
+
     mapped: rawptr
     write_range := d3d12.RANGE{Begin = 0, End = 0}
-    hr = gpu.vertex_buffer->Map(0, &write_range, &mapped)
+    hr = upload_buffer->Map(0, &write_range, &mapped)
     if hr < 0 do return
     runtime.mem_copy(mapped, raw_data(mesh.vertices), int(vb_size))
-    gpu.vertex_buffer->Unmap(0, nil)
+    runtime.mem_copy(
+        rawptr(uintptr(mapped) + uintptr(vb_size)),
+        raw_data(mesh.indices),
+        int(ib_size),
+    )
+    upload_buffer->Unmap(0, nil)
+
+    hr = r.command_allocators[0]->Reset()
+    if hr < 0 do return
+    hr = r.command_list->Reset(r.command_allocators[0], nil)
+    if hr < 0 do return
+
+    r.command_list->CopyBufferRegion(gpu.vertex_buffer, 0, upload_buffer, 0, vb_size)
+    r.command_list->CopyBufferRegion(gpu.index_buffer, 0, upload_buffer, vb_size, ib_size)
+
+    barriers := [2]d3d12.RESOURCE_BARRIER{
+        {Type = .TRANSITION},
+        {Type = .TRANSITION},
+    }
+    barriers[0].Transition = {
+        pResource = gpu.vertex_buffer,
+        StateBefore = {.COPY_DEST},
+        StateAfter = {.VERTEX_AND_CONSTANT_BUFFER},
+        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+    }
+    barriers[1].Transition = {
+        pResource = gpu.index_buffer,
+        StateBefore = {.COPY_DEST},
+        StateAfter = {.INDEX_BUFFER},
+        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+    }
+    r.command_list->ResourceBarrier(u32(len(barriers)), raw_data(barriers[:]))
+
+    hr = r.command_list->Close()
+    if hr < 0 do return
+
+    lists := []^d3d12.ICommandList{r.command_list}
+    r.command_queue->ExecuteCommandLists(u32(len(lists)), raw_data(lists))
+
+    // The staging buffer must outlive the copy.
+    renderer_wait_for_gpu()
 
     gpu.vertex_buffer_view = d3d12.VERTEX_BUFFER_VIEW{
         BufferLocation = gpu.vertex_buffer->GetGPUVirtualAddress(),
         StrideInBytes = size_of(Vertex),
         SizeInBytes = u32(vb_size),
     }
-
-    ib_size := u64(len(mesh.indices) * size_of(u32))
-    ib_desc := d3d12.RESOURCE_DESC{
-        Dimension = .BUFFER,
-        Width = ib_size,
-        Height = 1,
-        DepthOrArraySize = 1,
-        MipLevels = 1,
-        SampleDesc = {Count = 1},
-        Layout = .ROW_MAJOR,
-    }
-
-    hr = r.device->CreateCommittedResource(
-        &heap_props,
-        {},
-        &ib_desc,
-        d3d12.RESOURCE_STATE_GENERIC_READ,
-        nil,
-        d3d12.IResource_UUID,
-        (^rawptr)(&gpu.index_buffer),
-    )
-    if hr < 0 do return
-
-    hr = gpu.index_buffer->Map(0, &write_range, &mapped)
-    if hr < 0 do return
-    runtime.mem_copy(mapped, raw_data(mesh.indices), int(ib_size))
-    gpu.index_buffer->Unmap(0, nil)
-
     gpu.index_buffer_view = d3d12.INDEX_BUFFER_VIEW{
         BufferLocation = gpu.index_buffer->GetGPUVirtualAddress(),
         Format = .R32_UINT,
         SizeInBytes = u32(ib_size),
     }
-
     gpu.index_count = u32(len(mesh.indices))
     return
 }
@@ -1284,6 +1327,10 @@ renderer_upload_texture :: proc(
     is_normal_map := desc.usage == .normal
     is_linear_data := desc.usage != .albedo
 
+    // Color textures are sRGB-encoded: the _SRGB format makes the sampler
+    // decode to linear before filtering. Data maps stay UNORM.
+    format: dxgi.FORMAT = .R8G8B8A8_UNORM_SRGB if !is_linear_data else .R8G8B8A8_UNORM
+
     mips := make([dynamic][]u8, context.temp_allocator)
     append(&mips, pixels)
 
@@ -1311,7 +1358,7 @@ renderer_upload_texture :: proc(
         Height = u32(height),
         DepthOrArraySize = 1,
         MipLevels = u16(len(mips)),
-        Format = .R8G8B8A8_UNORM,
+        Format = format,
         SampleDesc = {Count = 1},
         Flags = {},
     }
@@ -1440,7 +1487,7 @@ renderer_upload_texture :: proc(
 
     // ── SRV ───────────────────────────────────────────────────────────────────
     srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC {
-        Format                  = .R8G8B8A8_UNORM,
+        Format                  = format,
         ViewDimension           = .TEXTURE2D,
         Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
     }

@@ -137,6 +137,12 @@ debug_ui_update :: proc() {
         if ui_slider_float("Exposure", &r.post_exposure, 0.1, 5.0) do changed = true
         if ui_slider_float("Bloom threshold", &r.post_threshold, 0.1, 5.0) do changed = true
         if ui_slider_float("Bloom strength", &r.post_strength, 0.0, 2.0) do changed = true
+        tone_mapper_labels := [len(ToneMapper)]cstring{"Reinhard", "ACES (fitted)", "AgX"}
+        tone_mapper := i32(r.post_tone_mapper)
+        if ui_combo("Tone mapping", &tone_mapper, raw_data(tone_mapper_labels[:]), i32(len(tone_mapper_labels))) {
+            r.post_tone_mapper = ToneMapper(tone_mapper)
+        }
+        debug_ui_shadow_controls()
         debug_ui_environment_controls()
 
         ui_separator()
@@ -200,6 +206,14 @@ debug_ui_render :: proc() {
     if g_debug_ui_ready {
         ui_render(rawptr(g_renderer.command_list))
     }
+}
+
+debug_ui_shadow_controls :: proc() {
+    r := &g_renderer
+    ui_separator()
+    debug_ui_text("Sun shadows (bias in shadow-map texels)")
+    ui_slider_float("Shadow bias", &r.shadow_bias_constant, 0, MAX_SHADOW_BIAS)
+    ui_slider_float("Shadow slope bias", &r.shadow_bias_slope, 0, MAX_SHADOW_BIAS)
 }
 
 debug_ui_environment_controls :: proc() {

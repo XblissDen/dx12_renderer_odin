@@ -2,6 +2,24 @@ package main
 
 import d3d12 "vendor:directx/d3d12"
 
+// The sun's fixed orthographic shadow volume, centered on the world origin.
+SHADOW_HALF_EXTENT :: f32(8)
+SHADOW_EYE_DISTANCE :: f32(12)
+SHADOW_NEAR :: f32(0.1)
+SHADOW_FAR :: f32(30)
+
+// Bias in shadow-map texels. 3x3 PCF samples one texel away, so the slope
+// term must cover at least that much depth change on tilted receivers.
+DEFAULT_SHADOW_BIAS_CONSTANT :: f32(1.0)
+DEFAULT_SHADOW_BIAS_SLOPE :: f32(1.5)
+MAX_SHADOW_BIAS :: f32(10)
+
+// Shadow-map depth change across one texel on a receiver facing the sun.
+renderer_shadow_texel_depth :: proc() -> f32 {
+    texel_world := 2 * SHADOW_HALF_EXTENT / SHADOW_MAP_SIZE
+    return texel_world / (SHADOW_FAR - SHADOW_NEAR)
+}
+
 renderer_create_shadow_map :: proc() {
     r := &g_renderer
 

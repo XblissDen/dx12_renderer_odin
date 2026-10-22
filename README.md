@@ -35,6 +35,10 @@ The **Renderer controls** panel has exposure/bloom sliders, FPS, wall-clock fram
 time, and all six GPU-pass timings. Changes reach the post-process constants in
 the same frame. The final GPU timing includes tone mapping and the UI draw.
 
+- **Tone mapping**: ACES (fitted, the default), AgX, or Reinhard. Scenes saved
+  before this option existed load with Reinhard, their original look.
+- **Shadow bias / slope bias**: sun-shadow depth bias in shadow-map texels. Raise
+  them for acne (striped self-shadowing); lower them if shadows detach from objects.
 - **Lighting mode**: choose HDRI lighting or an ambient color/intensity. Ambient
   color lights both diffuse and specular materials; zero intensity gives direct
   sun/point lighting only.

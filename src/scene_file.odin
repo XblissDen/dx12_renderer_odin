@@ -13,6 +13,13 @@ ScenePostSettings :: struct{
     exposure: f32,
     bloom_threshold: f32,
     bloom_strength: f32,
+    // Absent in older files, which decode as Reinhard and keep their look.
+    tone_mapper: ToneMapper,
+}
+
+SceneShadowSettings :: struct {
+    bias_constant: f32,
+    bias_slope: f32,
 }
 
 // Version 6+ stores live entities only, each with its optional components.
@@ -31,6 +38,7 @@ SceneFile :: struct {
     entities: []SceneFileEntity,
     post_process: ScenePostSettings,
     environment: Maybe(EnvironmentSettings),
+    shadow: Maybe(SceneShadowSettings),
 }
 
 // Versions 1-5 stored the in-memory component arrays directly, with 16 slots,
@@ -221,8 +229,13 @@ scene_save_to_file :: proc(scene: ^Scene, path: string) -> (ok: bool, message: s
             exposure = g_renderer.post_exposure,
             bloom_threshold = g_renderer.post_threshold,
             bloom_strength = g_renderer.post_strength,
+            tone_mapper = g_renderer.post_tone_mapper,
         },
         environment = g_renderer.environment_settings,
+        shadow = SceneShadowSettings{
+            bias_constant = g_renderer.shadow_bias_constant,
+            bias_slope = g_renderer.shadow_bias_slope,
+        },
     }
 
     data, encode_error := json.marshal(file, json.Marshal_Options{
@@ -323,8 +336,17 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
 
     post := file.post_process
     if post.exposure < 0.1 || post.exposure > 5.0 || post.bloom_threshold < 0.1 || post.bloom_threshold > 5.0 ||
-        post.bloom_strength < 0.0 || post.bloom_strength > 2.0 {
+        post.bloom_strength < 0.0 || post.bloom_strength > 2.0 ||
+        post.tone_mapper > max(ToneMapper) {
         return false, "Invalid post-process settings."
+    }
+    shadow := file.shadow.? or_else SceneShadowSettings{
+        bias_constant = DEFAULT_SHADOW_BIAS_CONSTANT,
+        bias_slope = DEFAULT_SHADOW_BIAS_SLOPE,
+    }
+    if !(shadow.bias_constant >= 0 && shadow.bias_constant <= MAX_SHADOW_BIAS) ||
+       !(shadow.bias_slope >= 0 && shadow.bias_slope <= MAX_SHADOW_BIAS) {
+        return false, "Invalid shadow settings."
     }
     environment, has_environment := file.environment.(EnvironmentSettings)
     defaults := renderer_default_environment_settings()
@@ -361,6 +383,9 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
     g_renderer.post_exposure = post.exposure
     g_renderer.post_threshold = post.bloom_threshold
     g_renderer.post_strength = post.bloom_strength
+    g_renderer.post_tone_mapper = post.tone_mapper
+    g_renderer.shadow_bias_constant = shadow.bias_constant
+    g_renderer.shadow_bias_slope = shadow.bias_slope
 
     commited = true
     return true, "Scene loaded."

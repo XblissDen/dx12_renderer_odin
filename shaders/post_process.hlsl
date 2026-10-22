@@ -7,7 +7,7 @@ cbuffer PostConstants : register(b1)
     float exposure;
     float bloom_threshold;
     float bloom_strength;
-    float _pad0;
+    uint  tone_mapper; // 0 Reinhard, 1 ACES, 2 AgX
 };
 
 struct VSOutput
@@ -91,6 +91,71 @@ VSOutput VSMain(uint vertex_id : SV_VertexID)
     return output;
 }
 
+float3 LinearToSrgb(float3 value)
+{
+    float3 low = value * 12.92f;
+    float3 high = 1.055f * pow(value, 1.0f / 2.4f) - 0.055f;
+    // FXC evaluates a vector ternary per component.
+    return value <= 0.0031308f ? low : high;
+}
+
+// Stephen Hill's fit of the ACES RRT + sRGB ODT. Matrices convert linear
+// sRGB into and out of the fit's working space; rows are listed here.
+static const float3x3 ACES_INPUT = float3x3(
+    0.59719f, 0.35458f, 0.04823f,
+    0.07600f, 0.90834f, 0.01566f,
+    0.02840f, 0.13383f, 0.83777f
+);
+static const float3x3 ACES_OUTPUT = float3x3(
+     1.60475f, -0.53108f, -0.07367f,
+    -0.10208f,  1.10813f, -0.00605f,
+    -0.00327f, -0.07276f,  1.07602f
+);
+
+float3 ToneMapACES(float3 color)
+{
+    color = mul(ACES_INPUT, color);
+    float3 a = color * (color + 0.0245786f) - 0.000090537f;
+    float3 b = color * (0.983729f * color + 0.4329510f) + 0.238081f;
+    return mul(ACES_OUTPUT, a / b);
+}
+
+// Benjamin Wrensch's minimal AgX approximation (default look). The GLSL
+// matrices are column-major, so their columns are the rows used with mul(v, M).
+static const float3x3 AGX_INPUT = float3x3(
+    0.842479062253094f, 0.0423282422610123f, 0.0423756549057051f,
+    0.0784335999999992f, 0.878468636469772f, 0.0784336f,
+    0.0792237451477643f, 0.0791661274605434f, 0.879142973793104f
+);
+static const float3x3 AGX_OUTPUT = float3x3(
+    1.19687900512017f, -0.0528968517574562f, -0.0529716355144438f,
+    -0.0980208811401368f, 1.15190312990417f, -0.0980434501171241f,
+    -0.0990297440797205f, -0.0989611768448433f, 1.15107367264116f
+);
+
+float3 AgXContrast(float3 x)
+{
+    float3 x2 = x * x;
+    float3 x4 = x2 * x2;
+    return 15.5f * x4 * x2 - 40.14f * x4 * x + 31.96f * x4 -
+           6.868f * x2 * x + 0.4298f * x2 + 0.1191f * x - 0.00232f;
+}
+
+float3 ToneMapAgX(float3 color)
+{
+    const float min_ev = -12.47393f;
+    const float max_ev = 4.026069f;
+
+    color = mul(color, AGX_INPUT);
+    color = clamp(log2(max(color, 1e-10f)), min_ev, max_ev);
+    color = (color - min_ev) / (max_ev - min_ev);
+    color = AgXContrast(color);
+    color = mul(color, AGX_OUTPUT);
+
+    // AgX's display encoding is a 2.2 power; return linear for LinearToSrgb.
+    return pow(saturate(color), 2.2f);
+}
+
 float4 PSMain(VSOutput input) : SV_TARGET
 {
     float3 hdr_color = g_hdr_texture.Sample(g_sampler, input.uv).rgb;
@@ -98,9 +163,22 @@ float4 PSMain(VSOutput input) : SV_TARGET
 
     hdr_color += bloom_color * bloom_strength;
 
-    float3 exposed_color = hdr_color * exposure;
-    float3 mapped = exposed_color / (exposed_color + 1.0f);
-    float3 display_color = pow(saturate(mapped), 1.0f / 2.2f);
+    float3 exposed_color = max(hdr_color * exposure, 0.0f);
+    float3 mapped;
+    [branch]
+    if (tone_mapper == 1u)
+    {
+        mapped = ToneMapACES(exposed_color);
+    }
+    else if (tone_mapper == 2u)
+    {
+        mapped = ToneMapAgX(exposed_color);
+    }
+    else
+    {
+        mapped = exposed_color / (exposed_color + 1.0f);
+    }
 
-    return float4(display_color, 1.0f);
+    // The back buffer is UNORM (ImGui draws to it too), so encode sRGB here.
+    return float4(LinearToSrgb(saturate(mapped)), 1.0f);
 }

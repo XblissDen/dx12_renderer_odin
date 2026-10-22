@@ -51,7 +51,10 @@ cbuffer FrameConstants : register(b4)
     uint  ambient_mode;
 
     float3 ambient_color;
-    float  _frame_pad;
+    float  shadow_bias_constant;
+
+    float  shadow_bias_slope;
+    float3 _frame_pad;
 
     GpuPointLight lights[MAX_LIGHTS];
 };
@@ -216,13 +219,12 @@ float4 PSMain(PSInput input) : SV_TARGET
         return float4(material_tint * 4.0f, 1.0f);
     }
 
-    // Our texture SRV is UNORM, so decode its sRGB-style image values manually.
+    // Albedo SRVs are _SRGB, so the sampler returns filtered linear values.
     float2 material_uv = input.texcoord * uv_scale;
 
-    float3 texture_color = g_texture.Sample(
+    float3 albedo = g_texture.Sample(
         g_material_sampler, material_uv
-    ).rgb;
-    float3 albedo = pow(saturate(texture_color), 2.2f) * material_tint;
+    ).rgb * material_tint;
 
     float roughness_value = roughness;
 
@@ -339,7 +341,18 @@ float4 PSMain(PSInput input) : SV_TARGET
             g_shadow_map.GetDimensions(shadow_width, shadow_height);
             float2 texel_size = 1.0f / float2(shadow_width, shadow_height);
 
-            float shadow_bias = 0.001f;
+            // Use the interpolated geometric normal: normal-map detail does
+            // not change the depth stored in the shadow map.
+            float geometric_n_dot_l = saturate(
+                dot(normalize(input.normal), sun_L)
+            );
+            float tan_angle = min(
+                sqrt(1.0f - geometric_n_dot_l * geometric_n_dot_l) /
+                    max(geometric_n_dot_l, 0.0001f),
+                10.0f
+            );
+            float shadow_bias = shadow_bias_constant +
+                                shadow_bias_slope * tan_angle;
 
             sun_visibility = 0.0f;
 

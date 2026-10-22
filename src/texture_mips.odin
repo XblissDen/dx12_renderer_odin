@@ -48,6 +48,17 @@ texture_next_environment_mip :: proc(
     return
 }
 
+// Exact sRGB transfer functions, matching the GPU's _SRGB format decode.
+srgb_to_linear :: proc(value: f32) -> f32 {
+    if value <= 0.04045 do return value / 12.92
+    return math.pow((value + 0.055) / 1.055, 2.4)
+}
+
+linear_to_srgb :: proc(value: f32) -> f32 {
+    if value <= 0.0031308 do return value * 12.92
+    return 1.055 * math.pow(value, 1.0 / 2.4) - 0.055
+}
+
 texture_next_mip :: proc(
     source: []u8,
     width, height: u32,
@@ -117,7 +128,7 @@ texture_next_mip :: proc(
                         if linear_data {
                             linear_sum += encoded
                         } else {
-                            linear_sum += math.pow(encoded, 2.2)
+                            linear_sum += srgb_to_linear(encoded)
                         }
                     }
                 }
@@ -126,7 +137,7 @@ texture_next_mip :: proc(
                 encoded_average := linear_average
 
                 if !linear_data {
-                    encoded_average = math.pow(linear_average, 1.0 / 2.2)
+                    encoded_average = linear_to_srgb(linear_average)
                 }
 
                 result[destination + channel] = u8(clamp(
