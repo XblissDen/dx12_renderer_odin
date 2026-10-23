@@ -180,10 +180,10 @@ debug_ui_update :: proc() {
 
         debug_ui_text(fmt.bprintf(
             text_buffer[:],
-            "Shadow casters: %d/%d | Culled: %d",
+            "Shadow draws: %d (%d casters x %d cascades)",
             stats.shadow_visible,
             stats.shadow_total,
-            stats.shadow_total - stats.shadow_visible,
+            SHADOW_CASCADE_COUNT,
         ))
 
         pass_names := [GPU_PASS_COUNT]string{
@@ -235,6 +235,7 @@ debug_ui_shadow_controls :: proc() {
     ui_slider_float("Shadow distance", &r.shadow_distance, MIN_SHADOW_DISTANCE, MAX_SHADOW_DISTANCE)
     ui_slider_float("Shadow bias", &r.shadow_bias_constant, 0, MAX_SHADOW_BIAS)
     ui_slider_float("Shadow slope bias", &r.shadow_bias_slope, 0, MAX_SHADOW_BIAS)
+    ui_checkbox("Show shadow cascades", &r.shadow_show_cascades)
 }
 
 debug_ui_environment_controls :: proc() {

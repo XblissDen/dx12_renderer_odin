@@ -1,4 +1,8 @@
 #define MAX_LIGHTS 16
+#define SHADOW_CASCADE_COUNT 4
+// Must match SHADOW_NORMAL_OFFSET_TEXELS in renderer_shadow.odin.
+#define SHADOW_NORMAL_OFFSET_TEXELS 1.0f
+#define SHADOW_CASCADE_BLEND_FRACTION 0.1f
 
 struct GpuPointLight
 {
@@ -34,7 +38,7 @@ cbuffer FrameConstants : register(b4)
 {
     float4x4 view;
     float4x4 projection;
-    float4x4 sun_view_projection;
+    float4x4 cascade_view_projection[SHADOW_CASCADE_COUNT];
 
     float3 view_position;
     uint   light_count;
@@ -56,16 +60,27 @@ cbuffer FrameConstants : register(b4)
     float  shadow_bias_slope;
     float  shadow_fade_start;
     float  shadow_fade_end;
-    float  _frame_pad;
+    uint   shadow_show_cascades;
+
+    // One component per cascade.
+    float4 cascade_split_depth;
+    float4 cascade_texel_world;
+    float4 cascade_texel_depth;
 
     GpuPointLight lights[MAX_LIGHTS];
+};
+
+// Which cascade the shadow pass is drawing.
+cbuffer ShadowCascade : register(b5)
+{
+    uint shadow_cascade_index;
 };
 
 Texture2D    g_texture : register(t0);
 SamplerState g_sampler : register(s0);
 SamplerState g_material_sampler : register(s2);
 SamplerState g_environment_sampler : register(s3);
-Texture2D<float> g_shadow_map : register(t1);
+Texture2DArray<float> g_shadow_map : register(t1);
 SamplerComparisonState g_shadow_sampler : register(s1);
 Texture2D<float4> g_irradiance : register(t3);
 Texture2D<float4> g_prefiltered_environment : register(t4);
@@ -87,7 +102,7 @@ struct PSInput
     float3 world_pos    : TEXCOORD0;
     float3 normal       : NORMAL;
     float2 texcoord     : TEXCOORD1;
-    float4 shadow_position : TEXCOORD2;
+    float  view_depth   : TEXCOORD2;
     float4 tangent : TEXCOORD3;
 };
 
@@ -97,7 +112,8 @@ PSInput VSMain(VSInput input)
 
     float4 world_pos = mul(float4(input.position, 1.0f), model);
     output.world_pos = world_pos.xyz;
-    output.shadow_position = mul(world_pos, sun_view_projection);
+    // Distance along the camera's forward axis, which selects the cascade.
+    output.view_depth = mul(world_pos, view).z;
 
     float4 pos = world_pos;
     pos = mul(pos, view);
@@ -117,7 +133,71 @@ PSInput VSMain(VSInput input)
 float4 VSShadow(VSInput input) : SV_POSITION
 {
     float4 world_pos = mul(float4(input.position, 1.0f), model);
-    return mul(world_pos, sun_view_projection);
+    return mul(world_pos, cascade_view_projection[shadow_cascade_index]);
+}
+
+// 5x5 tent filter from 9 bilinear comparison taps (Ignacio Castano's
+// optimized PCF). Bilinear taps at weighted offsets reproduce the tent's
+// weights, so edges are smooth without 25 separate samples.
+float SampleShadowTent5x5(float2 uv, float depth, uint cascade)
+{
+    uint width, height, elements;
+    g_shadow_map.GetDimensions(width, height, elements);
+    float2 size = float2(width, height);
+
+    float2 texel_uv = uv * size;
+    float2 base = floor(texel_uv + 0.5f);
+    float s = texel_uv.x + 0.5f - base.x;
+    float t = texel_uv.y + 0.5f - base.y;
+    base = (base - 0.5f) / size;
+
+    float3 u_weight = float3(4.0f - 3.0f * s, 7.0f, 1.0f + 3.0f * s);
+    float3 u_offset = float3(
+        (3.0f - 2.0f * s) / u_weight.x - 2.0f,
+        (3.0f + s) / u_weight.y,
+        s / u_weight.z + 2.0f
+    );
+    float3 v_weight = float3(4.0f - 3.0f * t, 7.0f, 1.0f + 3.0f * t);
+    float3 v_offset = float3(
+        (3.0f - 2.0f * t) / v_weight.x - 2.0f,
+        (3.0f + t) / v_weight.y,
+        t / v_weight.z + 2.0f
+    );
+
+    float sum = 0.0f;
+    [unroll]
+    for (uint y = 0u; y < 3u; ++y)
+    {
+        [unroll]
+        for (uint x = 0u; x < 3u; ++x)
+        {
+            float2 tap = base + float2(u_offset[x], v_offset[y]) / size;
+            sum += u_weight[x] * v_weight[y] * g_shadow_map.SampleCmpLevelZero(
+                g_shadow_sampler, float3(tap, float(cascade)), depth
+            );
+        }
+    }
+    // The weights in each direction sum to 12.
+    return sum / 144.0f;
+}
+
+// Sun visibility from one cascade; 1 outside its map.
+float CascadeVisibility(uint cascade, float3 world_pos, float3 geometric_normal, float tan_angle)
+{
+    // Look up from slightly off the surface to keep it from shadowing itself.
+    float3 offset_pos = world_pos +
+        geometric_normal * (SHADOW_NORMAL_OFFSET_TEXELS * cascade_texel_world[cascade]);
+    float4 clip = mul(float4(offset_pos, 1.0f), cascade_view_projection[cascade]);
+    float3 ndc = clip.xyz / clip.w;
+    float2 uv = float2(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f);
+    if (any(uv < 0.0f) || any(uv > 1.0f) || ndc.z < 0.0f || ndc.z > 1.0f)
+    {
+        return 1.0f;
+    }
+
+    float bias = (shadow_bias_constant + shadow_bias_slope * tan_angle) *
+                 cascade_texel_depth[cascade];
+    return SampleShadowTent5x5(uv, ndc.z - bias, cascade);
 }
 
 static const float PI = 3.14159265f;
@@ -322,57 +402,46 @@ float4 PSMain(PSInput input) : SV_TARGET
             (ambient_F0 * environment_brdf.x + environment_brdf.y);
 
 
-    float sun_visibility = 1.0f;
+    // Use the interpolated geometric normal: normal-map detail does not change
+    // the depth stored in the shadow map.
+    float3 geometric_normal = normalize(input.normal);
+    float geometric_n_dot_l = saturate(dot(geometric_normal, sun_L));
+    float tan_angle = min(
+        sqrt(1.0f - geometric_n_dot_l * geometric_n_dot_l) /
+            max(geometric_n_dot_l, 0.0001f),
+        10.0f
+    );
 
-    if (input.shadow_position.w > 0.0f)
+    // The first cascade whose slice of the view contains this pixel.
+    uint cascade = SHADOW_CASCADE_COUNT;
+    [unroll]
+    for (uint c = SHADOW_CASCADE_COUNT; c > 0u; --c)
     {
-        float3 shadow_ndc =
-            input.shadow_position.xyz / input.shadow_position.w;
+        if (input.view_depth < cascade_split_depth[c - 1u]) cascade = c - 1u;
+    }
 
-        float2 shadow_uv = float2(
-            shadow_ndc.x * 0.5f + 0.5f,
-            0.5f - shadow_ndc.y * 0.5f
+    float sun_visibility = 1.0f;
+    if (cascade < SHADOW_CASCADE_COUNT)
+    {
+        sun_visibility = CascadeVisibility(
+            cascade, input.world_pos, geometric_normal, tan_angle
         );
 
-        if (all(shadow_uv >= 0.0f) &&
-            all(shadow_uv <= 1.0f) &&
-            shadow_ndc.z >= 0.0f &&
-            shadow_ndc.z <= 1.0f)
+        // Cross-fade into the next cascade near the end of this one, so the
+        // change in texel size does not show as a line.
+        float cascade_start = cascade == 0u ? 0.0f : cascade_split_depth[cascade - 1u];
+        float cascade_end = cascade_split_depth[cascade];
+        float blend_start = cascade_end -
+                            (cascade_end - cascade_start) * SHADOW_CASCADE_BLEND_FRACTION;
+        if (cascade + 1u < SHADOW_CASCADE_COUNT && input.view_depth > blend_start)
         {
-            uint shadow_width, shadow_height;
-            g_shadow_map.GetDimensions(shadow_width, shadow_height);
-            float2 texel_size = 1.0f / float2(shadow_width, shadow_height);
-
-            // Use the interpolated geometric normal: normal-map detail does
-            // not change the depth stored in the shadow map.
-            float geometric_n_dot_l = saturate(
-                dot(normalize(input.normal), sun_L)
+            float next = CascadeVisibility(
+                cascade + 1u, input.world_pos, geometric_normal, tan_angle
             );
-            float tan_angle = min(
-                sqrt(1.0f - geometric_n_dot_l * geometric_n_dot_l) /
-                    max(geometric_n_dot_l, 0.0001f),
-                10.0f
+            sun_visibility = lerp(
+                sun_visibility, next,
+                saturate((input.view_depth - blend_start) / (cascade_end - blend_start))
             );
-            float shadow_bias = shadow_bias_constant +
-                                shadow_bias_slope * tan_angle;
-
-            sun_visibility = 0.0f;
-
-            for (int y = -1; y <= 1; ++y)
-            {
-                for (int x = -1; x <= 1; ++x)
-                {
-                    float2 sample_uv = shadow_uv + float2(x, y) * texel_size;
-
-                    sun_visibility += g_shadow_map.SampleCmpLevelZero(
-                        g_shadow_sampler,
-                        sample_uv,
-                        shadow_ndc.z - shadow_bias
-                    );
-                }
-            }
-
-            sun_visibility /= 9.0f;
         }
     }
 
@@ -406,6 +475,16 @@ float4 PSMain(PSInput input) : SV_TARGET
             material_roughness, material_metallic,
             radiance
         );
+    }
+
+    if (shadow_show_cascades != 0u)
+    {
+        // Red, green, blue, yellow by cascade; beyond the last stays untinted.
+        static const float3 cascade_tints[SHADOW_CASCADE_COUNT] = {
+            float3(1.0f, 0.35f, 0.35f), float3(0.35f, 1.0f, 0.35f),
+            float3(0.35f, 0.5f, 1.0f), float3(1.0f, 1.0f, 0.3f),
+        };
+        if (cascade < SHADOW_CASCADE_COUNT) result *= cascade_tints[cascade];
     }
 
     return float4(result, 1.0f);

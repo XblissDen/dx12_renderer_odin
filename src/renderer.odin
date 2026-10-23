@@ -85,7 +85,7 @@ renderer_texture_srv :: proc(texture: TextureHandle) -> d3d12.GPU_DESCRIPTOR_HAN
 FrameConstants :: struct #align(256) {
     view: alg.Matrix4f32,
     projection: alg.Matrix4f32,
-    sun_view_projection: alg.Matrix4f32,
+    cascade_view_projection: [SHADOW_CASCADE_COUNT]alg.Matrix4f32,
 
     view_position: [3]f32,
     light_count: u32,
@@ -101,19 +101,27 @@ FrameConstants :: struct #align(256) {
     ambient_mode: AmbientLightingMode,
 
     ambient_color: [3]f32,
-    // Shadow-map depth units (NDC z), already scaled from texels.
+    // Shadow bias in shadow-map texels; each cascade scales it by its texel depth.
     shadow_bias_constant: f32,
 
     shadow_bias_slope: f32,
     // Distance from the camera over which sun shadows fade out.
     shadow_fade_start: f32,
     shadow_fade_end: f32,
-    _pad0: f32,
+    // Nonzero tints receivers by cascade, for inspecting the splits.
+    shadow_show_cascades: u32,
+
+    // Per cascade: view depth where it ends, world size of a texel, and the
+    // shadow-map depth change across one texel facing the sun.
+    cascade_split_depth: [SHADOW_CASCADE_COUNT]f32,
+    cascade_texel_world: [SHADOW_CASCADE_COUNT]f32,
+    cascade_texel_depth: [SHADOW_CASCADE_COUNT]f32,
 
     lights: [MAX_LIGHTS]GpuPointLight,
 }
 
-#assert(size_of(FrameConstants) == 1024)
+#assert(SHADOW_CASCADE_COUNT == 4) // Packed as float4 rows in scene.hlsl.
+#assert(size_of(FrameConstants) == 1280)
 
 // Written per draw (b0).
 ObjectConstants :: struct #align(256) {
@@ -241,8 +249,9 @@ Renderer :: struct {
     // receiver's slope towards the sun.
     shadow_bias_constant: f32,
     shadow_bias_slope: f32,
-    // Camera distance covered by the sun's shadow map.
+    // Camera distance covered by the sun's shadow cascades.
     shadow_distance: f32,
+    shadow_show_cascades: bool,
 
     timestamp_heap: ^d3d12.IQueryHeap,
     timestamp_readback: ^d3d12.IResource,
@@ -579,6 +588,13 @@ renderer_load_assets :: proc(){
     frame_cbv_param.ShaderVisibility = .ALL
     frame_cbv_param.Descriptor = {ShaderRegister = 4}
 
+    // The shadow pass draws one cascade at a time.
+    cascade_param := d3d12.ROOT_PARAMETER{
+        ParameterType = ._32BIT_CONSTANTS,
+        ShaderVisibility = .VERTEX,
+    }
+    cascade_param.Constants = {ShaderRegister = 5, Num32BitValues = 1}
+
     static_sampler := d3d12.STATIC_SAMPLER_DESC{
         Filter = .MIN_MAG_MIP_LINEAR,
         AddressU = .WRAP,
@@ -631,6 +647,7 @@ renderer_load_assets :: proc(){
         roughness_param, // Root slot 10 -> t6
         metallic_param,  // Root slot 11 -> t7
         frame_cbv_param, // Root slot 12 -> b4
+        cascade_param,   // Root slot 13 -> b5 (shadow cascade index)
     }
     samplers := []d3d12.STATIC_SAMPLER_DESC{
         static_sampler,
@@ -1524,10 +1541,11 @@ renderer_render_frame :: proc(scene: ^Scene) {
 
     frame := renderer_prepare_frame(scene)
 
-    renderer_render_shadow_pass(
-        frame.draw_meshes[:frame.draw_count],
-        frame.shadow_indices[:frame.shadow_draw_count],
-    )
+    cascade_draws: [SHADOW_CASCADE_COUNT][]u32
+    for cascade in 0..<SHADOW_CASCADE_COUNT {
+        cascade_draws[cascade] = frame.shadow_indices[cascade][:frame.shadow_draw_count[cascade]]
+    }
+    renderer_render_shadow_pass(frame.draw_meshes[:frame.draw_count], cascade_draws)
 
     renderer_render_scene_pass(
         frame.draw_meshes[:frame.draw_count],

@@ -37,9 +37,12 @@ the same frame. The final GPU timing includes tone mapping and the UI draw.
 
 - **Tone mapping**: ACES (fitted, the default), AgX, or Reinhard. Scenes saved
   before this option existed load with Reinhard, their original look.
-- **Shadow distance**: how far from the camera sun shadows reach. The shadow map
-  follows the camera and covers its view up to this distance; shadows fade out over
-  the last 15%. Shorter distances give sharper shadows.
+- **Shadow distance**: how far from the camera sun shadows reach (default 40). The
+  view up to this distance is split into four cascaded shadow maps (2048² each),
+  mostly logarithmically, so nearby shadows get millimetre-scale texels and distant
+  ones still exist. Cascades blend into each other, and shadows fade out over the
+  last 15%. Edges use a 5×5 tent filter. **Show shadow cascades** tints receivers
+  red/green/blue/yellow by cascade.
 - **Shadow bias / slope bias**: sun-shadow depth bias in shadow-map texels. Raise
   them for acne (striped self-shadowing); lower them if shadows detach from objects.
 - **Sun from HDRI** (HDRI lighting, on by default): the panorama's sun is found when

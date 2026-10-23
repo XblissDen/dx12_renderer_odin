@@ -5,52 +5,100 @@ import alg "core:math/linalg"
 import d3d12 "vendor:directx/d3d12"
 
 // Sun shadows cover the camera view out to this distance, then fade out.
-DEFAULT_SHADOW_DISTANCE :: f32(20)
+// The distance is split into cascades: each gets its own shadow map, so nearby
+// receivers get small texels while distant ones still have shadows.
+SHADOW_CASCADE_COUNT :: 4
+DEFAULT_SHADOW_DISTANCE :: f32(40)
 MIN_SHADOW_DISTANCE :: f32(2)
 MAX_SHADOW_DISTANCE :: f32(200)
 SHADOW_FADE_FRACTION :: f32(0.15)
+// Blend of logarithmic (1) and uniform (0) split spacing.
+SHADOW_SPLIT_LAMBDA :: f32(0.8)
+// Each cascade blends into the next over this last fraction of its depth range.
+SHADOW_CASCADE_BLEND_FRACTION :: f32(0.1)
 
-// Bias in shadow-map texels. 3x3 PCF samples one texel away, so the slope
-// term must cover at least that much depth change on tilted receivers.
+// Bias in shadow-map texels. The 5x5 tent filter reaches 2.5 texels away, so
+// the slope term must cover that much depth change on tilted receivers.
 DEFAULT_SHADOW_BIAS_CONSTANT :: f32(1.0)
 DEFAULT_SHADOW_BIAS_SLOPE :: f32(1.5)
 MAX_SHADOW_BIAS :: f32(10)
+// Receivers look up the shadow map this many texels off their surface, along
+// the geometric normal, which removes most acne without a large depth bias.
+SHADOW_NORMAL_OFFSET_TEXELS :: f32(1.0)
+
+ShadowCascade :: struct {
+    view_projection: alg.Matrix4f32,
+    // View depth (along the camera's forward axis) where this cascade ends.
+    split_depth: f32,
+    // World size of one texel, and the depth change across one texel on a
+    // receiver facing the sun, in shadow-map depth units.
+    texel_world: f32,
+    texel_depth: f32,
+}
 
 ShadowFit :: struct {
-    view_projection: alg.Matrix4f32,
-    // Shadow-map depth change across one texel on a receiver facing the sun.
-    texel_depth: f32,
+    cascades: [SHADOW_CASCADE_COUNT]ShadowCascade,
     fade_start, fade_end: f32,
 }
 
-// Fits the sun's orthographic volume around the camera view up to `distance`.
-// The volume is a bounding sphere of that view slice: its size does not change
-// as the camera turns, and its center snaps to whole shadow-map texels, so
-// shadow edges stay still while the camera moves.
+// Splits the view out to the shadow distance into cascades and fits each one.
 renderer_fit_shadow :: proc(
     sun_direction: alg.Vector3f32,
     camera_position, camera_forward: alg.Vector3f32,
     aspect, far_clip, distance: f32,
     casters: []WorldBounds,
-) -> ShadowFit {
+) -> (fit: ShadowFit) {
     shadow_distance := clamp(distance, CAMERA_NEAR_CLIP * 2, far_clip)
+    near := CAMERA_NEAR_CLIP
 
+    slice_near := near
+    for i in 0..<SHADOW_CASCADE_COUNT {
+        // Practical split scheme: mostly logarithmic, which matches how
+        // perspective shrinks texels with distance.
+        t := f32(i + 1) / SHADOW_CASCADE_COUNT
+        logarithmic := near * math.pow(shadow_distance / near, t)
+        uniform := near + (shadow_distance - near) * t
+        slice_far := math.lerp(uniform, logarithmic, SHADOW_SPLIT_LAMBDA)
+        if i == SHADOW_CASCADE_COUNT - 1 do slice_far = shadow_distance
+
+        fit.cascades[i] = renderer_fit_shadow_cascade(
+            sun_direction, camera_position, camera_forward,
+            aspect, slice_near, slice_far, casters,
+        )
+        slice_near = slice_far
+    }
+
+    fit.fade_start = shadow_distance * (1 - SHADOW_FADE_FRACTION)
+    fit.fade_end = shadow_distance
+    return
+}
+
+// Fits the sun's orthographic volume around one slice of the camera view.
+// The volume is a bounding sphere of the slice: its size does not change as
+// the camera turns, and its center snaps to whole shadow-map texels, so shadow
+// edges stay still while the camera moves.
+renderer_fit_shadow_cascade :: proc(
+    sun_direction: alg.Vector3f32,
+    camera_position, camera_forward: alg.Vector3f32,
+    aspect, slice_near, slice_far: f32,
+    casters: []WorldBounds,
+) -> ShadowCascade {
     // Slice corners sit sqrt(k2) * depth from the view axis. The center depth
     // minimizing the enclosing sphere balances near and far corners.
     tan_half_fov := math.tan(CAMERA_FOV_Y * 0.5)
     k2 := tan_half_fov * tan_half_fov * (1 + aspect * aspect)
-    near := CAMERA_NEAR_CLIP
-    center_depth := min((near + shadow_distance) * 0.5 * (1 + k2), shadow_distance)
+    center_depth := min((slice_near + slice_far) * 0.5 * (1 + k2), slice_far)
 
     far_corner := math.sqrt(
-        (shadow_distance - center_depth) * (shadow_distance - center_depth) +
-        shadow_distance * shadow_distance * k2,
+        (slice_far - center_depth) * (slice_far - center_depth) +
+        slice_far * slice_far * k2,
     )
     near_corner := math.sqrt(
-        (center_depth - near) * (center_depth - near) + near * near * k2,
+        (center_depth - slice_near) * (center_depth - slice_near) +
+        slice_near * slice_near * k2,
     )
     // Quantize so floating-point noise never changes the texel size.
-    radius := math.ceil(max(far_corner, near_corner) * 16) / 16
+    radius := math.ceil(max(far_corner, near_corner) * 64) / 64
     center := camera_position + camera_forward * center_depth
 
     // Same basis look_at_lh builds for an eye at the origin facing the sun's rays.
@@ -101,11 +149,11 @@ renderer_fit_shadow :: proc(
         near_z, far_z,
     )
 
-    return ShadowFit{
+    return ShadowCascade{
         view_projection = view * projection,
+        split_depth = slice_far,
+        texel_world = texel,
         texel_depth = texel / (far_z - near_z),
-        fade_start = shadow_distance * (1 - SHADOW_FADE_FRACTION),
-        fade_end = shadow_distance,
     }
 }
 
@@ -117,7 +165,7 @@ renderer_create_shadow_map :: proc() {
         Dimension = .TEXTURE2D,
         Width = SHADOW_MAP_SIZE,
         Height = SHADOW_MAP_SIZE,
-        DepthOrArraySize = 1,
+        DepthOrArraySize = SHADOW_CASCADE_COUNT,
         MipLevels = 1,
         Format = .R32_TYPELESS,
         SampleDesc = {Count = 1},
@@ -137,8 +185,9 @@ renderer_create_shadow_map :: proc() {
         (^rawptr)(&r.shadow_map),
     ))
 
+    // One depth view per cascade slice.
     dsv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{
-        NumDescriptors = 1,
+        NumDescriptors = SHADOW_CASCADE_COUNT,
         Type = .DSV,
     }
     dx_check(r.device->CreateDescriptorHeap(
@@ -147,20 +196,28 @@ renderer_create_shadow_map :: proc() {
         (^rawptr)(&r.shadow_dsv_heap),
     ))
 
-    shadow_dsv := d3d12.DEPTH_STENCIL_VIEW_DESC{
-        Format = .D32_FLOAT,
-        ViewDimension = .TEXTURE2D,
+    dsv_size := r.device->GetDescriptorHandleIncrementSize(.DSV)
+    for cascade in 0..<SHADOW_CASCADE_COUNT {
+        shadow_dsv := d3d12.DEPTH_STENCIL_VIEW_DESC{
+            Format = .D32_FLOAT,
+            ViewDimension = .TEXTURE2DARRAY,
+        }
+        shadow_dsv.Texture2DArray = {
+            FirstArraySlice = u32(cascade),
+            ArraySize = 1,
+        }
+        dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+        r.shadow_dsv_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle)
+        dsv_handle.ptr += uint(cascade) * uint(dsv_size)
+        r.device->CreateDepthStencilView(r.shadow_map, &shadow_dsv, dsv_handle)
     }
-    dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.shadow_dsv_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle)
-    r.device->CreateDepthStencilView(r.shadow_map, &shadow_dsv, dsv_handle)
 
     shadow_srv := d3d12.SHADER_RESOURCE_VIEW_DESC{
         Format = .R32_FLOAT,
-        ViewDimension = .TEXTURE2D,
+        ViewDimension = .TEXTURE2DARRAY,
         Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
     }
-    shadow_srv.Texture2D = {MipLevels = 1}
+    shadow_srv.Texture2DArray = {MipLevels = 1, ArraySize = SHADOW_CASCADE_COUNT}
 
     srv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv_handle)
@@ -168,7 +225,10 @@ renderer_create_shadow_map :: proc() {
     r.device->CreateShaderResourceView(r.shadow_map, &shadow_srv, srv_handle)
 }
 
-renderer_render_shadow_pass :: proc(draw_meshes: []MeshHandle, draw_indices: []u32) {
+renderer_render_shadow_pass :: proc(
+    draw_meshes: []MeshHandle,
+    cascade_draws: [SHADOW_CASCADE_COUNT][]u32,
+) {
     r := &g_renderer
 
     renderer_begin_gpu_pass(.Shadow)
@@ -180,14 +240,6 @@ renderer_render_shadow_pass :: proc(draw_meshes: []MeshHandle, draw_indices: []u
         Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
     }
     r.command_list->ResourceBarrier(1, &shadow_barrier)
-
-    shadow_dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.shadow_dsv_heap->GetCPUDescriptorHandleForHeapStart(&shadow_dsv_handle)
-
-    r.command_list->OMSetRenderTargets(0, nil, false, &shadow_dsv_handle)
-    r.command_list->ClearDepthStencilView(
-        shadow_dsv_handle, {.DEPTH}, 1.0, 0, 0, nil,
-    )
 
     shadow_viewport := d3d12.VIEWPORT{
         Width = SHADOW_MAP_SIZE,
@@ -211,22 +263,36 @@ renderer_render_shadow_pass :: proc(draw_meshes: []MeshHandle, draw_indices: []u
         renderer_frame_cb_address(),
     )
 
-    for draw_index in draw_indices {
-        i := int(draw_index)
-        assert(i >= 0 && i < len(draw_meshes))
+    dsv_size := r.device->GetDescriptorHandleIncrementSize(.DSV)
+    for cascade in 0..<SHADOW_CASCADE_COUNT {
+        dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+        r.shadow_dsv_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle)
+        dsv_handle.ptr += uint(cascade) * uint(dsv_size)
 
-        r.command_list->SetGraphicsRootConstantBufferView(
-            0,
-            renderer_object_cb_address(i),
+        r.command_list->OMSetRenderTargets(0, nil, false, &dsv_handle)
+        r.command_list->ClearDepthStencilView(
+            dsv_handle, {.DEPTH}, 1.0, 0, 0, nil,
         )
+        // VSShadow reads this cascade's matrix from the frame constants.
+        r.command_list->SetGraphicsRoot32BitConstant(13, u32(cascade), 0)
 
-        mesh_index := int(draw_meshes[i])
-        assert(mesh_index > 0 && mesh_index < len(r.meshes))
-        gpu_mesh := &r.meshes[mesh_index]
+        for draw_index in cascade_draws[cascade] {
+            i := int(draw_index)
+            assert(i >= 0 && i < len(draw_meshes))
 
-        r.command_list->IASetVertexBuffers(0, 1, &gpu_mesh.vertex_buffer_view)
-        r.command_list->IASetIndexBuffer(&gpu_mesh.index_buffer_view)
-        r.command_list->DrawIndexedInstanced(gpu_mesh.index_count, 1, 0, 0, 0)
+            r.command_list->SetGraphicsRootConstantBufferView(
+                0,
+                renderer_object_cb_address(i),
+            )
+
+            mesh_index := int(draw_meshes[i])
+            assert(mesh_index > 0 && mesh_index < len(r.meshes))
+            gpu_mesh := &r.meshes[mesh_index]
+
+            r.command_list->IASetVertexBuffers(0, 1, &gpu_mesh.vertex_buffer_view)
+            r.command_list->IASetIndexBuffer(&gpu_mesh.index_buffer_view)
+            r.command_list->DrawIndexedInstanced(gpu_mesh.index_count, 1, 0, 0, 0)
+        }
     }
 
     shadow_barrier.Transition.StateBefore = {.DEPTH_WRITE}

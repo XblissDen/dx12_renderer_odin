@@ -19,8 +19,8 @@ FrameDraws :: struct {
     scene_indices: [MAX_ENTITIES]u32,
     scene_draw_count: int,
 
-    shadow_indices: [MAX_ENTITIES]u32,
-    shadow_draw_count: int,
+    shadow_indices: [SHADOW_CASCADE_COUNT][MAX_ENTITIES]u32,
+    shadow_draw_count: [SHADOW_CASCADE_COUNT]int,
 }
 
 renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
@@ -195,12 +195,21 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
         r.shadow_distance,
         caster_bounds[:caster_count],
     )
-    shadow_frustum := frustum_from_matrix(shadow.view_projection)
+    cascade_frustums: [SHADOW_CASCADE_COUNT]Frustum
+    cascade_view_projection: [SHADOW_CASCADE_COUNT]alg.Matrix4f32
+    cascade_split_depth, cascade_texel_world, cascade_texel_depth: [SHADOW_CASCADE_COUNT]f32
+    for cascade, i in shadow.cascades {
+        cascade_frustums[i] = frustum_from_matrix(cascade.view_projection)
+        cascade_view_projection[i] = cascade.view_projection
+        cascade_split_depth[i] = cascade.split_depth
+        cascade_texel_world[i] = cascade.texel_world
+        cascade_texel_depth[i] = cascade.texel_depth
+    }
 
     r.frame_cb_mapped_data[r.frame_slot] = FrameConstants{
         view = view,
         projection = proj,
-        sun_view_projection = shadow.view_projection,
+        cascade_view_projection = cascade_view_projection,
         view_position = camera_position,
         light_count = u32(light_count),
         sun_direction = sun.direction,
@@ -212,10 +221,14 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
         ambient_intensity = r.environment_settings.ambient_intensity,
         ambient_mode = r.environment_settings.ambient_mode,
         ambient_color = r.environment_settings.ambient_color,
-        shadow_bias_constant = r.shadow_bias_constant * shadow.texel_depth,
-        shadow_bias_slope = r.shadow_bias_slope * shadow.texel_depth,
+        shadow_bias_constant = r.shadow_bias_constant,
+        shadow_bias_slope = r.shadow_bias_slope,
         shadow_fade_start = shadow.fade_start,
         shadow_fade_end = shadow.fade_end,
+        shadow_show_cascades = u32(r.shadow_show_cascades),
+        cascade_split_depth = cascade_split_depth,
+        cascade_texel_world = cascade_texel_world,
+        cascade_texel_depth = cascade_texel_depth,
         lights = gpu_lights,
     }
 
@@ -231,17 +244,22 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
         if casts_shadow[draw_index] {
             r.culling_stats.shadow_total += 1
 
-            if !r.frustum_culling_enabled ||
-               frustum_intersects_bounds(shadow_frustum, bounds) {
-                data.shadow_indices[data.shadow_draw_count] = u32(draw_index)
-                data.shadow_draw_count += 1
+            for cascade in 0..<SHADOW_CASCADE_COUNT {
+                if !r.frustum_culling_enabled ||
+                   frustum_intersects_bounds(cascade_frustums[cascade], bounds) {
+                    count := &data.shadow_draw_count[cascade]
+                    data.shadow_indices[cascade][count^] = u32(draw_index)
+                    count^ += 1
+                }
             }
         }
     }
 
     r.culling_stats.scene_total = data.draw_count
     r.culling_stats.scene_visible = data.scene_draw_count
-    r.culling_stats.shadow_visible = data.shadow_draw_count
+    for count in data.shadow_draw_count {
+        r.culling_stats.shadow_visible += count
+    }
 
     return
 }
