@@ -52,6 +52,11 @@ the same frame. The final GPU timing includes tone mapping and the UI draw.
 - **Save Scene / Load Scene** preserves both modes and their settings, including
   the inactive HDRI/color controls. Older scenes retain HDRI lighting/backgrounds.
 
+- **Gizmos**: with the mouse released, click an object and drag its handles in the
+  viewport. **W** moves along world axes (center square: move in the view plane),
+  **E** rotates around world axes, **R** scales along the object's local axes (center
+  square: uniform). Right-click during a drag cancels it; each drag is one undo step.
+  The same modes are in the Inspector. Orbiting point lights cannot be moved.
 - **L**: release/capture the mouse. Release it to interact with the panel;
   capture it for the existing WASD/mouse camera controls.
 - **F1**: hide/show the panel.

@@ -148,7 +148,7 @@ editor_pick_mesh :: proc(scene: ^Scene, ray: EditorRay) -> Entity{
 }
 
 editor_update_picking :: proc(scene: ^Scene) {
-    if g_cursor_locked || !g_debug_ui_ready {
+    if g_cursor_locked || !g_debug_ui_ready || editor_gizmo_has_mouse() {
         return
     }
 

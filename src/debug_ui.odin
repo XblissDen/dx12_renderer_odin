@@ -17,6 +17,12 @@ foreign imgui_lib {
     ui_handle_message :: proc(hwnd: win32.HWND, message: u32, wparam: win32.WPARAM, lparam: win32.LPARAM) -> bool ---
     ui_wants_keyboard :: proc() -> bool ---
     ui_scene_left_click :: proc(x, y: ^f32) -> bool ---
+    ui_scene_mouse :: proc(mouse: ^SceneMouse) ---
+    ui_draw_line :: proc(x0, y0, x1, y1: f32, color: u32, thickness: f32) ---
+    ui_draw_triangle :: proc(x0, y0, x1, y1, x2, y2: f32, color: u32) ---
+    ui_draw_rect :: proc(x0, y0, x1, y1: f32, color: u32) ---
+    ui_radio_button :: proc(label: cstring, active: bool) -> bool ---
+    ui_same_line :: proc() ---
     ui_begin_frame :: proc(cursor_locked: bool) ---
     ui_next_window :: proc(x, y, width, height: f32) ---
     ui_begin_panel :: proc(title: cstring) -> bool ---
@@ -75,6 +81,16 @@ foreign imgui_lib {
     ) -> bool ---
 }
 
+// Matches SceneMouse in vendor/imgui/bridge.cpp.
+SceneMouse :: struct {
+    x, y: f32,
+    over_ui: bool,
+    down: bool,
+    clicked: bool,
+    released: bool,
+    cancel: bool,
+}
+
 g_debug_ui_ready: bool
 g_debug_ui_visible: bool = true
 g_debug_ui_demo: bool
@@ -117,6 +133,8 @@ debug_ui_update :: proc() {
     ui_begin_frame(g_cursor_locked)
     if !g_debug_ui_visible {
         editor_finish_edit()
+        editor_gizmo_end(&g_scene, false)
+        g_editor_gizmo.hovered = .None
         return
     }
 
@@ -191,6 +209,7 @@ debug_ui_update :: proc() {
     editor_draw_scene(&g_scene)
     editor_draw_inspector(&g_scene)
     editor_draw_import_panel()
+    editor_update_gizmo(&g_scene)
 
     if g_debug_ui_demo {
         ui_show_demo(&g_debug_ui_demo)

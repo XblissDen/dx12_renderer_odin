@@ -252,6 +252,52 @@ bool dx12_ui_scene_left_click(float* x, float* y) {
     return true;
 }
 
+// Mirrors SceneMouse in debug_ui.odin.
+struct SceneMouse {
+    float x, y;
+    bool over_ui;  // ImGui wants the mouse (hovering or using a window)
+    bool down;     // left button held
+    bool clicked;  // left button pressed this frame
+    bool released; // left button released this frame
+    bool cancel;   // right button pressed this frame
+};
+
+void dx12_ui_scene_mouse(SceneMouse* out) {
+    *out = {};
+    if (!state.initialized || !state.frame_started)
+        return;
+    const auto& io = ImGui::GetIO();
+    out->x = io.MousePos.x;
+    out->y = io.MousePos.y;
+    out->over_ui = io.WantCaptureMouse;
+    out->down = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    out->clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+    out->released = ImGui::IsMouseReleased(ImGuiMouseButton_Left);
+    out->cancel = ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+}
+
+// Viewport overlays use the background list: above the 3D scene, below panels.
+void dx12_ui_draw_line(float x0, float y0, float x1, float y1,
+                       std::uint32_t color, float thickness) {
+    ImGui::GetBackgroundDrawList()->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), color, thickness);
+}
+
+void dx12_ui_draw_triangle(float x0, float y0, float x1, float y1,
+                           float x2, float y2, std::uint32_t color) {
+    ImGui::GetBackgroundDrawList()->AddTriangleFilled(
+        ImVec2(x0, y0), ImVec2(x1, y1), ImVec2(x2, y2), color);
+}
+
+void dx12_ui_draw_rect(float x0, float y0, float x1, float y1, std::uint32_t color) {
+    ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), color);
+}
+
+bool dx12_ui_radio_button(const char* label, bool active) {
+    return ImGui::RadioButton(label, active);
+}
+
+void dx12_ui_same_line() { ImGui::SameLine(); }
+
 bool dx12_ui_combo(const char* label, std::int32_t* selected,
                    const char* const* items, std::int32_t count) {
     return ImGui::Combo(label, selected, items, count);

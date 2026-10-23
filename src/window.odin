@@ -210,6 +210,15 @@ wparam: win32.WPARAM, lparam: win32.LPARAM) -> win32.LRESULT{
                     case win32.WPARAM('5'): g_bloom_steps -= 1
                     case win32.WPARAM('6'): g_bloom_steps += 1
                 }
+
+                // W/E/R pick the gizmo; while the mouse is captured, W moves the camera.
+                if !g_cursor_locked && g_editor_gizmo.active == .None {
+                    switch wparam {
+                        case win32.WPARAM('W'): g_editor_gizmo.mode = .Translate
+                        case win32.WPARAM('E'): g_editor_gizmo.mode = .Rotate
+                        case win32.WPARAM('R'): g_editor_gizmo.mode = .Scale
+                    }
+                }
             }
         case win32.WM_CHAR:
             if debug_ui_wants_keyboard() {

@@ -80,11 +80,15 @@ Scene :: struct{
 
 g_scene: Scene
 
+transform_rotation_matrix :: proc(rotation: alg.Vector3f32) -> alg.Matrix4f32 {
+    return alg.matrix4_rotate_f32(rotation.y, {0, 1, 0}) *
+           alg.matrix4_rotate_f32(rotation.x, {1, 0, 0}) *
+           alg.matrix4_rotate_f32(rotation.z, {0, 0, 1})
+}
+
 transform_matrix :: proc(transform: Transform) -> alg.Matrix4f32 {
-    rotation := alg.matrix4_rotate_f32(transform.rotation.y, {0, 1, 0}) *
-                alg.matrix4_rotate_f32(transform.rotation.x, {1, 0, 0}) *
-                alg.matrix4_rotate_f32(transform.rotation.z, {0, 0, 1})
-    return alg.matrix4_translate_f32(transform.position) * rotation *
+    return alg.matrix4_translate_f32(transform.position) *
+           transform_rotation_matrix(transform.rotation) *
            alg.matrix4_scale_f32(transform.scale)
 }
 

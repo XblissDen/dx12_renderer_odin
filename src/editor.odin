@@ -238,6 +238,11 @@ editor_draw_inspector :: proc(scene: ^Scene) {
             if scene.has_transform[index] {
                 transform := &scene.transforms[index]
 
+                if !scene.has_camera[index] {
+                    editor_draw_gizmo_controls()
+                    ui_separator()
+                }
+
                 orbiting := scene.has_point_light[index] &&
                             scene.point_lights[index].orbit_enabled
 
