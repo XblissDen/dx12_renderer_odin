@@ -208,6 +208,17 @@ editor_draw_directional_light_controls :: proc(scene: ^Scene, index: int) {
     ui_separator()
     debug_ui_text("Directional light")
 
+    if hdri_sun, ok := renderer_hdri_sun(); ok {
+        text_buffer: [128]u8
+        debug_ui_text("Driven by the HDRI's sun. Clear \"Sun from HDRI\"")
+        debug_ui_text("in Renderer controls to edit these values.")
+        debug_ui_text(fmt.bprintf(
+            text_buffer[:], "Intensity %.2f | Direction %.2f %.2f %.2f",
+            hdri_sun.intensity, hdri_sun.direction.x, hdri_sun.direction.y, hdri_sun.direction.z,
+        ))
+        return
+    }
+
     editor_color(scene, index, .Sun_Color, "Light color")
     editor_slider(scene, index, .Sun_Intensity, "Intensity", 0.0, 10.0)
     editor_drag_vector(scene, index, .Sun_Direction, "Direction", 0.02)

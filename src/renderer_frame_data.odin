@@ -101,6 +101,12 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
 
     assert(sun_found)
 
+    // With HDRI lighting, the panorama's sun (removed from the IBL maps) lights
+    // the scene in place of the scene sun's own values.
+    if hdri_sun, ok := renderer_hdri_sun(); ok {
+        sun = hdri_sun
+    }
+
     // The shadow volume depends on caster bounds, so gather every draw first
     // and cull once the volume is known.
     draw_bounds: [MAX_ENTITIES]WorldBounds

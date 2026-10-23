@@ -42,6 +42,12 @@ the same frame. The final GPU timing includes tone mapping and the UI draw.
   the last 15%. Shorter distances give sharper shadows.
 - **Shadow bias / slope bias**: sun-shadow depth bias in shadow-map texels. Raise
   them for acne (striped self-shadowing); lower them if shadows detach from objects.
+- **Sun from HDRI** (HDRI lighting, on by default): the panorama's sun is found when
+  it loads, removed from the image-based lighting, and becomes the shadowed
+  directional light, with its measured direction, color and intensity. It follows
+  the environment rotation and IBL intensity, and the visible sky keeps its sun.
+  Turn it off to use the scene's own sun with the unmodified IBL. Panoramas
+  without a distinct sun keep the scene sun.
 - **Lighting mode**: choose HDRI lighting or an ambient color/intensity. Ambient
   color lights both diffuse and specular materials; zero intensity gives direct
   sun/point lighting only.

@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:math"
 import win32 "core:sys/windows"
 
 foreign import imgui_lib "../vendor/imgui/lib/dx12_debug_ui.lib"
@@ -241,6 +242,7 @@ debug_ui_environment_controls :: proc() {
     settings := r.environment_settings
     if pending, ok := r.environment_pending.(EnvironmentSettings); ok do settings = pending
     changed := false
+    text_buffer: [128]u8
     ui_separator()
     debug_ui_text("Ambient lighting")
     ambient_labels := [2]cstring{"HDRI", "Ambient Color"}
@@ -254,6 +256,23 @@ debug_ui_environment_controls :: proc() {
         if ui_slider_float("Ambient intensity", &settings.ambient_intensity, 0, 8) do changed = true
     } else {
         if ui_slider_float("IBL intensity", &settings.intensity, 0, 8) do changed = true
+        sun_from_hdri := !settings.manual_sun
+        if ui_checkbox("Sun from HDRI", &sun_from_hdri) {
+            settings.manual_sun = !sun_from_hdri
+            changed = true
+        }
+        sun := r.environment_sun
+        if !settings.manual_sun && r.environment_sun_asset == settings.asset {
+            if sun.found {
+                elevation := math.to_degrees(math.asin(clamp(sun.direction[1], -1, 1)))
+                debug_ui_text(fmt.bprintf(
+                    text_buffer[:], "HDRI sun: intensity %.2f, elevation %.0f deg",
+                    sun.intensity * settings.intensity, elevation,
+                ))
+            } else {
+                debug_ui_text("No distinct sun in this HDRI; using the scene sun.")
+            }
+        }
     }
 
     background_labels := [2]cstring{"HDRI", "Solid Color"}

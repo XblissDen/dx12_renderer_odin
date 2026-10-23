@@ -210,6 +210,8 @@ Renderer :: struct {
     srv_next: u32,
     shadow_srv_index, hdr_srv_index, bloom_srv_start: u32,
     environment_srv_index, irradiance_srv_index, prefilter_srv_index: u32,
+    // Temporary sun-free panorama used only while baking the IBL maps.
+    environment_bake_srv_index: u32,
 
     shadow_map: ^d3d12.IResource,
     shadow_dsv_heap: ^d3d12.IDescriptorHeap,
@@ -258,6 +260,11 @@ Renderer :: struct {
     environment_pending: Maybe(EnvironmentSettings),
     environment_status: string,
     environment_loaded_asset, environment_filtered_asset: EnvironmentHandle,
+    // Whether the IBL maps were baked with the panorama's sun removed.
+    environment_filtered_without_sun: bool,
+    // The sun measured in the most recently decoded panorama.
+    environment_sun: HdriSun,
+    environment_sun_asset: EnvironmentHandle,
     sky_pipeline_state: ^d3d12.IPipelineState,
 
     sky_constant_buffer: ^d3d12.IResource,
@@ -1282,6 +1289,7 @@ renderer_load_textures :: proc(){
     r.environment_srv_index = renderer_alloc_srv()
     r.irradiance_srv_index = renderer_alloc_srv()
     r.prefilter_srv_index = renderer_alloc_srv()
+    r.environment_bake_srv_index = renderer_alloc_srv()
     // These slots stay valid before an HDRI is loaded or its IBL maps are baked.
     null_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
         Format = .R16G16B16A16_FLOAT, ViewDimension = .TEXTURE2D,
