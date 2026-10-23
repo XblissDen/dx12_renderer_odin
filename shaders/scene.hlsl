@@ -54,7 +54,9 @@ cbuffer FrameConstants : register(b4)
     float  shadow_bias_constant;
 
     float  shadow_bias_slope;
-    float3 _frame_pad;
+    float  shadow_fade_start;
+    float  shadow_fade_end;
+    float  _frame_pad;
 
     GpuPointLight lights[MAX_LIGHTS];
 };
@@ -373,6 +375,15 @@ float4 PSMain(PSInput input) : SV_TARGET
             sun_visibility /= 9.0f;
         }
     }
+
+    // The shadow map covers the view up to the shadow distance; fade out
+    // before its edge instead of cutting off along a visible line.
+    float view_distance = length(view_position - input.world_pos);
+    float shadow_fade = saturate(
+        (view_distance - shadow_fade_start) /
+        max(shadow_fade_end - shadow_fade_start, 0.0001f)
+    );
+    sun_visibility = lerp(sun_visibility, 1.0f, shadow_fade);
 
     float3 sun_radiance = sun_color * sun_intensity * sun_visibility;
     result += EvaluateDirectLight(

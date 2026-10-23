@@ -101,41 +101,12 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
 
     assert(sun_found)
 
-    sun_eye := -sun.direction * SHADOW_EYE_DISTANCE
-
-    sun_up := alg.Vector3f32{0, 1, 0}
-    if math.abs(sun.direction.y) > 0.99{
-        sun_up = {0, 0, 1}
-    }
-
-    sun_view := look_at_lh(sun_eye, {0,0,0}, sun_up)
-    sun_projection := orthographic_lh(
-        -SHADOW_HALF_EXTENT, SHADOW_HALF_EXTENT,
-        -SHADOW_HALF_EXTENT, SHADOW_HALF_EXTENT,
-        SHADOW_NEAR, SHADOW_FAR,
-    )
-    sun_view_projection := sun_view * sun_projection
-    shadow_frustum := frustum_from_matrix(sun_view_projection)
-
-    r.frame_cb_mapped_data[r.frame_slot] = FrameConstants{
-        view = view,
-        projection = proj,
-        sun_view_projection = sun_view_projection,
-        view_position = camera_position,
-        light_count = u32(light_count),
-        sun_direction = sun.direction,
-        sun_intensity = sun.intensity,
-        sun_color = sun.color,
-        environment_intensity = r.environment_settings.intensity,
-        environment_sin = environment_sin,
-        environment_cos = environment_cos,
-        ambient_intensity = r.environment_settings.ambient_intensity,
-        ambient_mode = r.environment_settings.ambient_mode,
-        ambient_color = r.environment_settings.ambient_color,
-        shadow_bias_constant = r.shadow_bias_constant * renderer_shadow_texel_depth(),
-        shadow_bias_slope = r.shadow_bias_slope * renderer_shadow_texel_depth(),
-        lights = gpu_lights,
-    }
+    // The shadow volume depends on caster bounds, so gather every draw first
+    // and cull once the volume is known.
+    draw_bounds: [MAX_ENTITIES]WorldBounds
+    casts_shadow: [MAX_ENTITIES]bool
+    caster_bounds: [MAX_ENTITIES]WorldBounds
+    caster_count := 0
 
     for i in 0..<scene.entity_count{
         if !scene.alive[i] {
@@ -149,23 +120,13 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
         model := transform_matrix(scene.transforms[i])
         mesh := scene.mesh_renderers[i].mesh
         bounds := bounds_to_world(g_assets.meshes[mesh].bounds, model)
-        draw_index := u32(data.draw_count)
-
-        if !r.frustum_culling_enabled ||
-           frustum_intersects_bounds(camera_frustum, bounds) {
-            data.scene_indices[data.scene_draw_count] = draw_index
-            data.scene_draw_count += 1
-        }
+        draw_bounds[data.draw_count] = bounds
 
         // Match the existing policy: unlit marker meshes do not cast shadows.
         if !scene.materials[i].unlit {
-            r.culling_stats.shadow_total += 1
-
-            if !r.frustum_culling_enabled ||
-               frustum_intersects_bounds(shadow_frustum, bounds) {
-                data.shadow_indices[data.shadow_draw_count] = draw_index
-                data.shadow_draw_count += 1
-            }
+            casts_shadow[data.draw_count] = true
+            caster_bounds[caster_count] = bounds
+            caster_count += 1
         }
 
         unlit: u32 = 0
@@ -217,6 +178,59 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
 
 
         data.draw_count += 1
+    }
+
+    shadow := renderer_fit_shadow(
+        sun.direction,
+        camera_position,
+        forward,
+        f32(r.width) / f32(r.height),
+        camera_far_clip(camera),
+        r.shadow_distance,
+        caster_bounds[:caster_count],
+    )
+    shadow_frustum := frustum_from_matrix(shadow.view_projection)
+
+    r.frame_cb_mapped_data[r.frame_slot] = FrameConstants{
+        view = view,
+        projection = proj,
+        sun_view_projection = shadow.view_projection,
+        view_position = camera_position,
+        light_count = u32(light_count),
+        sun_direction = sun.direction,
+        sun_intensity = sun.intensity,
+        sun_color = sun.color,
+        environment_intensity = r.environment_settings.intensity,
+        environment_sin = environment_sin,
+        environment_cos = environment_cos,
+        ambient_intensity = r.environment_settings.ambient_intensity,
+        ambient_mode = r.environment_settings.ambient_mode,
+        ambient_color = r.environment_settings.ambient_color,
+        shadow_bias_constant = r.shadow_bias_constant * shadow.texel_depth,
+        shadow_bias_slope = r.shadow_bias_slope * shadow.texel_depth,
+        shadow_fade_start = shadow.fade_start,
+        shadow_fade_end = shadow.fade_end,
+        lights = gpu_lights,
+    }
+
+    for draw_index in 0..<data.draw_count {
+        bounds := draw_bounds[draw_index]
+
+        if !r.frustum_culling_enabled ||
+           frustum_intersects_bounds(camera_frustum, bounds) {
+            data.scene_indices[data.scene_draw_count] = u32(draw_index)
+            data.scene_draw_count += 1
+        }
+
+        if casts_shadow[draw_index] {
+            r.culling_stats.shadow_total += 1
+
+            if !r.frustum_culling_enabled ||
+               frustum_intersects_bounds(shadow_frustum, bounds) {
+                data.shadow_indices[data.shadow_draw_count] = u32(draw_index)
+                data.shadow_draw_count += 1
+            }
+        }
     }
 
     r.culling_stats.scene_total = data.draw_count

@@ -105,7 +105,10 @@ FrameConstants :: struct #align(256) {
     shadow_bias_constant: f32,
 
     shadow_bias_slope: f32,
-    _pad0: [3]f32,
+    // Distance from the camera over which sun shadows fade out.
+    shadow_fade_start: f32,
+    shadow_fade_end: f32,
+    _pad0: f32,
 
     lights: [MAX_LIGHTS]GpuPointLight,
 }
@@ -236,6 +239,8 @@ Renderer :: struct {
     // receiver's slope towards the sun.
     shadow_bias_constant: f32,
     shadow_bias_slope: f32,
+    // Camera distance covered by the sun's shadow map.
+    shadow_distance: f32,
 
     timestamp_heap: ^d3d12.IQueryHeap,
     timestamp_readback: ^d3d12.IResource,
@@ -298,6 +303,7 @@ renderer_init :: proc() {
 
     r.shadow_bias_constant = DEFAULT_SHADOW_BIAS_CONSTANT
     r.shadow_bias_slope = DEFAULT_SHADOW_BIAS_SLOPE
+    r.shadow_distance = DEFAULT_SHADOW_DISTANCE
 
     r.frustum_culling_enabled = true
 

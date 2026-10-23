@@ -1,12 +1,14 @@
 package main
 
+import "core:math"
+import alg "core:math/linalg"
 import d3d12 "vendor:directx/d3d12"
 
-// The sun's fixed orthographic shadow volume, centered on the world origin.
-SHADOW_HALF_EXTENT :: f32(8)
-SHADOW_EYE_DISTANCE :: f32(12)
-SHADOW_NEAR :: f32(0.1)
-SHADOW_FAR :: f32(30)
+// Sun shadows cover the camera view out to this distance, then fade out.
+DEFAULT_SHADOW_DISTANCE :: f32(20)
+MIN_SHADOW_DISTANCE :: f32(2)
+MAX_SHADOW_DISTANCE :: f32(200)
+SHADOW_FADE_FRACTION :: f32(0.15)
 
 // Bias in shadow-map texels. 3x3 PCF samples one texel away, so the slope
 // term must cover at least that much depth change on tilted receivers.
@@ -14,10 +16,97 @@ DEFAULT_SHADOW_BIAS_CONSTANT :: f32(1.0)
 DEFAULT_SHADOW_BIAS_SLOPE :: f32(1.5)
 MAX_SHADOW_BIAS :: f32(10)
 
-// Shadow-map depth change across one texel on a receiver facing the sun.
-renderer_shadow_texel_depth :: proc() -> f32 {
-    texel_world := 2 * SHADOW_HALF_EXTENT / SHADOW_MAP_SIZE
-    return texel_world / (SHADOW_FAR - SHADOW_NEAR)
+ShadowFit :: struct {
+    view_projection: alg.Matrix4f32,
+    // Shadow-map depth change across one texel on a receiver facing the sun.
+    texel_depth: f32,
+    fade_start, fade_end: f32,
+}
+
+// Fits the sun's orthographic volume around the camera view up to `distance`.
+// The volume is a bounding sphere of that view slice: its size does not change
+// as the camera turns, and its center snaps to whole shadow-map texels, so
+// shadow edges stay still while the camera moves.
+renderer_fit_shadow :: proc(
+    sun_direction: alg.Vector3f32,
+    camera_position, camera_forward: alg.Vector3f32,
+    aspect, far_clip, distance: f32,
+    casters: []WorldBounds,
+) -> ShadowFit {
+    shadow_distance := clamp(distance, CAMERA_NEAR_CLIP * 2, far_clip)
+
+    // Slice corners sit sqrt(k2) * depth from the view axis. The center depth
+    // minimizing the enclosing sphere balances near and far corners.
+    tan_half_fov := math.tan(CAMERA_FOV_Y * 0.5)
+    k2 := tan_half_fov * tan_half_fov * (1 + aspect * aspect)
+    near := CAMERA_NEAR_CLIP
+    center_depth := min((near + shadow_distance) * 0.5 * (1 + k2), shadow_distance)
+
+    far_corner := math.sqrt(
+        (shadow_distance - center_depth) * (shadow_distance - center_depth) +
+        shadow_distance * shadow_distance * k2,
+    )
+    near_corner := math.sqrt(
+        (center_depth - near) * (center_depth - near) + near * near * k2,
+    )
+    // Quantize so floating-point noise never changes the texel size.
+    radius := math.ceil(max(far_corner, near_corner) * 16) / 16
+    center := camera_position + camera_forward * center_depth
+
+    // Same basis look_at_lh builds for an eye at the origin facing the sun's rays.
+    sun_up := alg.Vector3f32{0, 1, 0}
+    if math.abs(sun_direction.y) > 0.99 {
+        sun_up = {0, 0, 1}
+    }
+    light_z := alg.normalize(sun_direction)
+    light_x := alg.normalize(alg.cross(sun_up, light_z))
+    light_y := alg.cross(light_z, light_x)
+
+    texel := 2 * radius / SHADOW_MAP_SIZE
+    center_x := math.floor(alg.dot(light_x, center) / texel) * texel
+    center_y := math.floor(alg.dot(light_y, center) / texel) * texel
+    center_z := alg.dot(light_z, center)
+
+    // Receivers end at the sphere. Casters between it and the sun can still
+    // shadow it, so pull the near plane back to include them.
+    near_z := center_z - radius
+    far_z := center_z + radius
+    for bounds in casters {
+        if !bounds.valid {
+            continue
+        }
+
+        extent: [3]f32
+        axes := [3]alg.Vector3f32{light_x, light_y, light_z}
+        for axis, i in axes {
+            for half_axis in bounds.half_axes {
+                extent[i] += math.abs(alg.dot(axis, half_axis))
+            }
+        }
+
+        offset_x := alg.dot(light_x, bounds.center) - center_x
+        offset_y := alg.dot(light_y, bounds.center) - center_y
+        if math.abs(offset_x) > radius + extent[0] ||
+           math.abs(offset_y) > radius + extent[1] {
+            continue
+        }
+        near_z = min(near_z, alg.dot(light_z, bounds.center) - extent[2])
+    }
+    near_z -= texel
+
+    view := look_at_lh({0, 0, 0}, light_z, sun_up)
+    projection := orthographic_lh(
+        center_x - radius, center_x + radius,
+        center_y - radius, center_y + radius,
+        near_z, far_z,
+    )
+
+    return ShadowFit{
+        view_projection = view * projection,
+        texel_depth = texel / (far_z - near_z),
+        fade_start = shadow_distance * (1 - SHADOW_FADE_FRACTION),
+        fade_end = shadow_distance,
+    }
 }
 
 renderer_create_shadow_map :: proc() {

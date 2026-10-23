@@ -212,6 +212,7 @@ debug_ui_shadow_controls :: proc() {
     r := &g_renderer
     ui_separator()
     debug_ui_text("Sun shadows (bias in shadow-map texels)")
+    ui_slider_float("Shadow distance", &r.shadow_distance, MIN_SHADOW_DISTANCE, MAX_SHADOW_DISTANCE)
     ui_slider_float("Shadow bias", &r.shadow_bias_constant, 0, MAX_SHADOW_BIAS)
     ui_slider_float("Shadow slope bias", &r.shadow_bias_slope, 0, MAX_SHADOW_BIAS)
 }

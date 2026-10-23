@@ -37,6 +37,9 @@ the same frame. The final GPU timing includes tone mapping and the UI draw.
 
 - **Tone mapping**: ACES (fitted, the default), AgX, or Reinhard. Scenes saved
   before this option existed load with Reinhard, their original look.
+- **Shadow distance**: how far from the camera sun shadows reach. The shadow map
+  follows the camera and covers its view up to this distance; shadows fade out over
+  the last 15%. Shorter distances give sharper shadows.
 - **Shadow bias / slope bias**: sun-shadow depth bias in shadow-map texels. Raise
   them for acne (striped self-shadowing); lower them if shadows detach from objects.
 - **Lighting mode**: choose HDRI lighting or an ambient color/intensity. Ambient

@@ -20,6 +20,8 @@ ScenePostSettings :: struct{
 SceneShadowSettings :: struct {
     bias_constant: f32,
     bias_slope: f32,
+    // Absent (zero) in files saved before camera-fitted shadows.
+    distance: f32,
 }
 
 // Version 6+ stores live entities only, each with its optional components.
@@ -235,6 +237,7 @@ scene_save_to_file :: proc(scene: ^Scene, path: string) -> (ok: bool, message: s
         shadow = SceneShadowSettings{
             bias_constant = g_renderer.shadow_bias_constant,
             bias_slope = g_renderer.shadow_bias_slope,
+            distance = g_renderer.shadow_distance,
         },
     }
 
@@ -344,8 +347,10 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
         bias_constant = DEFAULT_SHADOW_BIAS_CONSTANT,
         bias_slope = DEFAULT_SHADOW_BIAS_SLOPE,
     }
+    if shadow.distance == 0 do shadow.distance = DEFAULT_SHADOW_DISTANCE
     if !(shadow.bias_constant >= 0 && shadow.bias_constant <= MAX_SHADOW_BIAS) ||
-       !(shadow.bias_slope >= 0 && shadow.bias_slope <= MAX_SHADOW_BIAS) {
+       !(shadow.bias_slope >= 0 && shadow.bias_slope <= MAX_SHADOW_BIAS) ||
+       !(shadow.distance >= MIN_SHADOW_DISTANCE && shadow.distance <= MAX_SHADOW_DISTANCE) {
         return false, "Invalid shadow settings."
     }
     environment, has_environment := file.environment.(EnvironmentSettings)
@@ -386,6 +391,7 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
     g_renderer.post_tone_mapper = post.tone_mapper
     g_renderer.shadow_bias_constant = shadow.bias_constant
     g_renderer.shadow_bias_slope = shadow.bias_slope
+    g_renderer.shadow_distance = shadow.distance
 
     commited = true
     return true, "Scene loaded."
