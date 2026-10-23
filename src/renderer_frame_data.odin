@@ -37,6 +37,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
     post.bloom_threshold = r.post_threshold
     post.bloom_strength = r.post_strength
     post.tone_mapper = r.post_tone_mapper
+    post.texel_size = {1 / f32(r.width), 1 / f32(r.height)}
 
     camera_index := camera_find_active(scene)
     assert(camera_index >= 0)

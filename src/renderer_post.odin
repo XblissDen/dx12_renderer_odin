@@ -61,6 +61,34 @@ renderer_create_hdr_target :: proc() {
     r.srv_heap->GetCPUDescriptorHandleForHeapStart(&hdr_srv)
     hdr_srv.ptr += uint(r.hdr_srv_index) * uint(r.srv_descriptor_size)
     r.device->CreateShaderResourceView(r.hdr_texture, &hdr_srv_desc, hdr_srv)
+
+    // The tone-mapped frame, in the back buffer's format, for FXAA to read.
+    if r.ldr_rtv_heap == nil {
+        rtv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{NumDescriptors = 1, Type = .RTV}
+        dx_check(r.device->CreateDescriptorHeap(
+            &rtv_heap_desc,
+            d3d12.IDescriptorHeap_UUID,
+            (^rawptr)(&r.ldr_rtv_heap),
+        ))
+    }
+
+    ldr_desc := hdr_desc
+    ldr_desc.Format = .R8G8B8A8_UNORM
+    ldr_clear := d3d12.CLEAR_VALUE{Format = .R8G8B8A8_UNORM}
+    dx_check(r.device->CreateCommittedResource(
+        &heap_props,
+        {},
+        &ldr_desc,
+        {.PIXEL_SHADER_RESOURCE},
+        &ldr_clear,
+        d3d12.IResource_UUID,
+        (^rawptr)(&r.ldr_texture),
+    ))
+
+    ldr_rtv: d3d12.CPU_DESCRIPTOR_HANDLE
+    r.ldr_rtv_heap->GetCPUDescriptorHandleForHeapStart(&ldr_rtv)
+    r.device->CreateRenderTargetView(r.ldr_texture, nil, ldr_rtv)
+    renderer_write_srv(r.ldr_texture, .R8G8B8A8_UNORM, r.ldr_srv_index)
 }
 
 renderer_create_bloom_targets :: proc() {

@@ -26,7 +26,7 @@ PREFILTER_WIDTH :: 1024
 PREFILTER_HEIGHT :: 512
 PREFILTER_MIP_COUNT :: 5
 
-GPU_PASS_COUNT :: 8
+GPU_PASS_COUNT :: 9
 GPU_TIMESTAMP_COUNT :: GPU_PASS_COUNT * 2
 
 GPU_Pass :: enum u32{
@@ -38,6 +38,7 @@ GPU_Pass :: enum u32{
     Post_Process,
     Depth_Prepass,
     SSAO,
+    FXAA,
 }
 
 Vertex :: struct {
@@ -158,11 +159,17 @@ ObjectConstants :: struct #align(256) {
 // Missing from older scene files, which therefore keep Reinhard.
 ToneMapper :: enum u32 {Reinhard, ACES, AgX}
 
+// The first value is what files saved before this setting existed load as.
+AntiAliasing :: enum u32 {FXAA, None}
+
 PostConstants :: struct #align(256) {
     exposure: f32,
     bloom_threshold: f32,
     bloom_strength: f32,
     tone_mapper: ToneMapper,
+    // One pixel in UV units, for FXAA's neighbour lookups.
+    texel_size: [2]f32,
+    _pad0: [2]f32,
 }
 
 SkyConstants :: struct #align(256) {
@@ -254,6 +261,13 @@ Renderer :: struct {
     post_threshold: f32,
     post_strength: f32,
     post_tone_mapper: ToneMapper,
+    post_anti_aliasing: AntiAliasing,
+
+    // Tone-mapped (display-encoded) frame that FXAA reads.
+    ldr_texture: ^d3d12.IResource,
+    ldr_rtv_heap: ^d3d12.IDescriptorHeap,
+    ldr_srv_index: u32,
+    fxaa_pipeline_state: ^d3d12.IPipelineState,
 
     // Shadow depth bias in shadow-map texels: constant, and scaled by the
     // receiver's slope towards the sun.
@@ -352,6 +366,7 @@ renderer_init :: proc() {
     r.post_threshold = 1.0
     r.post_strength = 0.6
     r.post_tone_mapper = .ACES
+    r.post_anti_aliasing = .FXAA
 
     r.shadow_bias_constant = DEFAULT_SHADOW_BIAS_CONSTANT
     r.shadow_bias_slope = DEFAULT_SHADOW_BIAS_SLOPE
@@ -681,6 +696,13 @@ renderer_load_assets :: proc(){
     environment_sampler.ShaderRegister = 3
     environment_sampler.AddressV = .CLAMP
 
+    // Screen-space lookups (FXAA) must not wrap to the opposite edge.
+    clamp_sampler := static_sampler
+    clamp_sampler.ShaderRegister = 4
+    clamp_sampler.AddressU = .CLAMP
+    clamp_sampler.AddressV = .CLAMP
+    clamp_sampler.AddressW = .CLAMP
+
     params := []d3d12.ROOT_PARAMETER{
         cbv_param,
         srv_param,
@@ -704,6 +726,7 @@ renderer_load_assets :: proc(){
         shadow_sampler,
         material_sampler,
         environment_sampler,
+        clamp_sampler,
     }
     rs_desc := d3d12.ROOT_SIGNATURE_DESC{
         NumParameters = u32(len(params)),
@@ -1105,6 +1128,20 @@ renderer_load_assets :: proc(){
         ))
     }
 
+    // FXAA: same full-screen pass and back-buffer format as tone mapping.
+    fxaa_ps := renderer_compile_shader("shaders/post_process.hlsl", "PSFxaa", "ps_5_1", compile_flags)
+    defer fxaa_ps->Release()
+    fxaa_pso_desc := post_pso_desc
+    fxaa_pso_desc.PS = {
+        pShaderBytecode = fxaa_ps->GetBufferPointer(),
+        BytecodeLength = fxaa_ps->GetBufferSize(),
+    }
+    dx_check(r.device->CreateGraphicsPipelineState(
+        &fxaa_pso_desc,
+        d3d12.IPipelineState_UUID,
+        (^rawptr)(&r.fxaa_pipeline_state),
+    ))
+
     // SSAO and its blur: full-screen passes whose pixel shaders live in
     // scene.hlsl, so they share its frame constants.
     ssao_entries := [2]cstring{"PSSsao", "PSSsaoBlur"}
@@ -1346,6 +1383,7 @@ renderer_resize:: proc(width, height: u32){
     renderer_wait_for_gpu()
 
     r.hdr_texture->Release()
+    r.ldr_texture->Release()
     for target in r.ao_targets do target->Release()
     for target in r.bloom_targets {
         target->Release()
@@ -1412,6 +1450,7 @@ renderer_load_textures :: proc(){
 
     r.shadow_srv_index = renderer_alloc_srv()
     r.hdr_srv_index = renderer_alloc_srv()
+    r.ldr_srv_index = renderer_alloc_srv()
     r.bloom_srv_start = renderer_alloc_srv(BLOOM_TARGET_COUNT)
     r.environment_srv_index = renderer_alloc_srv()
     r.irradiance_srv_index = renderer_alloc_srv()
@@ -1789,6 +1828,9 @@ renderer_destroy :: proc(){
 
     r.hdr_texture->Release()
     r.hdr_rtv_heap->Release()
+    r.ldr_texture->Release()
+    r.ldr_rtv_heap->Release()
+    r.fxaa_pipeline_state->Release()
     r.hdr_pipeline_state->Release()
     r.post_pipeline_state->Release()
     r.selection_pipeline_state->Release()

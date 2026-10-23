@@ -8,7 +8,11 @@ cbuffer PostConstants : register(b1)
     float bloom_threshold;
     float bloom_strength;
     uint  tone_mapper; // 0 Reinhard, 1 ACES, 2 AgX
+    float2 texel_size; // One pixel in UV units.
+    float2 _pad0;
 };
+
+SamplerState g_clamp_sampler : register(s4);
 
 struct VSOutput
 {
@@ -181,4 +185,154 @@ float4 PSMain(VSOutput input) : SV_TARGET
 
     // The back buffer is UNORM (ImGui draws to it too), so encode sRGB here.
     return float4(LinearToSrgb(saturate(mapped)), 1.0f);
+}
+// ---------------------------------------------------------------------------
+// FXAA, following the published algorithm (Lottes' FXAA 3.11 quality path):
+// find pixels on a contrasting edge, work out the edge's direction, search
+// along it for both ends, and shift the lookup across the edge by how far this
+// pixel is from the nearer end. Subpixel blending handles thin features.
+// Input is the tone-mapped, display-encoded frame (g_hdr_texture slot, t0).
+
+#define FXAA_EDGE_THRESHOLD      0.125f  // Minimum contrast, relative to the brightest neighbour.
+#define FXAA_EDGE_THRESHOLD_MIN  0.0312f // Ignore contrast in very dark areas.
+#define FXAA_SUBPIXEL_QUALITY    0.75f
+#define FXAA_SEARCH_STEPS        12
+
+static const float FXAA_STEP_SIZES[FXAA_SEARCH_STEPS] = {
+    1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.5f, 2.0f, 2.0f, 2.0f, 2.0f, 4.0f, 8.0f
+};
+
+float FxaaLuma(float3 color)
+{
+    // The input is already perceptually encoded, so plain weights suffice.
+    return dot(color, float3(0.299f, 0.587f, 0.114f));
+}
+
+float FxaaLumaAt(float2 uv, int2 offset)
+{
+    return FxaaLuma(g_hdr_texture.SampleLevel(g_clamp_sampler, uv, 0, offset).rgb);
+}
+
+float4 PSFxaa(VSOutput input) : SV_TARGET
+{
+    float2 uv = input.uv;
+    float3 center_color = g_hdr_texture.SampleLevel(g_clamp_sampler, uv, 0).rgb;
+    float luma_center = FxaaLuma(center_color);
+
+    // Screen space: north is up (-y), south is down (+y).
+    float luma_n = FxaaLumaAt(uv, int2(0, -1));
+    float luma_s = FxaaLumaAt(uv, int2(0, 1));
+    float luma_w = FxaaLumaAt(uv, int2(-1, 0));
+    float luma_e = FxaaLumaAt(uv, int2(1, 0));
+
+    float luma_min = min(luma_center, min(min(luma_n, luma_s), min(luma_w, luma_e)));
+    float luma_max = max(luma_center, max(max(luma_n, luma_s), max(luma_w, luma_e)));
+    float luma_range = luma_max - luma_min;
+    if (luma_range < max(FXAA_EDGE_THRESHOLD_MIN, luma_max * FXAA_EDGE_THRESHOLD))
+    {
+        return float4(center_color, 1.0f);
+    }
+
+    float luma_nw = FxaaLumaAt(uv, int2(-1, -1));
+    float luma_ne = FxaaLumaAt(uv, int2(1, -1));
+    float luma_sw = FxaaLumaAt(uv, int2(-1, 1));
+    float luma_se = FxaaLumaAt(uv, int2(1, 1));
+
+    // Second derivatives across rows versus across columns pick the edge's
+    // orientation: a horizontal edge changes most from north to south.
+    float edge_horizontal =
+        abs(luma_nw + luma_sw - 2.0f * luma_w) +
+        abs(luma_n + luma_s - 2.0f * luma_center) * 2.0f +
+        abs(luma_ne + luma_se - 2.0f * luma_e);
+    float edge_vertical =
+        abs(luma_nw + luma_ne - 2.0f * luma_n) +
+        abs(luma_w + luma_e - 2.0f * luma_center) * 2.0f +
+        abs(luma_sw + luma_se - 2.0f * luma_s);
+    bool horizontal = edge_horizontal >= edge_vertical;
+
+    // The edge lies between this pixel and its steeper neighbour across it.
+    float luma_negative = horizontal ? luma_n : luma_w;
+    float luma_positive = horizontal ? luma_s : luma_e;
+    float gradient_negative = luma_negative - luma_center;
+    float gradient_positive = luma_positive - luma_center;
+    bool negative_steeper = abs(gradient_negative) >= abs(gradient_positive);
+    float gradient_scaled = 0.25f * max(abs(gradient_negative), abs(gradient_positive));
+
+    float step_across = horizontal ? texel_size.y : texel_size.x;
+    float luma_local_average;
+    if (negative_steeper)
+    {
+        step_across = -step_across;
+        luma_local_average = 0.5f * (luma_negative + luma_center);
+    }
+    else
+    {
+        luma_local_average = 0.5f * (luma_positive + luma_center);
+    }
+
+    // Walk along the edge from its midline in both directions.
+    float2 edge_uv = uv;
+    if (horizontal) edge_uv.y += step_across * 0.5f;
+    else edge_uv.x += step_across * 0.5f;
+    float2 step_along = horizontal ? float2(texel_size.x, 0.0f) : float2(0.0f, texel_size.y);
+
+    float2 uv_negative = edge_uv - step_along;
+    float2 uv_positive = edge_uv + step_along;
+    float luma_end_negative = 0.0f;
+    float luma_end_positive = 0.0f;
+    bool done_negative = false;
+    bool done_positive = false;
+
+    [loop]
+    for (int i = 0; i < FXAA_SEARCH_STEPS; ++i)
+    {
+        if (!done_negative)
+        {
+            luma_end_negative = FxaaLuma(
+                g_hdr_texture.SampleLevel(g_clamp_sampler, uv_negative, 0).rgb
+            ) - luma_local_average;
+            done_negative = abs(luma_end_negative) >= gradient_scaled;
+        }
+        if (!done_positive)
+        {
+            luma_end_positive = FxaaLuma(
+                g_hdr_texture.SampleLevel(g_clamp_sampler, uv_positive, 0).rgb
+            ) - luma_local_average;
+            done_positive = abs(luma_end_positive) >= gradient_scaled;
+        }
+        if (done_negative && done_positive) break;
+
+        float next_step = i + 1 < FXAA_SEARCH_STEPS ? FXAA_STEP_SIZES[i + 1] : 1.0f;
+        if (!done_negative) uv_negative -= step_along * next_step;
+        if (!done_positive) uv_positive += step_along * next_step;
+    }
+
+    float distance_negative = horizontal ? uv.x - uv_negative.x : uv.y - uv_negative.y;
+    float distance_positive = horizontal ? uv_positive.x - uv.x : uv_positive.y - uv.y;
+    bool negative_closer = distance_negative < distance_positive;
+    float distance_final = min(distance_negative, distance_positive);
+    float edge_length = distance_negative + distance_positive;
+
+    // Only shift if the nearer end's luma moves the way the centre does;
+    // otherwise this pixel is not the one the edge passes through.
+    bool center_below_average = luma_center < luma_local_average;
+    float luma_end = negative_closer ? luma_end_negative : luma_end_positive;
+    bool correct_variation = (luma_end < 0.0f) != center_below_average;
+    float edge_offset = correct_variation ? 0.5f - distance_final / edge_length : 0.0f;
+
+    // Subpixel aliasing: how much the centre differs from its 3x3 average.
+    float luma_average = (1.0f / 12.0f) * (
+        2.0f * (luma_n + luma_s + luma_w + luma_e) +
+        luma_nw + luma_ne + luma_sw + luma_se
+    );
+    float subpixel = saturate(abs(luma_average - luma_center) / luma_range);
+    subpixel = (-2.0f * subpixel + 3.0f) * subpixel * subpixel;
+    float subpixel_offset = subpixel * subpixel * FXAA_SUBPIXEL_QUALITY;
+
+    float offset = max(edge_offset, subpixel_offset);
+    float2 final_uv = uv;
+    if (horizontal) final_uv.y += offset * step_across;
+    else final_uv.x += offset * step_across;
+
+    return float4(g_hdr_texture.SampleLevel(g_clamp_sampler, final_uv, 0).rgb, 1.0f);
 }

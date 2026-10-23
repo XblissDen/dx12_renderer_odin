@@ -162,7 +162,23 @@ renderer_render_post_process :: proc(scene: ^Scene) {
     r.rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
     rtv_handle.ptr += uint(r.frame_index * r.rtv_descriptor_size)
 
-    r.command_list->OMSetRenderTargets(1, &rtv_handle, false, nil)
+    // With FXAA, tone mapping writes an intermediate image that FXAA then
+    // filters into the back buffer; otherwise it writes the back buffer directly.
+    fxaa := r.post_anti_aliasing == .FXAA
+    ldr_barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
+    ldr_barrier.Transition = {
+        pResource = r.ldr_texture,
+        StateBefore = {.PIXEL_SHADER_RESOURCE},
+        StateAfter = {.RENDER_TARGET},
+        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+    }
+    tone_map_rtv := rtv_handle
+    if fxaa {
+        r.command_list->ResourceBarrier(1, &ldr_barrier)
+        r.ldr_rtv_heap->GetCPUDescriptorHandleForHeapStart(&tone_map_rtv)
+    }
+
+    r.command_list->OMSetRenderTargets(1, &tone_map_rtv, false, nil)
 
     r.command_list->SetGraphicsRootSignature(r.root_signature)
     r.command_list->SetGraphicsRootConstantBufferView(
@@ -187,6 +203,20 @@ renderer_render_post_process :: proc(scene: ^Scene) {
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
     r.command_list->DrawInstanced(3, 1, 0, 0)
 
+    if fxaa {
+        ldr_barrier.Transition.StateBefore = {.RENDER_TARGET}
+        ldr_barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
+        r.command_list->ResourceBarrier(1, &ldr_barrier)
+
+        renderer_begin_gpu_pass(.FXAA)
+        r.command_list->OMSetRenderTargets(1, &rtv_handle, false, nil)
+        r.command_list->SetPipelineState(r.fxaa_pipeline_state)
+        r.command_list->SetGraphicsRootDescriptorTable(1, renderer_srv_gpu(r.ldr_srv_index))
+        r.command_list->DrawInstanced(3, 1, 0, 0)
+        renderer_end_gpu_pass(.FXAA)
+    }
+
+    // The outline and UI draw after anti-aliasing, so text stays crisp.
     renderer_render_selection(scene)
     r.command_list->OMSetRenderTargets(1, &rtv_handle, false, nil)
 

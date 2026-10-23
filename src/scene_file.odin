@@ -15,6 +15,8 @@ ScenePostSettings :: struct{
     bloom_strength: f32,
     // Absent in older files, which decode as Reinhard and keep their look.
     tone_mapper: ToneMapper,
+    // Absent in older files, which decode as FXAA.
+    anti_aliasing: AntiAliasing,
 }
 
 SceneShadowSettings :: struct {
@@ -240,6 +242,7 @@ scene_save_to_file :: proc(scene: ^Scene, path: string) -> (ok: bool, message: s
             bloom_threshold = g_renderer.post_threshold,
             bloom_strength = g_renderer.post_strength,
             tone_mapper = g_renderer.post_tone_mapper,
+            anti_aliasing = g_renderer.post_anti_aliasing,
         },
         environment = g_renderer.environment_settings,
         shadow = SceneShadowSettings{
@@ -353,7 +356,7 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
     post := file.post_process
     if post.exposure < 0.1 || post.exposure > 5.0 || post.bloom_threshold < 0.1 || post.bloom_threshold > 5.0 ||
         post.bloom_strength < 0.0 || post.bloom_strength > 2.0 ||
-        post.tone_mapper > max(ToneMapper) {
+        post.tone_mapper > max(ToneMapper) || post.anti_aliasing > max(AntiAliasing) {
         return false, "Invalid post-process settings."
     }
     shadow := file.shadow.? or_else SceneShadowSettings{
@@ -411,6 +414,7 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
     g_renderer.post_threshold = post.bloom_threshold
     g_renderer.post_strength = post.bloom_strength
     g_renderer.post_tone_mapper = post.tone_mapper
+    g_renderer.post_anti_aliasing = post.anti_aliasing
     g_renderer.shadow_bias_constant = shadow.bias_constant
     g_renderer.shadow_bias_slope = shadow.bias_slope
     g_renderer.shadow_distance = shadow.distance
