@@ -188,7 +188,7 @@ debug_ui_update :: proc() {
 
         pass_names := [GPU_PASS_COUNT]string{
             "Shadow", "Scene", "Bloom extract", "Bloom horizontal",
-            "Bloom vertical", "Post + UI",
+            "Bloom vertical", "Post + UI", "Depth prepass", "SSAO + blur",
         }
         if ui_begin_table("GPU timings") {
             ui_table_column("GPU pass")
@@ -236,6 +236,14 @@ debug_ui_shadow_controls :: proc() {
     ui_slider_float("Shadow bias", &r.shadow_bias_constant, 0, MAX_SHADOW_BIAS)
     ui_slider_float("Shadow slope bias", &r.shadow_bias_slope, 0, MAX_SHADOW_BIAS)
     ui_checkbox("Show shadow cascades", &r.shadow_show_cascades)
+
+    ui_separator()
+    ui_checkbox("Ambient occlusion (SSAO)", &r.ao_enabled)
+    if r.ao_enabled {
+        ui_slider_float("AO radius", &r.ao_radius, MIN_AO_RADIUS, MAX_AO_RADIUS)
+        ui_slider_float("AO intensity", &r.ao_intensity, 0, MAX_AO_INTENSITY)
+        ui_checkbox("Show AO only", &r.ao_show)
+    }
 }
 
 debug_ui_environment_controls :: proc() {

@@ -41,6 +41,14 @@ SceneFile :: struct {
     post_process: ScenePostSettings,
     environment: Maybe(EnvironmentSettings),
     shadow: Maybe(SceneShadowSettings),
+    // Absent in files saved before SSAO; they load with the defaults.
+    ambient_occlusion: Maybe(SceneAmbientOcclusionSettings),
+}
+
+SceneAmbientOcclusionSettings :: struct {
+    enabled: bool,
+    radius: f32,
+    intensity: f32,
 }
 
 // Versions 1-5 stored the in-memory component arrays directly, with 16 slots,
@@ -239,6 +247,11 @@ scene_save_to_file :: proc(scene: ^Scene, path: string) -> (ok: bool, message: s
             bias_slope = g_renderer.shadow_bias_slope,
             distance = g_renderer.shadow_distance,
         },
+        ambient_occlusion = SceneAmbientOcclusionSettings{
+            enabled = g_renderer.ao_enabled,
+            radius = g_renderer.ao_radius,
+            intensity = g_renderer.ao_intensity,
+        },
     }
 
     data, encode_error := json.marshal(file, json.Marshal_Options{
@@ -353,6 +366,15 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
        !(shadow.distance >= MIN_SHADOW_DISTANCE && shadow.distance <= MAX_SHADOW_DISTANCE) {
         return false, "Invalid shadow settings."
     }
+    ambient_occlusion := file.ambient_occlusion.? or_else SceneAmbientOcclusionSettings{
+        enabled = true,
+        radius = DEFAULT_AO_RADIUS,
+        intensity = DEFAULT_AO_INTENSITY,
+    }
+    if !(ambient_occlusion.radius >= MIN_AO_RADIUS && ambient_occlusion.radius <= MAX_AO_RADIUS) ||
+       !(ambient_occlusion.intensity >= 0 && ambient_occlusion.intensity <= MAX_AO_INTENSITY) {
+        return false, "Invalid ambient occlusion settings."
+    }
     environment, has_environment := file.environment.(EnvironmentSettings)
     defaults := renderer_default_environment_settings()
     if !has_environment {
@@ -392,6 +414,9 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
     g_renderer.shadow_bias_constant = shadow.bias_constant
     g_renderer.shadow_bias_slope = shadow.bias_slope
     g_renderer.shadow_distance = shadow.distance
+    g_renderer.ao_enabled = ambient_occlusion.enabled
+    g_renderer.ao_radius = ambient_occlusion.radius
+    g_renderer.ao_intensity = ambient_occlusion.intensity
 
     commited = true
     return true, "Scene loaded."

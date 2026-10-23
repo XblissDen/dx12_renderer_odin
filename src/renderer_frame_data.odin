@@ -229,6 +229,10 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
         cascade_split_depth = cascade_split_depth,
         cascade_texel_world = cascade_texel_world,
         cascade_texel_depth = cascade_texel_depth,
+        ao_radius = r.ao_radius,
+        ao_intensity = r.ao_intensity,
+        ao_enabled = u32(r.ao_enabled),
+        ao_show = u32(r.ao_enabled && r.ao_show),
         lights = gpu_lights,
     }
 

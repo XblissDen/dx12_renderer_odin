@@ -26,7 +26,7 @@ PREFILTER_WIDTH :: 1024
 PREFILTER_HEIGHT :: 512
 PREFILTER_MIP_COUNT :: 5
 
-GPU_PASS_COUNT :: 6
+GPU_PASS_COUNT :: 8
 GPU_TIMESTAMP_COUNT :: GPU_PASS_COUNT * 2
 
 GPU_Pass :: enum u32{
@@ -36,6 +36,8 @@ GPU_Pass :: enum u32{
     Bloom_Horizontal,
     Bloom_Vertical,
     Post_Process,
+    Depth_Prepass,
+    SSAO,
 }
 
 Vertex :: struct {
@@ -116,6 +118,14 @@ FrameConstants :: struct #align(256) {
     cascade_split_depth: [SHADOW_CASCADE_COUNT]f32,
     cascade_texel_world: [SHADOW_CASCADE_COUNT]f32,
     cascade_texel_depth: [SHADOW_CASCADE_COUNT]f32,
+
+    // Screen-space ambient occlusion: world-space sample radius, the exponent
+    // applied to the result, and whether ambient light uses it.
+    ao_radius: f32,
+    ao_intensity: f32,
+    ao_enabled: u32,
+    // Nonzero shows the occlusion buffer instead of lighting.
+    ao_show: u32,
 
     lights: [MAX_LIGHTS]GpuPointLight,
 }
@@ -253,6 +263,18 @@ Renderer :: struct {
     shadow_distance: f32,
     shadow_show_cascades: bool,
 
+    ao_enabled: bool,
+    ao_show: bool,
+    ao_radius: f32,
+    ao_intensity: f32,
+    // Raw (noisy) and blurred occlusion, plus their RTVs.
+    ao_targets: [AO_TARGET_COUNT]^d3d12.IResource,
+    ao_rtv_heap: ^d3d12.IDescriptorHeap,
+    ao_srv_start, depth_srv_index: u32,
+    depth_prepass_pipeline_state: ^d3d12.IPipelineState,
+    ssao_pipeline_state: ^d3d12.IPipelineState,
+    ssao_blur_pipeline_state: ^d3d12.IPipelineState,
+
     timestamp_heap: ^d3d12.IQueryHeap,
     timestamp_readback: ^d3d12.IResource,
     timestamp_frequency: u64,
@@ -306,6 +328,20 @@ dx_check:: proc(hr: win32.HRESULT, loc := #caller_location){
     }
 }
 
+renderer_compile_shader :: proc(path: string, entry, target: cstring, flags: u32) -> ^d3d12.IBlob {
+    blob, errors: ^d3d12.IBlob
+    hr := d3dc.CompileFromFile(
+        win32.utf8_to_wstring(path), nil, nil,
+        entry, target, flags, 0, &blob, &errors,
+    )
+    if errors != nil {
+        fmt.println(entry, "compiler messages:", cstring(errors->GetBufferPointer()))
+        errors->Release()
+    }
+    dx_check(hr)
+    return blob
+}
+
 renderer_init :: proc() {
     r := &g_renderer
 
@@ -320,6 +356,10 @@ renderer_init :: proc() {
     r.shadow_bias_constant = DEFAULT_SHADOW_BIAS_CONSTANT
     r.shadow_bias_slope = DEFAULT_SHADOW_BIAS_SLOPE
     r.shadow_distance = DEFAULT_SHADOW_DISTANCE
+
+    r.ao_enabled = true
+    r.ao_radius = DEFAULT_AO_RADIUS
+    r.ao_intensity = DEFAULT_AO_INTENSITY
 
     r.frustum_culling_enabled = true
 
@@ -595,6 +635,14 @@ renderer_load_assets :: proc(){
     }
     cascade_param.Constants = {ShaderRegister = 5, Num32BitValues = 1}
 
+    ao_range := d3d12.DESCRIPTOR_RANGE{RangeType = .SRV, NumDescriptors = 1, BaseShaderRegister = 8}
+    ao_param := d3d12.ROOT_PARAMETER{ParameterType = .DESCRIPTOR_TABLE, ShaderVisibility = .PIXEL}
+    ao_param.DescriptorTable = {NumDescriptorRanges = 1, pDescriptorRanges = &ao_range}
+
+    depth_range := d3d12.DESCRIPTOR_RANGE{RangeType = .SRV, NumDescriptors = 1, BaseShaderRegister = 9}
+    depth_param := d3d12.ROOT_PARAMETER{ParameterType = .DESCRIPTOR_TABLE, ShaderVisibility = .PIXEL}
+    depth_param.DescriptorTable = {NumDescriptorRanges = 1, pDescriptorRanges = &depth_range}
+
     static_sampler := d3d12.STATIC_SAMPLER_DESC{
         Filter = .MIN_MAG_MIP_LINEAR,
         AddressU = .WRAP,
@@ -648,6 +696,8 @@ renderer_load_assets :: proc(){
         metallic_param,  // Root slot 11 -> t7
         frame_cbv_param, // Root slot 12 -> b4
         cascade_param,   // Root slot 13 -> b5 (shadow cascade index)
+        ao_param,        // Root slot 14 -> t8 (ambient occlusion)
+        depth_param,     // Root slot 15 -> t9 (scene depth)
     }
     samplers := []d3d12.STATIC_SAMPLER_DESC{
         static_sampler,
@@ -948,9 +998,30 @@ renderer_load_assets :: proc(){
         (^rawptr)(&r.shadow_pipeline_state),
     ))
 
-    // Same scene shaders and depth test, but a floating-point color target.
+    // Depth-only version of the scene draw. VSDepth computes positions with
+    // the same code as VSMain, so the lit pass can test LESS_EQUAL against it.
+    depth_vs := renderer_compile_shader("shaders/scene.hlsl", "VSDepth", "vs_5_1", compile_flags)
+    defer depth_vs->Release()
+    depth_pso_desc := pso_desc
+    depth_pso_desc.VS = {
+        pShaderBytecode = depth_vs->GetBufferPointer(),
+        BytecodeLength = depth_vs->GetBufferSize(),
+    }
+    depth_pso_desc.PS = {}
+    depth_pso_desc.NumRenderTargets = 0
+    depth_pso_desc.RTVFormats[0] = .UNKNOWN
+    dx_check(r.device->CreateGraphicsPipelineState(
+        &depth_pso_desc,
+        d3d12.IPipelineState_UUID,
+        (^rawptr)(&r.depth_prepass_pipeline_state),
+    ))
+
+    // Same scene shaders, but a floating-point color target, and depth comes
+    // from the prepass: test against it without writing.
     hdr_pso_desc := pso_desc
     hdr_pso_desc.RTVFormats[0] = .R16G16B16A16_FLOAT
+    hdr_pso_desc.DepthStencilState.DepthFunc = .LESS_EQUAL
+    hdr_pso_desc.DepthStencilState.DepthWriteMask = .ZERO
 
     dx_check(r.device->CreateGraphicsPipelineState(
         &hdr_pso_desc,
@@ -1031,6 +1102,27 @@ renderer_load_assets :: proc(){
             &bloom_pso_desc,
             d3d12.IPipelineState_UUID,
             (^rawptr)(&r.bloom_pipeline_states[i]),
+        ))
+    }
+
+    // SSAO and its blur: full-screen passes whose pixel shaders live in
+    // scene.hlsl, so they share its frame constants.
+    ssao_entries := [2]cstring{"PSSsao", "PSSsaoBlur"}
+    ssao_states := [2]^^d3d12.IPipelineState{&r.ssao_pipeline_state, &r.ssao_blur_pipeline_state}
+    for entry, i in ssao_entries {
+        ssao_ps := renderer_compile_shader("shaders/scene.hlsl", entry, "ps_5_1", compile_flags)
+        defer ssao_ps->Release()
+
+        ssao_pso_desc := post_pso_desc
+        ssao_pso_desc.PS = {
+            pShaderBytecode = ssao_ps->GetBufferPointer(),
+            BytecodeLength = ssao_ps->GetBufferSize(),
+        }
+        ssao_pso_desc.RTVFormats[0] = .R8_UNORM
+        dx_check(r.device->CreateGraphicsPipelineState(
+            &ssao_pso_desc,
+            d3d12.IPipelineState_UUID,
+            (^rawptr)(ssao_states[i]),
         ))
     }
 
@@ -1171,9 +1263,11 @@ renderer_upload_mesh :: proc(gpu: ^GpuMesh, mesh: MeshData) -> (hr: win32.HRESUL
 renderer_create_depth_buffer :: proc(){
     r := &g_renderer
 
+    // [0] writes depth (prepass); [1] is read-only, for passes that test
+    // against it while the depth is also bound as a shader resource.
     if r.dsv_heap == nil {
         dsv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{
-            NumDescriptors = 1,
+            NumDescriptors = 2,
             Type = .DSV,
             Flags = {},
         }
@@ -1190,7 +1284,8 @@ renderer_create_depth_buffer :: proc(){
         Height = r.height,
         DepthOrArraySize = 1,
         MipLevels = 1,
-        Format = .D32_FLOAT,
+        // Typeless so SSAO can read it as R32_FLOAT.
+        Format = .R32_TYPELESS,
         SampleDesc = { Count = 1 },
         Flags = {.ALLOW_DEPTH_STENCIL},
     }
@@ -1226,6 +1321,19 @@ renderer_create_depth_buffer :: proc(){
         dsv_handle,
     )
 
+    dsv_desc.Flags = {.READ_ONLY_DEPTH}
+    dsv_handle.ptr += uint(r.device->GetDescriptorHandleIncrementSize(.DSV))
+    r.device->CreateDepthStencilView(r.depth_buffer, &dsv_desc, dsv_handle)
+}
+
+renderer_depth_dsv :: proc(read_only: bool) -> d3d12.CPU_DESCRIPTOR_HANDLE {
+    r := &g_renderer
+    handle: d3d12.CPU_DESCRIPTOR_HANDLE
+    r.dsv_heap->GetCPUDescriptorHandleForHeapStart(&handle)
+    if read_only {
+        handle.ptr += uint(r.device->GetDescriptorHandleIncrementSize(.DSV))
+    }
+    return handle
 }
 
 renderer_resize:: proc(width, height: u32){
@@ -1238,6 +1346,7 @@ renderer_resize:: proc(width, height: u32){
     renderer_wait_for_gpu()
 
     r.hdr_texture->Release()
+    for target in r.ao_targets do target->Release()
     for target in r.bloom_targets {
         target->Release()
     }
@@ -1281,6 +1390,7 @@ renderer_resize:: proc(width, height: u32){
 
     renderer_create_hdr_target()
     renderer_create_bloom_targets()
+    renderer_create_ssao_targets()
 }
 
 renderer_load_textures :: proc(){
@@ -1307,6 +1417,8 @@ renderer_load_textures :: proc(){
     r.irradiance_srv_index = renderer_alloc_srv()
     r.prefilter_srv_index = renderer_alloc_srv()
     r.environment_bake_srv_index = renderer_alloc_srv()
+    r.ao_srv_start = renderer_alloc_srv(AO_TARGET_COUNT)
+    r.depth_srv_index = renderer_alloc_srv()
     // These slots stay valid before an HDRI is loaded or its IBL maps are baked.
     null_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
         Format = .R16G16B16A16_FLOAT, ViewDimension = .TEXTURE2D,
@@ -1547,6 +1659,13 @@ renderer_render_frame :: proc(scene: ^Scene) {
     }
     renderer_render_shadow_pass(frame.draw_meshes[:frame.draw_count], cascade_draws)
 
+    // Depth first: SSAO reads it, and the lit pass only shades visible pixels.
+    renderer_render_depth_prepass(
+        frame.draw_meshes[:frame.draw_count],
+        frame.scene_indices[:frame.scene_draw_count],
+    )
+    renderer_render_ssao()
+
     renderer_render_scene_pass(
         frame.draw_meshes[:frame.draw_count],
         frame.draw_textures[:frame.draw_count],
@@ -1558,6 +1677,16 @@ renderer_render_frame :: proc(scene: ^Scene) {
 
     renderer_render_bloom()
     renderer_render_post_process(scene)
+
+    // The prepass left depth readable; the next frame's prepass writes it.
+    depth_barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
+    depth_barrier.Transition = {
+        pResource = r.depth_buffer,
+        StateBefore = {.DEPTH_READ, .PIXEL_SHADER_RESOURCE},
+        StateAfter = {.DEPTH_WRITE},
+        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+    }
+    r.command_list->ResourceBarrier(1, &depth_barrier)
 
     renderer_submit_frame()
     dx_check(r.swap_chain->Present(1, {}))
@@ -1669,6 +1798,12 @@ renderer_destroy :: proc(){
         target->Release()
     }
     r.bloom_rtv_heap->Release()
+
+    for target in r.ao_targets do target->Release()
+    r.ao_rtv_heap->Release()
+    r.depth_prepass_pipeline_state->Release()
+    r.ssao_pipeline_state->Release()
+    r.ssao_blur_pipeline_state->Release()
 
     for pso in r.bloom_pipeline_states {
         pso->Release()

@@ -57,13 +57,9 @@ renderer_render_scene_pass :: proc(
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
     r.command_list->DrawInstanced(3, 1, 0, 0)
 
-    // Now draw scene geometry over the sky, with depth enabled.
-    dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.dsv_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle)
+    // Now draw scene geometry over the sky, testing against the prepass depth.
+    dsv_handle := renderer_depth_dsv(read_only = true)
     r.command_list->OMSetRenderTargets(1, &hdr_rtv, false, &dsv_handle)
-    r.command_list->ClearDepthStencilView(
-        dsv_handle, {.DEPTH}, 1.0, 0, 0, nil,
-    )
 
     // Pipeline
     r.command_list->SetGraphicsRootSignature(r.root_signature)
@@ -89,6 +85,9 @@ renderer_render_scene_pass :: proc(
     prefilter_gpu_handle.ptr += u64(r.prefilter_srv_index) *
                                 u64(r.srv_descriptor_size)
     r.command_list->SetGraphicsRootDescriptorTable(8, prefilter_gpu_handle)
+
+    // Blurred ambient occlusion (ignored by the shader while disabled).
+    r.command_list->SetGraphicsRootDescriptorTable(14, renderer_srv_gpu(r.ao_srv_start + 1))
 
     // viewport, scissor
     r.command_list->RSSetViewports(1, &r.viewport)

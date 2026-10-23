@@ -67,6 +67,11 @@ cbuffer FrameConstants : register(b4)
     float4 cascade_texel_world;
     float4 cascade_texel_depth;
 
+    float ao_radius;
+    float ao_intensity;
+    uint  ao_enabled;
+    uint  ao_show;
+
     GpuPointLight lights[MAX_LIGHTS];
 };
 
@@ -87,6 +92,9 @@ Texture2D<float4> g_prefiltered_environment : register(t4);
 Texture2D<float4> g_normal_map : register(t5);
 Texture2D<float4> g_roughness_map : register(t6);
 Texture2D<float4> g_metallic_map : register(t7);
+// Ambient occlusion: the blurred map in the lit pass, the raw map in the blur.
+Texture2D<float> g_ao : register(t8);
+Texture2D<float> g_depth : register(t9);
 
 struct VSInput
 {
@@ -106,19 +114,30 @@ struct PSInput
     float4 tangent : TEXCOORD3;
 };
 
+// Shared by VSMain and VSDepth so both produce bit-identical depth: the lit
+// pass tests LESS_EQUAL against the prepass without writing.
+float4 ObjectToClip(float3 position, out float4 world_pos, out float4 view_pos)
+{
+    world_pos = mul(float4(position, 1.0f), model);
+    view_pos = mul(world_pos, view);
+    return mul(view_pos, projection);
+}
+
+float4 VSDepth(VSInput input) : SV_POSITION
+{
+    float4 world_pos, view_pos;
+    return ObjectToClip(input.position, world_pos, view_pos);
+}
+
 PSInput VSMain(VSInput input)
 {
     PSInput output;
 
-    float4 world_pos = mul(float4(input.position, 1.0f), model);
+    float4 world_pos, view_pos;
+    output.position = ObjectToClip(input.position, world_pos, view_pos);
     output.world_pos = world_pos.xyz;
     // Distance along the camera's forward axis, which selects the cascade.
-    output.view_depth = mul(world_pos, view).z;
-
-    float4 pos = world_pos;
-    pos = mul(pos, view);
-    pos = mul(pos, projection);
-    output.position = pos;
+    output.view_depth = view_pos.z;
 
     output.normal = mul(input.normal, (float3x3)normal_matrix);
     output.texcoord = input.texcoord;
@@ -391,14 +410,26 @@ float4 PSMain(PSInput input) : SV_TARGET
     );
     float3 ambient_kD = (1.0f - ambient_F) * (1.0f - material_metallic);
 
-    float3 result = ambient_kD * albedo * incoming_diffuse;
-
-    float2 environment_brdf = EnvBRDFApprox(
-        max(dot(N, V), 0.0f),
-        material_roughness
+    // Occlusion applies to ambient (sky) light only: the sun and point lights
+    // have their own shadows or none.
+    float ambient_occlusion = 1.0f;
+    if (ao_enabled != 0u)
+    {
+        ambient_occlusion = g_ao.Load(int3(input.position.xy, 0));
+    }
+    float n_dot_v = max(dot(N, V), 0.0f);
+    // Lagarde's specular occlusion: reflections fade with AO, less so at
+    // grazing angles and on smooth surfaces.
+    float specular_occlusion = saturate(
+        pow(n_dot_v + ambient_occlusion, exp2(-16.0f * material_roughness - 1.0f)) -
+        1.0f + ambient_occlusion
     );
 
-    result += prefiltered_color *
+    float3 result = ambient_kD * albedo * incoming_diffuse * ambient_occlusion;
+
+    float2 environment_brdf = EnvBRDFApprox(n_dot_v, material_roughness);
+
+    result += prefiltered_color * specular_occlusion *
             (ambient_F0 * environment_brdf.x + environment_brdf.y);
 
 
@@ -487,5 +518,134 @@ float4 PSMain(PSInput input) : SV_TARGET
         if (cascade < SHADOW_CASCADE_COUNT) result *= cascade_tints[cascade];
     }
 
+    if (ao_show != 0u)
+    {
+        // Linear occlusion in [0, 1]; post-processing tone maps it like any color.
+        result = ambient_occlusion;
+    }
+
     return float4(result, 1.0f);
+}
+
+// ---------------------------------------------------------------------------
+// Screen-space ambient occlusion. Full-screen passes driven by the post-process
+// vertex shader; they live here to share FrameConstants.
+
+struct FullscreenInput
+{
+    float4 position : SV_POSITION;
+    float2 uv       : TEXCOORD0;
+};
+
+// Row-vector perspective: device depth d = P22 + P32 / z.
+float ViewDepthFromDevice(float device_depth)
+{
+    return projection[3][2] / (device_depth - projection[2][2]);
+}
+
+float3 ViewPositionAt(int2 pixel, float2 size)
+{
+    pixel = clamp(pixel, int2(0, 0), int2(size) - 1);
+    float z = ViewDepthFromDevice(g_depth.Load(int3(pixel, 0)));
+    float2 ndc = float2(
+        (pixel.x + 0.5f) / size.x * 2.0f - 1.0f,
+        1.0f - (pixel.y + 0.5f) / size.y * 2.0f
+    );
+    return float3(ndc.x * z / projection[0][0], ndc.y * z / projection[1][1], z);
+}
+
+// A 4x4 ordered pattern of rotations; the 4x4 blur averages all 16 of them.
+static const float AO_ROTATION_PATTERN[16] = {
+    0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5
+};
+#define AO_SAMPLE_COUNT 16
+
+float PSSsao(FullscreenInput input) : SV_TARGET
+{
+    uint width, height;
+    g_depth.GetDimensions(width, height);
+    float2 size = float2(width, height);
+    int2 pixel = int2(input.position.xy);
+
+    if (g_depth.Load(int3(pixel, 0)) >= 1.0f)
+    {
+        return 1.0f; // Sky.
+    }
+    float3 p = ViewPositionAt(pixel, size);
+
+    // Normal from depth: for each axis use the neighbour on the same surface
+    // (smaller depth step), so silhouettes do not bend the normal.
+    float3 left = ViewPositionAt(pixel - int2(1, 0), size);
+    float3 right = ViewPositionAt(pixel + int2(1, 0), size);
+    float3 up = ViewPositionAt(pixel - int2(0, 1), size);
+    float3 down = ViewPositionAt(pixel + int2(0, 1), size);
+    float3 dx = abs(right.z - p.z) < abs(p.z - left.z) ? right - p : p - left;
+    float3 dy = abs(down.z - p.z) < abs(p.z - up.z) ? down - p : p - up;
+    float3 n = normalize(cross(dx, dy));
+    if (dot(n, p) > 0.0f) n = -n; // Face the camera at the view-space origin.
+
+    float3 helper = abs(n.y) < 0.99f ? float3(0, 1, 0) : float3(1, 0, 0);
+    float3 t = normalize(cross(helper, n));
+    float3 b = cross(n, t);
+
+    float rotation = (AO_ROTATION_PATTERN[(pixel.y & 3) * 4 + (pixel.x & 3)] + 0.5f) /
+                     16.0f * 2.0f * PI;
+    float bias = 0.025f * ao_radius;
+
+    float occlusion = 0.0f;
+    [unroll]
+    for (uint i = 0u; i < AO_SAMPLE_COUNT; ++i)
+    {
+        // Cosine-weighted hemisphere directions, denser near the center.
+        float u = (i + 0.5f) / AO_SAMPLE_COUNT;
+        float phi = 2.0f * PI * frac(i * 0.618034f) + rotation;
+        float radius = sqrt(u);
+        float3 direction = float3(radius * cos(phi), radius * sin(phi), sqrt(1.0f - u));
+        float distance_t = frac(i * 0.7548777f + 0.5698403f);
+        float scale = lerp(0.1f, 1.0f, distance_t * distance_t) * ao_radius;
+
+        float3 sample_pos = p + (t * direction.x + b * direction.y + n * direction.z) * scale;
+        float4 clip = mul(float4(sample_pos, 1.0f), projection);
+        float2 uv = clip.xy / clip.w * float2(0.5f, -0.5f) + 0.5f;
+        if (any(uv < 0.0f) || any(uv > 1.0f))
+        {
+            continue;
+        }
+
+        float scene_z = ViewDepthFromDevice(g_depth.Load(int3(uv * size, 0)));
+        // Occluded when the visible surface there is in front of the sample;
+        // ignore surfaces far in front of this pixel (another object's silhouette).
+        float in_range = smoothstep(0.0f, 1.0f, ao_radius / max(abs(p.z - scene_z), 0.0001f));
+        occlusion += (scene_z <= sample_pos.z - bias ? 1.0f : 0.0f) * in_range;
+    }
+
+    return pow(saturate(1.0f - occlusion / AO_SAMPLE_COUNT), ao_intensity);
+}
+
+// 4x4 average that skips pixels on other surfaces (by relative depth), which
+// removes the rotation pattern without blurring across silhouettes.
+float PSSsaoBlur(FullscreenInput input) : SV_TARGET
+{
+    uint width, height;
+    g_depth.GetDimensions(width, height);
+    int2 pixel = int2(input.position.xy);
+    int2 last = int2(width, height) - 1;
+
+    float center_z = ViewDepthFromDevice(g_depth.Load(int3(pixel, 0)));
+    float sum = 0.0f;
+    float weight_sum = 0.0f;
+    [unroll]
+    for (int y = -2; y <= 1; ++y)
+    {
+        [unroll]
+        for (int x = -2; x <= 1; ++x)
+        {
+            int2 q = clamp(pixel + int2(x, y), int2(0, 0), last);
+            float z = ViewDepthFromDevice(g_depth.Load(int3(q, 0)));
+            float weight = saturate(1.0f - abs(z - center_z) / (0.05f * center_z)) + 0.0001f;
+            sum += g_ao.Load(int3(q, 0)) * weight;
+            weight_sum += weight;
+        }
+    }
+    return sum / weight_sum;
 }

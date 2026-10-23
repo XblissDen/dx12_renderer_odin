@@ -156,8 +156,7 @@ renderer_render_selection :: proc(scene: ^Scene) {
     r.rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv)
     rtv.ptr += uint(r.frame_index * r.rtv_descriptor_size)
 
-    dsv: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.dsv_heap->GetCPUDescriptorHandleForHeapStart(&dsv)
+    dsv := renderer_depth_dsv(read_only = true)
     r.command_list->OMSetRenderTargets(1, &rtv, false, &dsv)
 
     r.command_list->SetGraphicsRootSignature(r.selection_root_signature)
