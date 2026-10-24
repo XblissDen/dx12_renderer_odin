@@ -9,8 +9,13 @@ cbuffer PostConstants : register(b1)
     float bloom_strength;
     uint  tone_mapper; // 0 Reinhard, 1 ACES, 2 AgX
     float2 texel_size; // One pixel in UV units.
-    float2 _pad0;
+    uint  taa_history_valid;
+    float taa_blend;   // Share of the new frame in each TAA blend.
 };
+
+// TAA inputs; the history is bound in the bloom slot (t1).
+Texture2D<float2> g_velocity : register(t8);
+Texture2D<float> g_depth : register(t9);
 
 SamplerState g_clamp_sampler : register(s4);
 
@@ -335,4 +340,132 @@ float4 PSFxaa(VSOutput input) : SV_TARGET
     else final_uv.x += offset * step_across;
 
     return float4(g_hdr_texture.SampleLevel(g_clamp_sampler, final_uv, 0).rgb, 1.0f);
+}
+
+// ---------------------------------------------------------------------------
+// TAA resolve. The scene is rendered with a different sub-pixel jitter each
+// frame; this blends it into the history found through per-pixel motion. To
+// avoid ghosting, the history is clipped to the colour range of the current
+// pixel's neighbourhood. Runs in HDR before bloom and tone mapping.
+
+#define g_history g_bloom_texture
+#define TAA_CLIP_SIGMA 1.25f
+
+// Blending HDR values directly lets rare very bright pixels dominate; this
+// reversible compression evens them out (Karis' weighting).
+float3 TaaCompress(float3 c)
+{
+    return c / (1.0f + max(c.r, max(c.g, c.b)));
+}
+
+float3 TaaDecompress(float3 c)
+{
+    return c / max(1.0f - max(c.r, max(c.g, c.b)), 0.0001f);
+}
+
+float3 RgbToYCoCg(float3 c)
+{
+    return float3(
+        dot(c, float3(0.25f, 0.5f, 0.25f)),
+        dot(c, float3(0.5f, 0.0f, -0.5f)),
+        dot(c, float3(-0.25f, 0.5f, -0.25f))
+    );
+}
+
+float3 YCoCgToRgb(float3 c)
+{
+    return float3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z);
+}
+
+// Pulls `value` toward the box center until it lies inside the box.
+float3 ClipToBox(float3 value, float3 box_min, float3 box_max)
+{
+    float3 center = 0.5f * (box_max + box_min);
+    float3 extents = 0.5f * (box_max - box_min) + 0.00001f;
+    float3 offset = value - center;
+    float3 ratio = abs(offset / extents);
+    float largest = max(ratio.x, max(ratio.y, ratio.z));
+    return largest > 1.0f ? center + offset / largest : value;
+}
+
+// Catmull-Rom history lookup from five bilinear taps: sharper than plain
+// bilinear, which would soften the image a little more every frame.
+float3 SampleHistoryCatmullRom(float2 uv)
+{
+    float2 size = 1.0f / texel_size;
+    float2 sample_pos = uv * size;
+    float2 center = floor(sample_pos - 0.5f) + 0.5f;
+    float2 f = sample_pos - center;
+
+    float2 w0 = f * (-0.5f + f * (1.0f - 0.5f * f));
+    float2 w1 = 1.0f + f * f * (-2.5f + 1.5f * f);
+    float2 w2 = f * (0.5f + f * (2.0f - 1.5f * f));
+    float2 w3 = f * f * (-0.5f + 0.5f * f);
+
+    // The middle two taps per axis merge into one bilinear lookup.
+    float2 w12 = w1 + w2;
+    float2 uv0 = (center - 1.0f) * texel_size;
+    float2 uv3 = (center + 2.0f) * texel_size;
+    float2 uv12 = (center + w2 / w12) * texel_size;
+
+    float3 result =
+        g_history.SampleLevel(g_clamp_sampler, float2(uv12.x, uv0.y), 0).rgb * (w12.x * w0.y) +
+        g_history.SampleLevel(g_clamp_sampler, float2(uv0.x, uv12.y), 0).rgb * (w0.x * w12.y) +
+        g_history.SampleLevel(g_clamp_sampler, uv12, 0).rgb * (w12.x * w12.y) +
+        g_history.SampleLevel(g_clamp_sampler, float2(uv3.x, uv12.y), 0).rgb * (w3.x * w12.y) +
+        g_history.SampleLevel(g_clamp_sampler, float2(uv12.x, uv3.y), 0).rgb * (w12.x * w3.y);
+    float total = w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;
+    return max(result / total, 0.0f); // The filter can undershoot slightly.
+}
+
+float4 PSTaaResolve(VSOutput input) : SV_TARGET
+{
+    int2 pixel = int2(input.position.xy);
+    int2 last = int2(1.0f / texel_size) - 1;
+    float3 current = g_hdr_texture.Load(int3(pixel, 0)).rgb;
+    if (taa_history_valid == 0u)
+    {
+        return float4(current, 1.0f);
+    }
+
+    // Neighbourhood colour statistics, and the nearest surface's motion so
+    // edges of moving objects follow the object rather than the background.
+    float3 moment1 = 0.0f;
+    float3 moment2 = 0.0f;
+    float closest_depth = 1.0f;
+    int2 closest_pixel = pixel;
+    [unroll]
+    for (int y = -1; y <= 1; ++y)
+    {
+        [unroll]
+        for (int x = -1; x <= 1; ++x)
+        {
+            int2 q = clamp(pixel + int2(x, y), int2(0, 0), last);
+            float3 c = RgbToYCoCg(TaaCompress(g_hdr_texture.Load(int3(q, 0)).rgb));
+            moment1 += c;
+            moment2 += c * c;
+            float depth = g_depth.Load(int3(q, 0));
+            if (depth < closest_depth)
+            {
+                closest_depth = depth;
+                closest_pixel = q;
+            }
+        }
+    }
+    float3 mean = moment1 / 9.0f;
+    float3 sigma = sqrt(max(moment2 / 9.0f - mean * mean, 0.0f));
+    float3 box_min = mean - TAA_CLIP_SIGMA * sigma;
+    float3 box_max = mean + TAA_CLIP_SIGMA * sigma;
+
+    float2 history_uv = input.uv - g_velocity.Load(int3(closest_pixel, 0));
+    if (any(history_uv < 0.0f) || any(history_uv > 1.0f))
+    {
+        return float4(current, 1.0f); // Newly revealed at the screen edge.
+    }
+
+    float3 history = RgbToYCoCg(TaaCompress(SampleHistoryCatmullRom(history_uv)));
+    history = YCoCgToRgb(ClipToBox(history, box_min, box_max));
+
+    float3 blended = lerp(history, TaaCompress(current), taa_blend);
+    return float4(TaaDecompress(blended), 1.0f);
 }

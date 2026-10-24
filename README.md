@@ -45,9 +45,14 @@ the same frame. The final GPU timing includes tone mapping and the UI draw.
   red/green/blue/yellow by cascade.
 - **Shadow bias / slope bias**: sun-shadow depth bias in shadow-map texels. Raise
   them for acne (striped self-shadowing); lower them if shadows detach from objects.
-- **Anti-aliasing**: FXAA (default) or Off. FXAA runs on the tone-mapped image,
-  finds high-contrast edges, and blends across them along the edge's direction;
-  the selection outline and this UI are drawn afterwards, so text stays sharp.
+- **Anti-aliasing**: FXAA (default), TAA, or Off. FXAA runs on the tone-mapped
+  image, finds high-contrast edges, and blends across them along the edge's
+  direction. TAA renders each frame with a sub-pixel jitter (8-sample Halton
+  pattern) and blends it into a history reprojected with per-pixel motion vectors
+  from the depth prepass, clipping the history to the current neighbourhood's
+  colours to avoid ghosting; it resolves in HDR before bloom, which also steadies
+  edge flicker in motion and SSAO noise. The selection outline and this UI are
+  drawn afterwards, so text stays sharp.
 - **Ambient occlusion (SSAO)**: darkens ambient (sky) light in creases and where
   objects meet, using a depth prepass, 16 view-space samples per pixel within
   **AO radius** (world units), and a depth-aware blur. **AO intensity** is the

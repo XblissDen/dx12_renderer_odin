@@ -26,7 +26,7 @@ PREFILTER_WIDTH :: 1024
 PREFILTER_HEIGHT :: 512
 PREFILTER_MIP_COUNT :: 5
 
-GPU_PASS_COUNT :: 9
+GPU_PASS_COUNT :: 10
 GPU_TIMESTAMP_COUNT :: GPU_PASS_COUNT * 2
 
 GPU_Pass :: enum u32{
@@ -39,6 +39,7 @@ GPU_Pass :: enum u32{
     Depth_Prepass,
     SSAO,
     FXAA,
+    TAA,
 }
 
 Vertex :: struct {
@@ -87,7 +88,11 @@ renderer_texture_srv :: proc(texture: TextureHandle) -> d3d12.GPU_DESCRIPTOR_HAN
 // Written once per frame and shared by every draw (b4).
 FrameConstants :: struct #align(256) {
     view: alg.Matrix4f32,
+    // Includes the TAA sub-pixel jitter when TAA is on.
     projection: alg.Matrix4f32,
+    // Unjittered, this frame and last: motion vectors exclude the jitter.
+    view_projection: alg.Matrix4f32,
+    previous_view_projection: alg.Matrix4f32,
     cascade_view_projection: [SHADOW_CASCADE_COUNT]alg.Matrix4f32,
 
     view_position: [3]f32,
@@ -140,6 +145,8 @@ ObjectConstants :: struct #align(256) {
     // Inverse model matrix; its upper 3x3 transforms normals under
     // non-uniform scale when used with the shader's row-vector convention.
     normal_matrix: alg.Matrix4f32,
+    // Last frame's model matrix (transposed like `model`), for motion vectors.
+    previous_model: alg.Matrix4f32,
 
     material_tint: [3]f32,
     uv_scale: f32,
@@ -160,16 +167,19 @@ ObjectConstants :: struct #align(256) {
 ToneMapper :: enum u32 {Reinhard, ACES, AgX}
 
 // The first value is what files saved before this setting existed load as.
-AntiAliasing :: enum u32 {FXAA, None}
+AntiAliasing :: enum u32 {FXAA, None, TAA}
 
 PostConstants :: struct #align(256) {
     exposure: f32,
     bloom_threshold: f32,
     bloom_strength: f32,
     tone_mapper: ToneMapper,
-    // One pixel in UV units, for FXAA's neighbour lookups.
+    // One pixel in UV units, for FXAA's and TAA's neighbour lookups.
     texel_size: [2]f32,
-    _pad0: [2]f32,
+    // Zero when the TAA history holds nothing usable (first frame, resize).
+    taa_history_valid: u32,
+    // Share of the new frame in each TAA blend.
+    taa_blend: f32,
 }
 
 SkyConstants :: struct #align(256) {
@@ -268,6 +278,27 @@ Renderer :: struct {
     ldr_rtv_heap: ^d3d12.IDescriptorHeap,
     ldr_srv_index: u32,
     fxaa_pipeline_state: ^d3d12.IPipelineState,
+
+    // TAA: two HDR histories used in turn (one read, one written), and the
+    // per-pixel motion written by the depth prepass.
+    taa_history: [2]^d3d12.IResource,
+    taa_rtv_heap: ^d3d12.IDescriptorHeap,
+    taa_srv_start: u32,
+    taa_write_index: int,
+    taa_history_valid: bool,
+    taa_resolve_pipeline_state: ^d3d12.IPipelineState,
+    velocity_texture: ^d3d12.IResource,
+    velocity_rtv_heap: ^d3d12.IDescriptorHeap,
+    velocity_srv_index: u32,
+    // The HDR image bloom and tone mapping read: the scene, or TAA's output.
+    scene_color_srv_index: u32,
+
+    // Last frame's unjittered camera and model matrices, for motion vectors.
+    // A model is only reused if it was recorded on the previous frame.
+    frame_counter: u64,
+    previous_view_projection: alg.Matrix4f32,
+    previous_models: [MAX_ENTITIES]alg.Matrix4f32,
+    previous_model_frame: [MAX_ENTITIES]u64,
 
     // Shadow depth bias in shadow-map texels: constant, and scaled by the
     // receiver's slope towards the sun.
@@ -1021,18 +1052,23 @@ renderer_load_assets :: proc(){
         (^rawptr)(&r.shadow_pipeline_state),
     ))
 
-    // Depth-only version of the scene draw. VSDepth computes positions with
-    // the same code as VSMain, so the lit pass can test LESS_EQUAL against it.
+    // Depth prepass, which also writes per-pixel motion for TAA. VSDepth
+    // computes positions with the same code as VSMain, so the lit pass can
+    // test LESS_EQUAL against it.
     depth_vs := renderer_compile_shader("shaders/scene.hlsl", "VSDepth", "vs_5_1", compile_flags)
     defer depth_vs->Release()
+    velocity_ps := renderer_compile_shader("shaders/scene.hlsl", "PSVelocity", "ps_5_1", compile_flags)
+    defer velocity_ps->Release()
     depth_pso_desc := pso_desc
     depth_pso_desc.VS = {
         pShaderBytecode = depth_vs->GetBufferPointer(),
         BytecodeLength = depth_vs->GetBufferSize(),
     }
-    depth_pso_desc.PS = {}
-    depth_pso_desc.NumRenderTargets = 0
-    depth_pso_desc.RTVFormats[0] = .UNKNOWN
+    depth_pso_desc.PS = {
+        pShaderBytecode = velocity_ps->GetBufferPointer(),
+        BytecodeLength = velocity_ps->GetBufferSize(),
+    }
+    depth_pso_desc.RTVFormats[0] = .R16G16_FLOAT
     dx_check(r.device->CreateGraphicsPipelineState(
         &depth_pso_desc,
         d3d12.IPipelineState_UUID,
@@ -1127,6 +1163,21 @@ renderer_load_assets :: proc(){
             (^rawptr)(&r.bloom_pipeline_states[i]),
         ))
     }
+
+    // TAA resolve: full-screen pass writing the HDR history.
+    taa_ps := renderer_compile_shader("shaders/post_process.hlsl", "PSTaaResolve", "ps_5_1", compile_flags)
+    defer taa_ps->Release()
+    taa_pso_desc := post_pso_desc
+    taa_pso_desc.PS = {
+        pShaderBytecode = taa_ps->GetBufferPointer(),
+        BytecodeLength = taa_ps->GetBufferSize(),
+    }
+    taa_pso_desc.RTVFormats[0] = .R16G16B16A16_FLOAT
+    dx_check(r.device->CreateGraphicsPipelineState(
+        &taa_pso_desc,
+        d3d12.IPipelineState_UUID,
+        (^rawptr)(&r.taa_resolve_pipeline_state),
+    ))
 
     // FXAA: same full-screen pass and back-buffer format as tone mapping.
     fxaa_ps := renderer_compile_shader("shaders/post_process.hlsl", "PSFxaa", "ps_5_1", compile_flags)
@@ -1385,6 +1436,7 @@ renderer_resize:: proc(width, height: u32){
     r.hdr_texture->Release()
     r.ldr_texture->Release()
     for target in r.ao_targets do target->Release()
+    renderer_release_taa_targets()
     for target in r.bloom_targets {
         target->Release()
     }
@@ -1429,6 +1481,7 @@ renderer_resize:: proc(width, height: u32){
     renderer_create_hdr_target()
     renderer_create_bloom_targets()
     renderer_create_ssao_targets()
+    renderer_create_taa_targets()
 }
 
 renderer_load_textures :: proc(){
@@ -1451,6 +1504,8 @@ renderer_load_textures :: proc(){
     r.shadow_srv_index = renderer_alloc_srv()
     r.hdr_srv_index = renderer_alloc_srv()
     r.ldr_srv_index = renderer_alloc_srv()
+    r.taa_srv_start = renderer_alloc_srv(2)
+    r.velocity_srv_index = renderer_alloc_srv()
     r.bloom_srv_start = renderer_alloc_srv(BLOOM_TARGET_COUNT)
     r.environment_srv_index = renderer_alloc_srv()
     r.irradiance_srv_index = renderer_alloc_srv()
@@ -1714,6 +1769,8 @@ renderer_render_frame :: proc(scene: ^Scene) {
         frame.scene_indices[:frame.scene_draw_count],
     )
 
+    // TAA resolves in HDR, so bloom and tone mapping see the stable image.
+    renderer_render_taa()
     renderer_render_bloom()
     renderer_render_post_process(scene)
 
@@ -1831,6 +1888,10 @@ renderer_destroy :: proc(){
     r.ldr_texture->Release()
     r.ldr_rtv_heap->Release()
     r.fxaa_pipeline_state->Release()
+    renderer_release_taa_targets()
+    r.taa_rtv_heap->Release()
+    r.velocity_rtv_heap->Release()
+    r.taa_resolve_pipeline_state->Release()
     r.hdr_pipeline_state->Release()
     r.post_pipeline_state->Release()
     r.selection_pipeline_state->Release()

@@ -189,7 +189,7 @@ renderer_render_post_process :: proc(scene: ^Scene) {
 
     hdr_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetGPUDescriptorHandleForHeapStart(&hdr_gpu_handle)
-    hdr_gpu_handle.ptr += u64(r.hdr_srv_index) * u64(r.srv_descriptor_size)
+    hdr_gpu_handle.ptr += u64(r.scene_color_srv_index) * u64(r.srv_descriptor_size)
     r.command_list->SetGraphicsRootDescriptorTable(1, hdr_gpu_handle)
 
     bloom_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE

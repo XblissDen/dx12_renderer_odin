@@ -161,7 +161,7 @@ debug_ui_update :: proc() {
         if ui_combo("Tone mapping", &tone_mapper, raw_data(tone_mapper_labels[:]), i32(len(tone_mapper_labels))) {
             r.post_tone_mapper = ToneMapper(tone_mapper)
         }
-        anti_aliasing_labels := [len(AntiAliasing)]cstring{"FXAA", "Off"}
+        anti_aliasing_labels := [len(AntiAliasing)]cstring{"FXAA", "Off", "TAA"}
         anti_aliasing := i32(r.post_anti_aliasing)
         if ui_combo("Anti-aliasing", &anti_aliasing, raw_data(anti_aliasing_labels[:]), i32(len(anti_aliasing_labels))) {
             r.post_anti_aliasing = AntiAliasing(anti_aliasing)
@@ -193,7 +193,7 @@ debug_ui_update :: proc() {
 
         pass_names := [GPU_PASS_COUNT]string{
             "Shadow", "Scene", "Bloom extract", "Bloom horizontal",
-            "Bloom vertical", "Post + UI", "Depth prepass", "SSAO + blur", "FXAA",
+            "Bloom vertical", "Post + UI", "Depth prepass", "SSAO + blur", "FXAA", "TAA resolve",
         }
         if ui_begin_table("GPU timings") {
             ui_table_column("GPU pass")

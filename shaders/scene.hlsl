@@ -19,6 +19,7 @@ cbuffer ObjectConstants : register(b0)
     // Upper 3x3 is the inverse model matrix; mul(normal, it) applies the
     // inverse transpose, which keeps normals correct under non-uniform scale.
     float4x4 normal_matrix;
+    float4x4 previous_model; // Last frame's model matrix, for motion vectors.
 
     float3 material_tint;
     float  uv_scale;
@@ -37,7 +38,10 @@ cbuffer ObjectConstants : register(b0)
 cbuffer FrameConstants : register(b4)
 {
     float4x4 view;
-    float4x4 projection;
+    float4x4 projection; // Includes the TAA jitter when TAA is on.
+    // Unjittered, this frame and last, for motion vectors.
+    float4x4 view_projection;
+    float4x4 previous_view_projection;
     float4x4 cascade_view_projection[SHADOW_CASCADE_COUNT];
 
     float3 view_position;
@@ -123,10 +127,31 @@ float4 ObjectToClip(float3 position, out float4 world_pos, out float4 view_pos)
     return mul(view_pos, projection);
 }
 
-float4 VSDepth(VSInput input) : SV_POSITION
+struct VelocityInput
 {
+    float4 position      : SV_POSITION;
+    float4 current_clip  : TEXCOORD0; // Unjittered.
+    float4 previous_clip : TEXCOORD1;
+};
+
+VelocityInput VSDepth(VSInput input)
+{
+    VelocityInput output;
     float4 world_pos, view_pos;
-    return ObjectToClip(input.position, world_pos, view_pos);
+    output.position = ObjectToClip(input.position, world_pos, view_pos);
+    output.current_clip = mul(world_pos, view_projection);
+    float4 previous_world = mul(float4(input.position, 1.0f), previous_model);
+    output.previous_clip = mul(previous_world, previous_view_projection);
+    return output;
+}
+
+// Screen motion since last frame, in UV units (y down). TAA subtracts it to
+// find where this pixel's surface was in the history.
+float2 PSVelocity(VelocityInput input) : SV_TARGET
+{
+    float2 current = input.current_clip.xy / input.current_clip.w;
+    float2 previous = input.previous_clip.xy / input.previous_clip.w;
+    return (current - previous) * float2(0.5f, -0.5f);
 }
 
 PSInput VSMain(VSInput input)
@@ -209,14 +234,17 @@ float CascadeVisibility(uint cascade, float3 world_pos, float3 geometric_normal,
     float4 clip = mul(float4(offset_pos, 1.0f), cascade_view_projection[cascade]);
     float3 ndc = clip.xyz / clip.w;
     float2 uv = float2(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f);
-    if (any(uv < 0.0f) || any(uv > 1.0f) || ndc.z < 0.0f || ndc.z > 1.0f)
-    {
-        return 1.0f;
-    }
 
-    float bias = (shadow_bias_constant + shadow_bias_slope * tan_angle) *
-                 cascade_texel_depth[cascade];
-    return SampleShadowTent5x5(uv, ndc.z - bias, cascade);
+    // Single exit: FXC reports early returns from inlined helpers as
+    // "potentially uninitialized" (X4000).
+    float visibility = 1.0f;
+    if (all(uv >= 0.0f) && all(uv <= 1.0f) && ndc.z >= 0.0f && ndc.z <= 1.0f)
+    {
+        float bias = (shadow_bias_constant + shadow_bias_slope * tan_angle) *
+                     cascade_texel_depth[cascade];
+        visibility = SampleShadowTent5x5(uv, ndc.z - bias, cascade);
+    }
+    return visibility;
 }
 
 static const float PI = 3.14159265f;
@@ -421,7 +449,8 @@ float4 PSMain(PSInput input) : SV_TARGET
     // Lagarde's specular occlusion: reflections fade with AO, less so at
     // grazing angles and on smooth surfaces.
     float specular_occlusion = saturate(
-        pow(n_dot_v + ambient_occlusion, exp2(-16.0f * material_roughness - 1.0f)) -
+        // The base is never negative; max() lets the compiler see that (X3571).
+        pow(max(n_dot_v + ambient_occlusion, 0.0f), exp2(-16.0f * material_roughness - 1.0f)) -
         1.0f + ambient_occlusion
     );
 
@@ -551,7 +580,12 @@ float3 ViewPositionAt(int2 pixel, float2 size)
         (pixel.x + 0.5f) / size.x * 2.0f - 1.0f,
         1.0f - (pixel.y + 0.5f) / size.y * 2.0f
     );
-    return float3(ndc.x * z / projection[0][0], ndc.y * z / projection[1][1], z);
+    // Row 2 holds the TAA jitter (zero without TAA); undo it before scaling.
+    return float3(
+        (ndc.x - projection[2][0]) * z / projection[0][0],
+        (ndc.y - projection[2][1]) * z / projection[1][1],
+        z
+    );
 }
 
 // A 4x4 ordered pattern of rotations; the 4x4 blur averages all 16 of them.

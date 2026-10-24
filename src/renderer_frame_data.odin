@@ -38,6 +38,10 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
     post.bloom_strength = r.post_strength
     post.tone_mapper = r.post_tone_mapper
     post.texel_size = {1 / f32(r.width), 1 / f32(r.height)}
+    // History from a frame without TAA (or before a resize) is stale.
+    if r.post_anti_aliasing != .TAA do r.taa_history_valid = false
+    post.taa_history_valid = u32(r.taa_history_valid)
+    post.taa_blend = TAA_BLEND
 
     camera_index := camera_find_active(scene)
     assert(camera_index >= 0)
@@ -63,7 +67,22 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
 
     view := camera_view_matrix(camera, camera_position)
     proj := camera_projection(camera, f32(r.width) / f32(r.height))
-    camera_frustum := frustum_from_matrix(view * proj)
+    view_projection := view * proj
+    camera_frustum := frustum_from_matrix(view_projection)
+
+    // TAA renders each frame from a slightly different sub-pixel position, so
+    // the history accumulates several samples per pixel. Culling and motion
+    // vectors use the unjittered matrices.
+    r.frame_counter += 1
+    rendered_proj := proj
+    if r.post_anti_aliasing == .TAA {
+        jitter := taa_jitter(r.frame_counter)
+        // Row-vector projection: clip.w = view z, so row 2 offsets NDC directly.
+        rendered_proj[2, 0] += jitter.x * 2 / f32(r.width)
+        rendered_proj[2, 1] -= jitter.y * 2 / f32(r.height)
+    }
+    previous_view_projection := r.previous_view_projection
+    if r.frame_counter == 1 do previous_view_projection = view_projection
     
     gpu_lights: [MAX_LIGHTS]GpuPointLight
     light_count := 0
@@ -125,6 +144,14 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
         }
 
         model := transform_matrix(scene.transforms[i])
+        // A slot not recorded last frame (new, reused, or just shown) has no motion.
+        previous_model := model
+        // Frames count from 1, so 0 means never recorded.
+        if r.previous_model_frame[i] != 0 && r.previous_model_frame[i] == r.frame_counter - 1 {
+            previous_model = r.previous_models[i]
+        }
+        r.previous_models[i] = model
+        r.previous_model_frame[i] = r.frame_counter
         mesh := scene.mesh_renderers[i].mesh
         bounds := bounds_to_world(g_assets.meshes[mesh].bounds, model)
         draw_bounds[data.draw_count] = bounds
@@ -153,6 +180,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
 
         r.object_cb_mapped_data[object_cb_base + data.draw_count] = ObjectConstants{
             model = alg.transpose(model),
+            previous_model = alg.transpose(previous_model),
             // transpose(inverse_transpose(M)) is inverse(M).
             normal_matrix = alg.matrix4_inverse_f32(model),
             material_tint = scene.materials[i].tint,
@@ -209,7 +237,9 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
 
     r.frame_cb_mapped_data[r.frame_slot] = FrameConstants{
         view = view,
-        projection = proj,
+        projection = rendered_proj,
+        view_projection = view_projection,
+        previous_view_projection = previous_view_projection,
         cascade_view_projection = cascade_view_projection,
         view_position = camera_position,
         light_count = u32(light_count),
@@ -260,6 +290,8 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
         }
     }
 
+    r.previous_view_projection = view_projection
+
     r.culling_stats.scene_total = data.draw_count
     r.culling_stats.scene_visible = data.scene_draw_count
     for count in data.shadow_draw_count {
@@ -267,4 +299,24 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
     }
 
     return
+}
+
+TAA_JITTER_SAMPLES :: 8
+
+// Sub-pixel offset in pixels, in [-0.5, 0.5), from the Halton (2, 3) sequence:
+// eight well-spread positions that repeat.
+taa_jitter :: proc(frame: u64) -> [2]f32 {
+    halton :: proc(index: u64, base: u64) -> f32 {
+        result: f32 = 0
+        fraction: f32 = 1
+        i := index
+        for i > 0 {
+            fraction /= f32(base)
+            result += fraction * f32(i % base)
+            i /= base
+        }
+        return result
+    }
+    index := frame % TAA_JITTER_SAMPLES + 1
+    return {halton(index, 2) - 0.5, halton(index, 3) - 0.5}
 }

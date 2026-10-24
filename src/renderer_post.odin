@@ -246,7 +246,7 @@ renderer_render_bloom :: proc() {
     renderer_begin_gpu_pass(.Bloom_Extract)
     // HDR -> bright areas in bloom target 0.
     renderer_bloom_pass(
-        0, int(r.hdr_srv_index), r.bloom_pipeline_states[0],
+        0, int(r.scene_color_srv_index), r.bloom_pipeline_states[0],
     )
     renderer_end_gpu_pass(.Bloom_Extract)
 

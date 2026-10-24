@@ -94,9 +94,22 @@ renderer_render_depth_prepass :: proc(draw_meshes: []MeshHandle, draw_indices: [
     r := &g_renderer
 
     renderer_begin_gpu_pass(.Depth_Prepass)
+    // Motion vectors for TAA come out of the same draw; zero where nothing draws.
+    velocity_barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
+    velocity_barrier.Transition = {
+        pResource = r.velocity_texture,
+        StateBefore = {.PIXEL_SHADER_RESOURCE},
+        StateAfter = {.RENDER_TARGET},
+        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+    }
+    r.command_list->ResourceBarrier(1, &velocity_barrier)
+
     dsv := renderer_depth_dsv(read_only = false)
-    r.command_list->OMSetRenderTargets(0, nil, false, &dsv)
+    velocity_rtv := renderer_velocity_rtv()
+    r.command_list->OMSetRenderTargets(1, &velocity_rtv, false, &dsv)
     r.command_list->ClearDepthStencilView(dsv, {.DEPTH}, 1.0, 0, 0, nil)
+    zero := [4]f32{}
+    r.command_list->ClearRenderTargetView(velocity_rtv, &zero, 0, nil)
 
     r.command_list->SetGraphicsRootSignature(r.root_signature)
     r.command_list->SetPipelineState(r.depth_prepass_pipeline_state)
@@ -128,6 +141,10 @@ renderer_render_depth_prepass :: proc(draw_meshes: []MeshHandle, draw_indices: [
         Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
     }
     r.command_list->ResourceBarrier(1, &barrier)
+
+    velocity_barrier.Transition.StateBefore = {.RENDER_TARGET}
+    velocity_barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
+    r.command_list->ResourceBarrier(1, &velocity_barrier)
     renderer_end_gpu_pass(.Depth_Prepass)
 }
 
