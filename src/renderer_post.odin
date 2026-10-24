@@ -182,16 +182,9 @@ renderer_bloom_pass :: proc(
 
     r.command_list->OMSetRenderTargets(1, &rtv, false, nil)
     r.command_list->SetGraphicsRootSignature(r.root_signature)
-    r.command_list->SetGraphicsRootConstantBufferView(
-        3,
-        renderer_post_cb_address(),
-    )
+    renderer_bind_cbv(.Post_Constants, renderer_post_cb_address())
     r.command_list->SetPipelineState(pso)
-
-    source: d3d12.GPU_DESCRIPTOR_HANDLE
-    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&source)
-    source.ptr += u64(source_srv_index) * u64(r.srv_descriptor_size)
-    r.command_list->SetGraphicsRootDescriptorTable(1, source)
+    renderer_bind_srv(.Texture_T0, u32(source_srv_index))
 
     r.command_list->RSSetViewports(1, &r.viewport)
     r.command_list->RSSetScissorRects(1, &r.scissor_rect)

@@ -15,9 +15,10 @@ import "core:image/png"
 FRAME_COUNT :: 2
 
 SHADOW_MAP_SIZE :: 2048
-SRV_HEAP_CAPACITY :: 4096
+SRV_HEAP_CAPACITY :: 16384 // Includes FRAME_COUNT * MAX_ENTITIES material tables.
 
 BLOOM_TARGET_COUNT :: 2
+BLOOM_PASS_COUNT :: 3 // Extract, horizontal blur, vertical blur.
 
 IRRADIANCE_WIDTH :: 64
 IRRADIANCE_HEIGHT :: 32
@@ -76,13 +77,30 @@ renderer_alloc_srv :: proc(count: u32 = 1) -> u32 {
     return result
 }
 
-renderer_texture_srv :: proc(texture: TextureHandle) -> d3d12.GPU_DESCRIPTOR_HANDLE {
+// Copies a draw's material textures (albedo, normal, roughness, metallic)
+// into its slot of this frame's material ring and returns the table to bind.
+// The slot is free: begin_frame waited for the frame that last used it.
+renderer_material_table :: proc(
+    draw_index: int,
+    textures: [MATERIAL_TEXTURE_COUNT]TextureHandle,
+) -> d3d12.GPU_DESCRIPTOR_HANDLE {
     r := &g_renderer
-    assert(assets_texture_valid(texture))
-    handle: d3d12.GPU_DESCRIPTOR_HANDLE
-    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&handle)
-    handle.ptr += u64(r.textures[texture].srv_index) * u64(r.srv_descriptor_size)
-    return handle
+    assert(draw_index >= 0 && draw_index < MAX_ENTITIES)
+    first := r.material_srv_start +
+             u32((int(r.frame_slot) * MAX_ENTITIES + draw_index) * MATERIAL_TEXTURE_COUNT)
+
+    destination, source: d3d12.CPU_DESCRIPTOR_HANDLE
+    r.srv_heap->GetCPUDescriptorHandleForHeapStart(&destination)
+    r.srv_staging_heap->GetCPUDescriptorHandleForHeapStart(&source)
+    for texture, i in textures {
+        assert(assets_texture_valid(texture))
+        to := destination
+        to.ptr += uint(first + u32(i)) * uint(r.srv_descriptor_size)
+        from := source
+        from.ptr += uint(r.textures[texture].srv_index) * uint(r.srv_descriptor_size)
+        r.device->CopyDescriptorsSimple(1, to, from, .CBV_SRV_UAV)
+    }
+    return renderer_srv_gpu(first)
 }
 
 // Written once per frame and shared by every draw (b4).
@@ -242,6 +260,9 @@ Renderer :: struct {
 
     textures: []GpuTexture,
     srv_heap: ^d3d12.IDescriptorHeap,
+    srv_staging_heap: ^d3d12.IDescriptorHeap,
+    // Ring of per-draw material tables, one region per frame in flight.
+    material_srv_start: u32,
     srv_descriptor_size: u32,
     srv_next: u32,
     shadow_srv_index, hdr_srv_index, bloom_srv_start: u32,
@@ -263,7 +284,7 @@ Renderer :: struct {
     bloom_rtv_heap: ^d3d12.IDescriptorHeap,
 
     // Extract, horizontal blur, vertical blur.
-    bloom_pipeline_states: [3]^d3d12.IPipelineState,
+    bloom_pipeline_states: [BLOOM_PASS_COUNT]^d3d12.IPipelineState,
 
     post_constant_buffer: ^d3d12.IResource,
     post_cb_mapped_data: [^]PostConstants,
@@ -404,7 +425,14 @@ dx_check:: proc(hr: win32.HRESULT, loc := #caller_location){
     }
 }
 
-renderer_compile_shader :: proc(path: string, entry, target: cstring, flags: u32) -> ^d3d12.IBlob {
+// Every shader goes through here: debug builds keep symbols and skip
+// optimization so tools like PIX can step through them.
+renderer_compile_shader :: proc(path: string, entry, target: cstring) -> ^d3d12.IBlob {
+    flags: u32 = 0
+    when ODIN_DEBUG {
+        flags = u32(d3dc.D3DCOMPILE_FLAG.DEBUG | d3dc.D3DCOMPILE_FLAG.SKIP_OPTIMIZATION)
+    }
+
     blob, errors: ^d3d12.IBlob
     hr := d3dc.CompileFromFile(
         win32.utf8_to_wstring(path), nil, nil,
@@ -562,181 +590,99 @@ renderer_init :: proc() {
     renderer_create_timestamp_resources()
 }
 
-renderer_load_assets :: proc(){
+// The single root signature every pass uses. Passes bind by slot name; the
+// layout table below is the only place registers are assigned.
+Root_Slot :: enum u32 {
+    Object_Constants,    // b0: per-draw transforms and material values
+    Texture_T0,          // t0: main input of full-screen passes (sky panorama, scene color, ...)
+    Texture_T1,          // t1: second input (shadow cascades, bloom, TAA history)
+    Post_Constants,      // b1
+    Sky_Constants,       // b2
+    Environment,         // t2: HDR panorama while baking the IBL maps
+    Irradiance,          // t3
+    Prefilter_Constants, // b3
+    Prefiltered,         // t4
+    Material,            // t10-t13: albedo, normal, roughness, metallic
+    Frame_Constants,     // b4: camera, lights, shadows, AO, TAA matrices
+    Shadow_Cascade,      // b5: root constant, the cascade being drawn
+    Texture_T8,          // t8: ambient occlusion, or TAA motion vectors
+    Depth,               // t9: scene depth
+}
+
+Root_Param_Kind :: enum {CBV, Table, Constants}
+
+Root_Param :: struct {
+    kind: Root_Param_Kind,
+    register: u32,  // b# for CBVs and constants, first t# for tables
+    count: u32,     // SRVs in a table, or 32-bit values for constants
+    visibility: d3d12.SHADER_VISIBILITY,
+}
+
+MATERIAL_TEXTURE_COUNT :: 4
+
+ROOT_LAYOUT := [Root_Slot]Root_Param{
+    .Object_Constants    = {.CBV, 0, 0, .ALL},
+    .Texture_T0          = {.Table, 0, 1, .PIXEL},
+    .Texture_T1          = {.Table, 1, 1, .PIXEL},
+    .Post_Constants      = {.CBV, 1, 0, .PIXEL},
+    .Sky_Constants       = {.CBV, 2, 0, .PIXEL},
+    .Environment         = {.Table, 2, 1, .PIXEL},
+    .Irradiance          = {.Table, 3, 1, .PIXEL},
+    .Prefilter_Constants = {.CBV, 3, 0, .PIXEL},
+    .Prefiltered         = {.Table, 4, 1, .PIXEL},
+    .Material            = {.Table, 10, MATERIAL_TEXTURE_COUNT, .PIXEL},
+    .Frame_Constants     = {.CBV, 4, 0, .ALL},
+    .Shadow_Cascade      = {.Constants, 5, 1, .VERTEX},
+    .Texture_T8          = {.Table, 8, 1, .PIXEL},
+    .Depth               = {.Table, 9, 1, .PIXEL},
+}
+
+renderer_bind_cbv :: proc(slot: Root_Slot, address: u64) {
+    assert(ROOT_LAYOUT[slot].kind == .CBV)
+    g_renderer.command_list->SetGraphicsRootConstantBufferView(u32(slot), address)
+}
+
+// Binds the table at `slot` starting at descriptor `srv_index` of the SRV heap.
+renderer_bind_srv :: proc(slot: Root_Slot, srv_index: u32) {
+    assert(ROOT_LAYOUT[slot].kind == .Table)
+    g_renderer.command_list->SetGraphicsRootDescriptorTable(u32(slot), renderer_srv_gpu(srv_index))
+}
+
+renderer_create_root_signature :: proc() {
     r := &g_renderer
 
-    root_param := d3d12.ROOT_PARAMETER{}
-    root_param.ParameterType = .CBV
-    root_param.ShaderVisibility = .ALL
-    root_param.Descriptor = { ShaderRegister = 0, RegisterSpace = 0}
-
-    // ROOT SIGNATURE
-    cbv_param := d3d12.ROOT_PARAMETER{}
-    cbv_param.ParameterType = .CBV
-    cbv_param.ShaderVisibility = .ALL
-    cbv_param.Descriptor = {ShaderRegister = 0}
-
-    srv_range := d3d12.DESCRIPTOR_RANGE{
-        RangeType = .SRV,
-        NumDescriptors = 1,
-        BaseShaderRegister = 0,
-        OffsetInDescriptorsFromTableStart = 0,
+    params: [Root_Slot]d3d12.ROOT_PARAMETER
+    ranges: [Root_Slot]d3d12.DESCRIPTOR_RANGE
+    for layout, slot in ROOT_LAYOUT {
+        param := &params[slot]
+        param.ShaderVisibility = layout.visibility
+        switch layout.kind {
+            case .CBV:
+                param.ParameterType = .CBV
+                param.Descriptor = {ShaderRegister = layout.register}
+            case .Constants:
+                param.ParameterType = ._32BIT_CONSTANTS
+                param.Constants = {ShaderRegister = layout.register, Num32BitValues = layout.count}
+            case .Table:
+                ranges[slot] = {
+                    RangeType = .SRV,
+                    NumDescriptors = layout.count,
+                    BaseShaderRegister = layout.register,
+                }
+                param.ParameterType = .DESCRIPTOR_TABLE
+                param.DescriptorTable = {NumDescriptorRanges = 1, pDescriptorRanges = &ranges[slot]}
+        }
     }
 
-    srv_param := d3d12.ROOT_PARAMETER{}
-    srv_param.ParameterType = .DESCRIPTOR_TABLE
-    srv_param.ShaderVisibility = .PIXEL
-    srv_param.DescriptorTable = { NumDescriptorRanges = 1, pDescriptorRanges = &srv_range}
-
-    shadow_range := d3d12.DESCRIPTOR_RANGE{
-        RangeType = .SRV,
-        NumDescriptors = 1,
-        BaseShaderRegister = 1,
-        OffsetInDescriptorsFromTableStart = 0,
-    }
-
-    shadow_param := d3d12.ROOT_PARAMETER{}
-    shadow_param.ParameterType = .DESCRIPTOR_TABLE
-    shadow_param.ShaderVisibility = .PIXEL
-    shadow_param.DescriptorTable = {
-        NumDescriptorRanges = 1,
-        pDescriptorRanges = &shadow_range,
-    }
-
-    post_cbv_param := d3d12.ROOT_PARAMETER{}
-    post_cbv_param.ParameterType = .CBV
-    post_cbv_param.ShaderVisibility = .PIXEL
-    post_cbv_param.Descriptor = {ShaderRegister = 1}
-
-    sky_cbv_param := d3d12.ROOT_PARAMETER{}
-    sky_cbv_param.ParameterType = .CBV
-    sky_cbv_param.ShaderVisibility = .PIXEL
-    sky_cbv_param.Descriptor = {ShaderRegister = 2}
-
-    environment_range := d3d12.DESCRIPTOR_RANGE{
-        RangeType = .SRV,
-        NumDescriptors = 1,
-        BaseShaderRegister = 2,
-        OffsetInDescriptorsFromTableStart = 0,
-    }
-    environment_param := d3d12.ROOT_PARAMETER{}
-    environment_param.ParameterType = .DESCRIPTOR_TABLE
-    environment_param.ShaderVisibility = .PIXEL
-    environment_param.DescriptorTable = {
-        NumDescriptorRanges = 1,
-        pDescriptorRanges = &environment_range,
-    }
-
-    irradiance_range := d3d12.DESCRIPTOR_RANGE{
-        RangeType = .SRV,
-        NumDescriptors = 1,
-        BaseShaderRegister = 3,
-        OffsetInDescriptorsFromTableStart = 0,
-    }
-    irradiance_param := d3d12.ROOT_PARAMETER{}
-    irradiance_param.ParameterType = .DESCRIPTOR_TABLE
-    irradiance_param.ShaderVisibility = .PIXEL
-    irradiance_param.DescriptorTable = {
-        NumDescriptorRanges = 1,
-        pDescriptorRanges = &irradiance_range,
-    }
-
-    prefilter_range := d3d12.DESCRIPTOR_RANGE{
-        RangeType = .SRV,
-        NumDescriptors = 1,
-        BaseShaderRegister = 4,
-        OffsetInDescriptorsFromTableStart = 0,
-    }
-    prefilter_param := d3d12.ROOT_PARAMETER{}
-    prefilter_param.ParameterType = .DESCRIPTOR_TABLE
-    prefilter_param.ShaderVisibility = .PIXEL
-    prefilter_param.DescriptorTable = {
-        NumDescriptorRanges = 1,
-        pDescriptorRanges = &prefilter_range,
-    }
-
-    normal_range := d3d12.DESCRIPTOR_RANGE{
-        RangeType = .SRV,
-        NumDescriptors = 1,
-        BaseShaderRegister = 5,
-        OffsetInDescriptorsFromTableStart = 0,
-    }
-
-    normal_param := d3d12.ROOT_PARAMETER{}
-    normal_param.ParameterType = .DESCRIPTOR_TABLE
-    normal_param.ShaderVisibility = .PIXEL
-    normal_param.DescriptorTable = {
-        NumDescriptorRanges = 1,
-        pDescriptorRanges = &normal_range,
-    }
-
-    roughness_range := d3d12.DESCRIPTOR_RANGE{
-        RangeType = .SRV,
-        NumDescriptors = 1,
-        BaseShaderRegister = 6,
-        OffsetInDescriptorsFromTableStart = 0,
-    }
-
-    roughness_param := d3d12.ROOT_PARAMETER{}
-    roughness_param.ParameterType = .DESCRIPTOR_TABLE
-    roughness_param.ShaderVisibility = .PIXEL
-    roughness_param.DescriptorTable = {
-        NumDescriptorRanges = 1,
-        pDescriptorRanges = &roughness_range,
-    }
-
-    metallic_range := d3d12.DESCRIPTOR_RANGE{
-        RangeType = .SRV,
-        NumDescriptors = 1,
-        BaseShaderRegister = 7,
-        OffsetInDescriptorsFromTableStart = 0,
-    }
-
-    metallic_param := d3d12.ROOT_PARAMETER{
-        ParameterType = .DESCRIPTOR_TABLE,
-        ShaderVisibility = .PIXEL,
-    }
-    metallic_param.DescriptorTable = {
-        NumDescriptorRanges = 1,
-        pDescriptorRanges = &metallic_range,
-    }    
-
-    prefilter_cbv_param := d3d12.ROOT_PARAMETER{}
-    prefilter_cbv_param.ParameterType = .CBV
-    prefilter_cbv_param.ShaderVisibility = .PIXEL
-    prefilter_cbv_param.Descriptor = {ShaderRegister = 3}
-
-    frame_cbv_param := d3d12.ROOT_PARAMETER{}
-    frame_cbv_param.ParameterType = .CBV
-    frame_cbv_param.ShaderVisibility = .ALL
-    frame_cbv_param.Descriptor = {ShaderRegister = 4}
-
-    // The shadow pass draws one cascade at a time.
-    cascade_param := d3d12.ROOT_PARAMETER{
-        ParameterType = ._32BIT_CONSTANTS,
-        ShaderVisibility = .VERTEX,
-    }
-    cascade_param.Constants = {ShaderRegister = 5, Num32BitValues = 1}
-
-    ao_range := d3d12.DESCRIPTOR_RANGE{RangeType = .SRV, NumDescriptors = 1, BaseShaderRegister = 8}
-    ao_param := d3d12.ROOT_PARAMETER{ParameterType = .DESCRIPTOR_TABLE, ShaderVisibility = .PIXEL}
-    ao_param.DescriptorTable = {NumDescriptorRanges = 1, pDescriptorRanges = &ao_range}
-
-    depth_range := d3d12.DESCRIPTOR_RANGE{RangeType = .SRV, NumDescriptors = 1, BaseShaderRegister = 9}
-    depth_param := d3d12.ROOT_PARAMETER{ParameterType = .DESCRIPTOR_TABLE, ShaderVisibility = .PIXEL}
-    depth_param.DescriptorTable = {NumDescriptorRanges = 1, pDescriptorRanges = &depth_range}
-
-    static_sampler := d3d12.STATIC_SAMPLER_DESC{
+    linear_wrap := d3d12.STATIC_SAMPLER_DESC{
         Filter = .MIN_MAG_MIP_LINEAR,
         AddressU = .WRAP,
         AddressV = .WRAP,
         AddressW = .WRAP,
-        ShaderRegister = 0,
         ShaderVisibility = .PIXEL,
         MaxLOD = 16.0,
     }
-
-    shadow_sampler := d3d12.STATIC_SAMPLER_DESC{
+    shadow_comparison := d3d12.STATIC_SAMPLER_DESC{
         Filter = .COMPARISON_MIN_MAG_LINEAR_MIP_POINT,
         AddressU = .BORDER,
         AddressV = .BORDER,
@@ -746,67 +692,38 @@ renderer_load_assets :: proc(){
         ShaderRegister = 1,
         ShaderVisibility = .PIXEL,
     }
+    material := linear_wrap
+    material.Filter = .ANISOTROPIC
+    material.MaxAnisotropy = 16
+    material.ComparisonFunc = .ALWAYS
+    material.ShaderRegister = 2
+    // Panoramas wrap around horizontally but not over the poles.
+    environment := linear_wrap
+    environment.AddressV = .CLAMP
+    environment.ShaderRegister = 3
+    // Screen-space lookups (FXAA, TAA) must not wrap to the opposite edge.
+    clamp := linear_wrap
+    clamp.AddressU = .CLAMP
+    clamp.AddressV = .CLAMP
+    clamp.AddressW = .CLAMP
+    clamp.ShaderRegister = 4
+    samplers := [?]d3d12.STATIC_SAMPLER_DESC{linear_wrap, shadow_comparison, material, environment, clamp}
 
-    material_sampler := d3d12.STATIC_SAMPLER_DESC{
-        Filter = .ANISOTROPIC,
-        AddressU = .WRAP,
-        AddressV = .WRAP,
-        AddressW = .WRAP,
-        MaxAnisotropy = 16,
-        ComparisonFunc = .ALWAYS,
-        MinLOD = 0,
-        MaxLOD = 16.0,
-        ShaderRegister = 2,
-        ShaderVisibility = .PIXEL,
-    }
-
-    environment_sampler := static_sampler
-    environment_sampler.ShaderRegister = 3
-    environment_sampler.AddressV = .CLAMP
-
-    // Screen-space lookups (FXAA) must not wrap to the opposite edge.
-    clamp_sampler := static_sampler
-    clamp_sampler.ShaderRegister = 4
-    clamp_sampler.AddressU = .CLAMP
-    clamp_sampler.AddressV = .CLAMP
-    clamp_sampler.AddressW = .CLAMP
-
-    params := []d3d12.ROOT_PARAMETER{
-        cbv_param,
-        srv_param,
-        shadow_param,
-        post_cbv_param,
-        sky_cbv_param,
-        environment_param, // Root slot 5 -> t2
-        irradiance_param,  // Root slot 6 -> t3
-        prefilter_cbv_param, // Root slot 7 -> b3
-        prefilter_param,     // Root slot 8 -> t4
-        normal_param,    // Root slot 9 -> t5
-        roughness_param, // Root slot 10 -> t6
-        metallic_param,  // Root slot 11 -> t7
-        frame_cbv_param, // Root slot 12 -> b4
-        cascade_param,   // Root slot 13 -> b5 (shadow cascade index)
-        ao_param,        // Root slot 14 -> t8 (ambient occlusion)
-        depth_param,     // Root slot 15 -> t9 (scene depth)
-    }
-    samplers := []d3d12.STATIC_SAMPLER_DESC{
-        static_sampler,
-        shadow_sampler,
-        material_sampler,
-        environment_sampler,
-        clamp_sampler,
-    }
     rs_desc := d3d12.ROOT_SIGNATURE_DESC{
-        NumParameters = u32(len(params)),
-        pParameters = raw_data(params),
-        NumStaticSamplers = u32(len(samplers)),
-        pStaticSamplers = raw_data(samplers),
-        Flags = { .ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT },
+        NumParameters = len(params),
+        pParameters = &params[Root_Slot(0)],
+        NumStaticSamplers = len(samplers),
+        pStaticSamplers = &samplers[0],
+        Flags = {.ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT},
     }
 
-    signature: ^d3d12.IBlob
-    errors: ^d3d12.IBlob
-    dx_check(d3d12.SerializeRootSignature(&rs_desc, ._1, &signature, &errors))
+    signature, errors: ^d3d12.IBlob
+    hr := d3d12.SerializeRootSignature(&rs_desc, ._1, &signature, &errors)
+    if errors != nil {
+        fmt.println("Root signature:", cstring(errors->GetBufferPointer()))
+        errors->Release()
+    }
+    dx_check(hr)
     defer signature->Release()
 
     dx_check(r.device->CreateRootSignature(
@@ -816,440 +733,140 @@ renderer_load_assets :: proc(){
         d3d12.IRootSignature_UUID,
         (^rawptr)(&r.root_signature),
     ))
+}
 
-    // SHADERS
-    compile_flags: u32 = 0
-    when ODIN_DEBUG{
-        compile_flags = u32(d3dc.D3DCOMPILE_FLAG.DEBUG | d3dc.D3DCOMPILE_FLAG.SKIP_OPTIMIZATION)
-    }
+shader_bytecode :: proc(blob: ^d3d12.IBlob) -> d3d12.SHADER_BYTECODE {
+    if blob == nil do return {}
+    return {pShaderBytecode = blob->GetBufferPointer(), BytecodeLength = blob->GetBufferSize()}
+}
 
-    vs, ps: ^d3d12.IBlob
-    vs_errors, ps_errors: ^d3d12.IBlob
+renderer_create_pso :: proc(desc: ^d3d12.GRAPHICS_PIPELINE_STATE_DESC, pso: ^^d3d12.IPipelineState) {
+    dx_check(g_renderer.device->CreateGraphicsPipelineState(desc, d3d12.IPipelineState_UUID, (^rawptr)(pso)))
+}
 
-    shader_path := win32.utf8_to_wstring("shaders/scene.hlsl")
-
-    hr := d3dc.CompileFromFile(
-        shader_path, nil, nil,
-        "VSMain", "vs_5_1",
-        compile_flags, 0,
-        &vs, &vs_errors,
-    )
-    if vs_errors != nil{
-        fmt.println("VS errors:", cstring(vs_errors->GetBufferPointer()))
-        vs_errors->Release()
-    }
-    dx_check(hr)
-    defer vs->Release()
-
-    hr = d3dc.CompileFromFile(
-        shader_path, nil, nil,
-        "PSMain", "ps_5_1",
-        compile_flags, 0,
-        &ps, &ps_errors,
-    )
-    if ps_errors != nil{
-        fmt.println("PS errors:", cstring(ps_errors->GetBufferPointer()))
-        ps_errors->Release()
-    }
-    dx_check(hr)
+// A full-screen pass: `base` (no depth, no input layout) with this pixel
+// shader, writing one target of `format`.
+renderer_create_fullscreen_pso :: proc(
+    base: d3d12.GRAPHICS_PIPELINE_STATE_DESC,
+    path: string,
+    entry: cstring,
+    format: dxgi.FORMAT,
+    pso: ^^d3d12.IPipelineState,
+) {
+    ps := renderer_compile_shader(path, entry, "ps_5_1")
     defer ps->Release()
+    desc := base
+    desc.PS = shader_bytecode(ps)
+    desc.RTVFormats[0] = format
+    renderer_create_pso(&desc, pso)
+}
 
-    // SHADOW 
-    shadow_vs, shadow_errors: ^d3d12.IBlob
+renderer_create_pipelines :: proc() {
+    r := &g_renderer
 
-    hr = d3dc.CompileFromFile(
-        shader_path, nil, nil,
-        "VSShadow", "vs_5_1",
-        compile_flags, 0,
-        &shadow_vs, &shadow_errors,
-    )
-    if shadow_errors != nil {
-        fmt.println("Shadow VS errors:", cstring(shadow_errors->GetBufferPointer()))
-        shadow_errors->Release()
-    }
-    dx_check(hr)
+    scene_vs := renderer_compile_shader("shaders/scene.hlsl", "VSMain", "vs_5_1")
+    defer scene_vs->Release()
+    scene_ps := renderer_compile_shader("shaders/scene.hlsl", "PSMain", "ps_5_1")
+    defer scene_ps->Release()
+    shadow_vs := renderer_compile_shader("shaders/scene.hlsl", "VSShadow", "vs_5_1")
     defer shadow_vs->Release()
+    depth_vs := renderer_compile_shader("shaders/scene.hlsl", "VSDepth", "vs_5_1")
+    defer depth_vs->Release()
+    velocity_ps := renderer_compile_shader("shaders/scene.hlsl", "PSVelocity", "ps_5_1")
+    defer velocity_ps->Release()
+    fullscreen_vs := renderer_compile_shader("shaders/post_process.hlsl", "VSMain", "vs_5_1")
+    defer fullscreen_vs->Release()
 
-    // POST PROCESS
-    post_shader_path := win32.utf8_to_wstring("shaders/post_process.hlsl")
-
-    post_vs, post_ps: ^d3d12.IBlob
-    post_vs_errors, post_ps_errors: ^d3d12.IBlob
-
-    hr = d3dc.CompileFromFile(
-        post_shader_path, nil, nil,
-        "VSMain", "vs_5_1",
-        compile_flags, 0,
-        &post_vs, &post_vs_errors,
-    )
-    if post_vs_errors != nil {
-        fmt.println("Post VS compiler messages:",
-            cstring(post_vs_errors->GetBufferPointer()))
-        post_vs_errors->Release()
-    }
-    dx_check(hr)
-    defer post_vs->Release()
-
-    hr = d3dc.CompileFromFile(
-        post_shader_path, nil, nil,
-        "PSMain", "ps_5_1",
-        compile_flags, 0,
-        &post_ps, &post_ps_errors,
-    )
-    if post_ps_errors != nil {
-        fmt.println("Post PS compiler messages:",
-            cstring(post_ps_errors->GetBufferPointer()))
-        post_ps_errors->Release()
-    }
-    dx_check(hr)
-    defer post_ps->Release()
-
-    sky_shader_path := win32.utf8_to_wstring("shaders/sky.hlsl")
-
-    sky_ps, sky_errors: ^d3d12.IBlob
-    hr = d3dc.CompileFromFile(
-        sky_shader_path, nil, nil,
-        "PSMain", "ps_5_1",
-        compile_flags, 0,
-        &sky_ps, &sky_errors,
-    )
-    if sky_errors != nil {
-        fmt.println("Sky PS compiler messages:",
-            cstring(sky_errors->GetBufferPointer()))
-        sky_errors->Release()
-    }
-    dx_check(hr)
-    defer sky_ps->Release()
-
-    irradiance_path := win32.utf8_to_wstring("shaders/irradiance.hlsl")
-    irradiance_ps, irradiance_errors: ^d3d12.IBlob
-
-    hr = d3dc.CompileFromFile(
-        irradiance_path, nil, nil,
-        "PSMain", "ps_5_1",
-        compile_flags, 0,
-        &irradiance_ps, &irradiance_errors,
-    )
-    if irradiance_errors != nil {
-        fmt.println("Irradiance PS compiler messages:",
-            cstring(irradiance_errors->GetBufferPointer()))
-        irradiance_errors->Release()
-    }
-    dx_check(hr)
-    defer irradiance_ps->Release()
-
-    prefilter_path := win32.utf8_to_wstring("shaders/environment_prefilter.hlsl")
-    prefilter_ps, prefilter_errors: ^d3d12.IBlob
-
-    hr = d3dc.CompileFromFile(
-        prefilter_path, nil, nil,
-        "PSMain", "ps_5_1",
-        compile_flags, 0,
-        &prefilter_ps, &prefilter_errors,
-    )
-    if prefilter_errors != nil {
-        fmt.println("Prefilter PS compiler messages:",
-            cstring(prefilter_errors->GetBufferPointer()))
-        prefilter_errors->Release()
-    }
-    dx_check(hr)
-    defer prefilter_ps->Release()
-
-    // BLOOM
-    bloom_entries := [3]cstring{
-        "PSExtract",
-        "PSBlurHorizontal",
-        "PSBlurVertical",
-    }
-    bloom_ps: [3]^d3d12.IBlob
-
-    for i in 0..<len(bloom_entries) {
-        bloom_errors: ^d3d12.IBlob
-
-        hr = d3dc.CompileFromFile(
-            post_shader_path, nil, nil,
-            bloom_entries[i], "ps_5_1",
-            compile_flags, 0,
-            &bloom_ps[i], &bloom_errors,
-        )
-        if bloom_errors != nil {
-            fmt.println("Bloom shader compiler messages:",
-                cstring(bloom_errors->GetBufferPointer()))
-            bloom_errors->Release()
-        }
-        dx_check(hr)
+    // Matches Vertex.
+    input_layout := [?]d3d12.INPUT_ELEMENT_DESC{
+        {SemanticName = "POSITION", Format = .R32G32B32_FLOAT, AlignedByteOffset = 0, InputSlotClass = .PER_VERTEX_DATA},
+        {SemanticName = "NORMAL", Format = .R32G32B32_FLOAT, AlignedByteOffset = 12, InputSlotClass = .PER_VERTEX_DATA},
+        {SemanticName = "TEXCOORD", Format = .R32G32_FLOAT, AlignedByteOffset = 24, InputSlotClass = .PER_VERTEX_DATA},
+        {SemanticName = "TANGENT", Format = .R32G32B32A32_FLOAT, AlignedByteOffset = 32, InputSlotClass = .PER_VERTEX_DATA},
     }
 
-    defer {
-        for shader in bloom_ps {
-            shader->Release()
-        }
-    }
-
-    // INPUT LAYOUT
-    input_layout := []d3d12.INPUT_ELEMENT_DESC {
-        {
-            SemanticName         = "POSITION",
-            SemanticIndex        = 0,
-            Format               = .R32G32B32_FLOAT,
-            InputSlot            = 0,
-            AlignedByteOffset    = 0,
-            InputSlotClass       = .PER_VERTEX_DATA,
-            InstanceDataStepRate = 0,
-        },
-        {
-            SemanticName      = "NORMAL",
-            Format            = .R32G32B32_FLOAT,
-            AlignedByteOffset = 12, 
-            InputSlotClass    = .PER_VERTEX_DATA,
-        },
-        {
-            SemanticName         = "TEXCOORD",
-            SemanticIndex        = 0,
-            Format               = .R32G32_FLOAT,
-            InputSlot            = 0,
-            AlignedByteOffset    = 24,
-            InputSlotClass       = .PER_VERTEX_DATA,
-            InstanceDataStepRate = 0,
-        },
-        {
-            SemanticName = "TANGENT",
-            SemanticIndex = 0,
-            Format = .R32G32B32A32_FLOAT,
-            InputSlot = 0,
-            AlignedByteOffset = 32,
-            InputSlotClass = .PER_VERTEX_DATA,
-            InstanceDataStepRate = 0,
-        },
-    }
-
-    // PSO
-    pso_desc := d3d12.GRAPHICS_PIPELINE_STATE_DESC{
+    // Base state for mesh drawing: back-face culling, depth test and write,
+    // one opaque color target.
+    mesh_desc := d3d12.GRAPHICS_PIPELINE_STATE_DESC{
         pRootSignature = r.root_signature,
-        VS = { pShaderBytecode= vs->GetBufferPointer(), BytecodeLength = vs->GetBufferSize() },
-        PS = { pShaderBytecode= ps->GetBufferPointer(), BytecodeLength = ps->GetBufferSize() },
-        InputLayout = {
-            pInputElementDescs = raw_data(input_layout),
-            NumElements = u32(len(input_layout)),
-        },
-        RasterizerState = {
-            FillMode              = .SOLID,
-            CullMode              = .BACK,
-            FrontCounterClockwise = false,
-            DepthBias             = 0,
-            DepthBiasClamp        = 0,
-            SlopeScaledDepthBias  = 0,
-            DepthClipEnable       = true,
-            MultisampleEnable     = false,
-            AntialiasedLineEnable = false,
-            ForcedSampleCount     = 0,
-            ConservativeRaster    = .OFF,
-        },
-        BlendState = {
-            RenderTarget = { 0 = {
-            BlendEnable           = false,
-            LogicOpEnable         = false,
-            SrcBlend              = .ONE,
-            DestBlend             = .ZERO,
-            BlendOp               = .ADD,
-            SrcBlendAlpha         = .ONE,
-            DestBlendAlpha        = .ZERO,
-            BlendOpAlpha          = .ADD,
-            LogicOp               = .NOOP,
+        VS = shader_bytecode(scene_vs),
+        PS = shader_bytecode(scene_ps),
+        InputLayout = {pInputElementDescs = &input_layout[0], NumElements = len(input_layout)},
+        RasterizerState = {FillMode = .SOLID, CullMode = .BACK, DepthClipEnable = true},
+        BlendState = {RenderTarget = {0 = {
+            SrcBlend = .ONE,
+            DestBlend = .ZERO,
+            BlendOp = .ADD,
+            SrcBlendAlpha = .ONE,
+            DestBlendAlpha = .ZERO,
+            BlendOpAlpha = .ADD,
+            LogicOp = .NOOP,
             RenderTargetWriteMask = u8(d3d12.COLOR_WRITE_ENABLE_ALL),
-        }},
-        },
-        DepthStencilState = {
-            DepthEnable = true,
-            DepthWriteMask = .ALL,
-            DepthFunc = .LESS,
-            StencilEnable = false,
-        },
+        }}},
+        DepthStencilState = {DepthEnable = true, DepthWriteMask = .ALL, DepthFunc = .LESS},
         DSVFormat = .D32_FLOAT,
         SampleMask = max(u32),
         PrimitiveTopologyType = .TRIANGLE,
         NumRenderTargets = 1,
-        SampleDesc = { Count = 1 },
+        SampleDesc = {Count = 1},
     }
-    pso_desc.RTVFormats[0] = .R8G8B8A8_UNORM
+    mesh_desc.RTVFormats[0] = .R16G16B16A16_FLOAT
 
-    shadow_pso_desc := pso_desc
-    shadow_pso_desc.VS = {
-        pShaderBytecode = shadow_vs->GetBufferPointer(),
-        BytecodeLength = shadow_vs->GetBufferSize(),
-    }
-    shadow_pso_desc.PS = {}
-    shadow_pso_desc.NumRenderTargets = 0
-    shadow_pso_desc.RTVFormats[0] = .UNKNOWN
-    // No rasterizer bias: scene.hlsl applies the adjustable receiver bias.
-
-    dx_check(r.device->CreateGraphicsPipelineState(
-        &shadow_pso_desc,
-        d3d12.IPipelineState_UUID,
-        (^rawptr)(&r.shadow_pipeline_state),
-    ))
+    // Shadow cascades: depth only. No rasterizer bias: scene.hlsl applies the
+    // adjustable receiver bias.
+    shadow_desc := mesh_desc
+    shadow_desc.VS = shader_bytecode(shadow_vs)
+    shadow_desc.PS = {}
+    shadow_desc.NumRenderTargets = 0
+    shadow_desc.RTVFormats[0] = .UNKNOWN
+    renderer_create_pso(&shadow_desc, &r.shadow_pipeline_state)
 
     // Depth prepass, which also writes per-pixel motion for TAA. VSDepth
     // computes positions with the same code as VSMain, so the lit pass can
     // test LESS_EQUAL against it.
-    depth_vs := renderer_compile_shader("shaders/scene.hlsl", "VSDepth", "vs_5_1", compile_flags)
-    defer depth_vs->Release()
-    velocity_ps := renderer_compile_shader("shaders/scene.hlsl", "PSVelocity", "ps_5_1", compile_flags)
-    defer velocity_ps->Release()
-    depth_pso_desc := pso_desc
-    depth_pso_desc.VS = {
-        pShaderBytecode = depth_vs->GetBufferPointer(),
-        BytecodeLength = depth_vs->GetBufferSize(),
-    }
-    depth_pso_desc.PS = {
-        pShaderBytecode = velocity_ps->GetBufferPointer(),
-        BytecodeLength = velocity_ps->GetBufferSize(),
-    }
-    depth_pso_desc.RTVFormats[0] = .R16G16_FLOAT
-    dx_check(r.device->CreateGraphicsPipelineState(
-        &depth_pso_desc,
-        d3d12.IPipelineState_UUID,
-        (^rawptr)(&r.depth_prepass_pipeline_state),
-    ))
+    depth_desc := mesh_desc
+    depth_desc.VS = shader_bytecode(depth_vs)
+    depth_desc.PS = shader_bytecode(velocity_ps)
+    depth_desc.RTVFormats[0] = .R16G16_FLOAT
+    renderer_create_pso(&depth_desc, &r.depth_prepass_pipeline_state)
 
-    // Same scene shaders, but a floating-point color target, and depth comes
-    // from the prepass: test against it without writing.
-    hdr_pso_desc := pso_desc
-    hdr_pso_desc.RTVFormats[0] = .R16G16B16A16_FLOAT
-    hdr_pso_desc.DepthStencilState.DepthFunc = .LESS_EQUAL
-    hdr_pso_desc.DepthStencilState.DepthWriteMask = .ZERO
+    // Lit pass into the HDR target, testing against the prepass without writing.
+    lit_desc := mesh_desc
+    lit_desc.DepthStencilState.DepthFunc = .LESS_EQUAL
+    lit_desc.DepthStencilState.DepthWriteMask = .ZERO
+    renderer_create_pso(&lit_desc, &r.hdr_pipeline_state)
 
-    dx_check(r.device->CreateGraphicsPipelineState(
-        &hdr_pso_desc,
-        d3d12.IPipelineState_UUID,
-        (^rawptr)(&r.hdr_pipeline_state),
-    ))
+    // Full-screen triangle: no input layout, culling, or depth.
+    fullscreen := mesh_desc
+    fullscreen.VS = shader_bytecode(fullscreen_vs)
+    fullscreen.InputLayout = {}
+    fullscreen.RasterizerState.CullMode = .NONE
+    fullscreen.DepthStencilState = {DepthEnable = false, DepthWriteMask = .ZERO, DepthFunc = .ALWAYS}
+    fullscreen.DSVFormat = .UNKNOWN
 
-    // Full-screen triangle: no input layout or depth test.
-    post_pso_desc := pso_desc
-    post_pso_desc.VS = {
-        pShaderBytecode = post_vs->GetBufferPointer(),
-        BytecodeLength = post_vs->GetBufferSize(),
-    }
-    post_pso_desc.PS = {
-        pShaderBytecode = post_ps->GetBufferPointer(),
-        BytecodeLength = post_ps->GetBufferSize(),
-    }
-    post_pso_desc.InputLayout = {}
-    post_pso_desc.DepthStencilState.DepthEnable = false
-    post_pso_desc.DepthStencilState.DepthWriteMask = .ZERO
-    post_pso_desc.DSVFormat = .UNKNOWN
-    post_pso_desc.RasterizerState.CullMode = .NONE
-
-    dx_check(r.device->CreateGraphicsPipelineState(
-        &post_pso_desc,
-        d3d12.IPipelineState_UUID,
-        (^rawptr)(&r.post_pipeline_state),
-    ))
-
-    sky_pso_desc := post_pso_desc
-    sky_pso_desc.PS = {
-        pShaderBytecode = sky_ps->GetBufferPointer(),
-        BytecodeLength = sky_ps->GetBufferSize(),
-    }
-    sky_pso_desc.RTVFormats[0] = .R16G16B16A16_FLOAT
-
-    dx_check(r.device->CreateGraphicsPipelineState(
-        &sky_pso_desc,
-        d3d12.IPipelineState_UUID,
-        (^rawptr)(&r.sky_pipeline_state),
-    ))
-
-    irradiance_pso_desc := post_pso_desc
-    irradiance_pso_desc.PS = {
-        pShaderBytecode = irradiance_ps->GetBufferPointer(),
-        BytecodeLength = irradiance_ps->GetBufferSize(),
-    }
-    irradiance_pso_desc.RTVFormats[0] = .R16G16B16A16_FLOAT
-
-    dx_check(r.device->CreateGraphicsPipelineState(
-        &irradiance_pso_desc,
-        d3d12.IPipelineState_UUID,
-        (^rawptr)(&r.irradiance_pipeline_state),
-    ))
-
-    prefilter_pso_desc := post_pso_desc
-    prefilter_pso_desc.PS = {
-        pShaderBytecode = prefilter_ps->GetBufferPointer(),
-        BytecodeLength = prefilter_ps->GetBufferSize(),
-    }
-    prefilter_pso_desc.RTVFormats[0] = .R16G16B16A16_FLOAT
-
-    dx_check(r.device->CreateGraphicsPipelineState(
-        &prefilter_pso_desc,
-        d3d12.IPipelineState_UUID,
-        (^rawptr)(&r.prefilter_pipeline_state),
-    ))
-
-    for i in 0..<len(bloom_ps) {
-        bloom_pso_desc := post_pso_desc
-        bloom_pso_desc.PS = {
-            pShaderBytecode = bloom_ps[i]->GetBufferPointer(),
-            BytecodeLength = bloom_ps[i]->GetBufferSize(),
-        }
-        bloom_pso_desc.RTVFormats[0] = .R16G16B16A16_FLOAT
-
-        dx_check(r.device->CreateGraphicsPipelineState(
-            &bloom_pso_desc,
-            d3d12.IPipelineState_UUID,
-            (^rawptr)(&r.bloom_pipeline_states[i]),
-        ))
+    POST :: "shaders/post_process.hlsl"
+    renderer_create_fullscreen_pso(fullscreen, POST, "PSMain", .R8G8B8A8_UNORM, &r.post_pipeline_state)
+    renderer_create_fullscreen_pso(fullscreen, POST, "PSFxaa", .R8G8B8A8_UNORM, &r.fxaa_pipeline_state)
+    renderer_create_fullscreen_pso(fullscreen, POST, "PSTaaResolve", .R16G16B16A16_FLOAT, &r.taa_resolve_pipeline_state)
+    bloom_entries := [BLOOM_PASS_COUNT]cstring{"PSExtract", "PSBlurHorizontal", "PSBlurVertical"}
+    for entry, i in bloom_entries {
+        renderer_create_fullscreen_pso(fullscreen, POST, entry, .R16G16B16A16_FLOAT, &r.bloom_pipeline_states[i])
     }
 
-    // TAA resolve: full-screen pass writing the HDR history.
-    taa_ps := renderer_compile_shader("shaders/post_process.hlsl", "PSTaaResolve", "ps_5_1", compile_flags)
-    defer taa_ps->Release()
-    taa_pso_desc := post_pso_desc
-    taa_pso_desc.PS = {
-        pShaderBytecode = taa_ps->GetBufferPointer(),
-        BytecodeLength = taa_ps->GetBufferSize(),
-    }
-    taa_pso_desc.RTVFormats[0] = .R16G16B16A16_FLOAT
-    dx_check(r.device->CreateGraphicsPipelineState(
-        &taa_pso_desc,
-        d3d12.IPipelineState_UUID,
-        (^rawptr)(&r.taa_resolve_pipeline_state),
-    ))
+    renderer_create_fullscreen_pso(fullscreen, "shaders/sky.hlsl", "PSMain", .R16G16B16A16_FLOAT, &r.sky_pipeline_state)
+    renderer_create_fullscreen_pso(fullscreen, "shaders/irradiance.hlsl", "PSMain", .R16G16B16A16_FLOAT, &r.irradiance_pipeline_state)
+    renderer_create_fullscreen_pso(fullscreen, "shaders/environment_prefilter.hlsl", "PSMain", .R16G16B16A16_FLOAT, &r.prefilter_pipeline_state)
 
-    // FXAA: same full-screen pass and back-buffer format as tone mapping.
-    fxaa_ps := renderer_compile_shader("shaders/post_process.hlsl", "PSFxaa", "ps_5_1", compile_flags)
-    defer fxaa_ps->Release()
-    fxaa_pso_desc := post_pso_desc
-    fxaa_pso_desc.PS = {
-        pShaderBytecode = fxaa_ps->GetBufferPointer(),
-        BytecodeLength = fxaa_ps->GetBufferSize(),
-    }
-    dx_check(r.device->CreateGraphicsPipelineState(
-        &fxaa_pso_desc,
-        d3d12.IPipelineState_UUID,
-        (^rawptr)(&r.fxaa_pipeline_state),
-    ))
+    // SSAO's pixel shaders live in scene.hlsl to share its frame constants.
+    renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSSsao", .R8_UNORM, &r.ssao_pipeline_state)
+    renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSSsaoBlur", .R8_UNORM, &r.ssao_blur_pipeline_state)
+}
 
-    // SSAO and its blur: full-screen passes whose pixel shaders live in
-    // scene.hlsl, so they share its frame constants.
-    ssao_entries := [2]cstring{"PSSsao", "PSSsaoBlur"}
-    ssao_states := [2]^^d3d12.IPipelineState{&r.ssao_pipeline_state, &r.ssao_blur_pipeline_state}
-    for entry, i in ssao_entries {
-        ssao_ps := renderer_compile_shader("shaders/scene.hlsl", entry, "ps_5_1", compile_flags)
-        defer ssao_ps->Release()
+renderer_load_assets :: proc(){
+    r := &g_renderer
 
-        ssao_pso_desc := post_pso_desc
-        ssao_pso_desc.PS = {
-            pShaderBytecode = ssao_ps->GetBufferPointer(),
-            BytecodeLength = ssao_ps->GetBufferSize(),
-        }
-        ssao_pso_desc.RTVFormats[0] = .R8_UNORM
-        dx_check(r.device->CreateGraphicsPipelineState(
-            &ssao_pso_desc,
-            d3d12.IPipelineState_UUID,
-            (^rawptr)(ssao_states[i]),
-        ))
-    }
+    renderer_create_root_signature()
+    renderer_create_pipelines()
 
     r.meshes = make([]GpuMesh, len(g_assets.meshes))
     for i in 1..<len(g_assets.meshes) {
@@ -1536,7 +1153,19 @@ renderer_load_textures :: proc(){
         (^rawptr)(&r.srv_heap),
     ))
 
+    // CPU-only mirror of the texture SRVs: the copy source for per-draw
+    // material tables (copying out of a shader-visible heap is slow).
+    srv_heap_desc.Flags = {}
+    dx_check(r.device->CreateDescriptorHeap(
+        &srv_heap_desc,
+        d3d12.IDescriptorHeap_UUID,
+        (^rawptr)(&r.srv_staging_heap),
+    ))
+
     r.srv_descriptor_size = r.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV)
+
+    // Per frame in flight and per draw: albedo, normal, roughness, metallic.
+    r.material_srv_start = renderer_alloc_srv(FRAME_COUNT * MAX_ENTITIES * MATERIAL_TEXTURE_COUNT)
 
     r.shadow_srv_index = renderer_alloc_srv()
     r.hdr_srv_index = renderer_alloc_srv()
@@ -1773,6 +1402,11 @@ renderer_upload_texture :: proc(
 
     r.device->CreateShaderResourceView(gpu.resource, &srv_desc, srv_handle)
 
+    staging_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+    r.srv_staging_heap->GetCPUDescriptorHandleForHeapStart(&staging_handle)
+    staging_handle.ptr += uint(gpu.srv_index) * uint(r.srv_descriptor_size)
+    r.device->CreateShaderResourceView(gpu.resource, &srv_desc, staging_handle)
+
     return
 }
 
@@ -1916,6 +1550,7 @@ renderer_destroy :: proc(){
     delete(r.meshes)
     delete(r.textures)
     r.srv_heap->Release()
+    r.srv_staging_heap->Release()
 
     r.shadow_pipeline_state->Release()
     r.shadow_map->Release()

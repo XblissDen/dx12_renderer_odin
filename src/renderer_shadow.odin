@@ -258,10 +258,7 @@ renderer_render_shadow_pass :: proc(
     r.command_list->SetGraphicsRootSignature(r.root_signature)
     r.command_list->SetPipelineState(r.shadow_pipeline_state)
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
-    r.command_list->SetGraphicsRootConstantBufferView(
-        12,
-        renderer_frame_cb_address(),
-    )
+    renderer_bind_cbv(.Frame_Constants, renderer_frame_cb_address())
 
     dsv_size := r.device->GetDescriptorHandleIncrementSize(.DSV)
     for cascade in 0..<SHADOW_CASCADE_COUNT {
@@ -274,16 +271,13 @@ renderer_render_shadow_pass :: proc(
             dsv_handle, {.DEPTH}, 1.0, 0, 0, nil,
         )
         // VSShadow reads this cascade's matrix from the frame constants.
-        r.command_list->SetGraphicsRoot32BitConstant(13, u32(cascade), 0)
+        r.command_list->SetGraphicsRoot32BitConstant(u32(Root_Slot.Shadow_Cascade), u32(cascade), 0)
 
         for draw_index in cascade_draws[cascade] {
             i := int(draw_index)
             assert(i >= 0 && i < len(draw_meshes))
 
-            r.command_list->SetGraphicsRootConstantBufferView(
-                0,
-                renderer_object_cb_address(i),
-            )
+            renderer_bind_cbv(.Object_Constants, renderer_object_cb_address(i))
 
             mesh_index := int(draw_meshes[i])
             assert(mesh_index > 0 && mesh_index < len(r.meshes))

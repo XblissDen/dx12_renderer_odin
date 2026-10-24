@@ -85,7 +85,12 @@ cbuffer ShadowCascade : register(b5)
     uint shadow_cascade_index;
 };
 
-Texture2D    g_texture : register(t0);
+// The material table (root slot Material): albedo, normal, roughness, metallic.
+Texture2D         g_texture       : register(t10);
+Texture2D<float4> g_normal_map    : register(t11);
+Texture2D<float4> g_roughness_map : register(t12);
+Texture2D<float4> g_metallic_map  : register(t13);
+
 SamplerState g_sampler : register(s0);
 SamplerState g_material_sampler : register(s2);
 SamplerState g_environment_sampler : register(s3);
@@ -93,9 +98,6 @@ Texture2DArray<float> g_shadow_map : register(t1);
 SamplerComparisonState g_shadow_sampler : register(s1);
 Texture2D<float4> g_irradiance : register(t3);
 Texture2D<float4> g_prefiltered_environment : register(t4);
-Texture2D<float4> g_normal_map : register(t5);
-Texture2D<float4> g_roughness_map : register(t6);
-Texture2D<float4> g_metallic_map : register(t7);
 // Ambient occlusion: the blurred map in the lit pass, the raw map in the blur.
 Texture2D<float> g_ao : register(t8);
 Texture2D<float> g_depth : register(t9);

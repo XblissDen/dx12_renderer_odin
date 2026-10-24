@@ -41,16 +41,8 @@ renderer_render_scene_pass :: proc(
     sky_heaps := []^d3d12.IDescriptorHeap{r.srv_heap}
     r.command_list->SetDescriptorHeaps(1, raw_data(sky_heaps))
 
-    r.command_list->SetGraphicsRootConstantBufferView(
-        4,
-        renderer_sky_cb_address(),
-    )
-
-    sky_srv: d3d12.GPU_DESCRIPTOR_HANDLE
-    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&sky_srv)
-    sky_srv.ptr += u64(r.environment_srv_index) *
-                u64(r.srv_descriptor_size)
-    r.command_list->SetGraphicsRootDescriptorTable(1, sky_srv)
+    renderer_bind_cbv(.Sky_Constants, renderer_sky_cb_address())
+    renderer_bind_srv(.Texture_T0, r.environment_srv_index)
 
     r.command_list->RSSetViewports(1, &r.viewport)
     r.command_list->RSSetScissorRects(1, &r.scissor_rect)
@@ -69,25 +61,11 @@ renderer_render_scene_pass :: proc(
     heaps := []^d3d12.IDescriptorHeap{ r.srv_heap }
     r.command_list->SetDescriptorHeaps(u32(len(heaps)), raw_data(heaps))
 
-    shadow_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
-    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&shadow_gpu_handle)
-    shadow_gpu_handle.ptr += u64(r.shadow_srv_index) * u64(r.srv_descriptor_size)
-    r.command_list->SetGraphicsRootDescriptorTable(2, shadow_gpu_handle)
-
-    irradiance_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
-    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&irradiance_gpu_handle)
-    irradiance_gpu_handle.ptr += u64(r.irradiance_srv_index) *
-                                u64(r.srv_descriptor_size)
-    r.command_list->SetGraphicsRootDescriptorTable(6, irradiance_gpu_handle)
-
-    prefilter_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
-    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&prefilter_gpu_handle)
-    prefilter_gpu_handle.ptr += u64(r.prefilter_srv_index) *
-                                u64(r.srv_descriptor_size)
-    r.command_list->SetGraphicsRootDescriptorTable(8, prefilter_gpu_handle)
-
+    renderer_bind_srv(.Texture_T1, r.shadow_srv_index)
+    renderer_bind_srv(.Irradiance, r.irradiance_srv_index)
+    renderer_bind_srv(.Prefiltered, r.prefilter_srv_index)
     // Blurred ambient occlusion (ignored by the shader while disabled).
-    r.command_list->SetGraphicsRootDescriptorTable(14, renderer_srv_gpu(r.ao_srv_start + 1))
+    renderer_bind_srv(.Texture_T8, r.ao_srv_start + 1)
 
     // viewport, scissor
     r.command_list->RSSetViewports(1, &r.viewport)
@@ -95,36 +73,16 @@ renderer_render_scene_pass :: proc(
 
     // Geometry
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
-    r.command_list->SetGraphicsRootConstantBufferView(
-        12,
-        renderer_frame_cb_address(),
-    )
+    renderer_bind_cbv(.Frame_Constants, renderer_frame_cb_address())
 
     for draw_index in draw_indices{
         i := int(draw_index)
         assert(i >= 0 && i < len(draw_meshes))
 
-        r.command_list->SetGraphicsRootConstantBufferView(
-            0,
-            renderer_object_cb_address(i),
-        )
-
-        srv_gpu_handle := renderer_texture_srv(draw_textures[i])
-
-        r.command_list->SetGraphicsRootDescriptorTable(1, srv_gpu_handle)
-
-        normal_gpu_handle := renderer_texture_srv(draw_normals[i])
-
-        r.command_list->SetGraphicsRootDescriptorTable(9, normal_gpu_handle)
-
-        roughness_gpu_handle := renderer_texture_srv(draw_roughness[i])
-
-        r.command_list->SetGraphicsRootDescriptorTable(10, roughness_gpu_handle)
-
-        metallic_gpu_handle := renderer_texture_srv(draw_metallic[i])
-
+        renderer_bind_cbv(.Object_Constants, renderer_object_cb_address(i))
         r.command_list->SetGraphicsRootDescriptorTable(
-            11, metallic_gpu_handle,
+            u32(Root_Slot.Material),
+            renderer_material_table(i, {draw_textures[i], draw_normals[i], draw_roughness[i], draw_metallic[i]}),
         )
 
         mesh_index := int(draw_meshes[i])
@@ -181,22 +139,10 @@ renderer_render_post_process :: proc(scene: ^Scene) {
     r.command_list->OMSetRenderTargets(1, &tone_map_rtv, false, nil)
 
     r.command_list->SetGraphicsRootSignature(r.root_signature)
-    r.command_list->SetGraphicsRootConstantBufferView(
-        3,
-        renderer_post_cb_address(),
-    )
+    renderer_bind_cbv(.Post_Constants, renderer_post_cb_address())
     r.command_list->SetPipelineState(r.post_pipeline_state)
-
-    hdr_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
-    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&hdr_gpu_handle)
-    hdr_gpu_handle.ptr += u64(r.scene_color_srv_index) * u64(r.srv_descriptor_size)
-    r.command_list->SetGraphicsRootDescriptorTable(1, hdr_gpu_handle)
-
-    bloom_gpu_handle: d3d12.GPU_DESCRIPTOR_HANDLE
-    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&bloom_gpu_handle)
-    bloom_gpu_handle.ptr += u64(r.bloom_srv_start) *
-                            u64(r.srv_descriptor_size)
-    r.command_list->SetGraphicsRootDescriptorTable(2, bloom_gpu_handle)
+    renderer_bind_srv(.Texture_T0, r.scene_color_srv_index)
+    renderer_bind_srv(.Texture_T1, r.bloom_srv_start)
 
     r.command_list->RSSetViewports(1, &r.viewport)
     r.command_list->RSSetScissorRects(1, &r.scissor_rect)
@@ -211,7 +157,7 @@ renderer_render_post_process :: proc(scene: ^Scene) {
         renderer_begin_gpu_pass(.FXAA)
         r.command_list->OMSetRenderTargets(1, &rtv_handle, false, nil)
         r.command_list->SetPipelineState(r.fxaa_pipeline_state)
-        r.command_list->SetGraphicsRootDescriptorTable(1, renderer_srv_gpu(r.ldr_srv_index))
+        renderer_bind_srv(.Texture_T0, r.ldr_srv_index)
         r.command_list->DrawInstanced(3, 1, 0, 0)
         renderer_end_gpu_pass(.FXAA)
     } else {

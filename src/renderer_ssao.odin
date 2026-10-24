@@ -116,12 +116,12 @@ renderer_render_depth_prepass :: proc(draw_meshes: []MeshHandle, draw_indices: [
     r.command_list->RSSetViewports(1, &r.viewport)
     r.command_list->RSSetScissorRects(1, &r.scissor_rect)
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
-    r.command_list->SetGraphicsRootConstantBufferView(12, renderer_frame_cb_address())
+    renderer_bind_cbv(.Frame_Constants, renderer_frame_cb_address())
 
     for draw_index in draw_indices {
         i := int(draw_index)
         assert(i >= 0 && i < len(draw_meshes))
-        r.command_list->SetGraphicsRootConstantBufferView(0, renderer_object_cb_address(i))
+        renderer_bind_cbv(.Object_Constants, renderer_object_cb_address(i))
 
         mesh_index := int(draw_meshes[i])
         assert(mesh_index > 0 && mesh_index < len(r.meshes))
@@ -159,12 +159,12 @@ renderer_render_ssao :: proc() {
         r.command_list->RSSetViewports(1, &r.viewport)
         r.command_list->RSSetScissorRects(1, &r.scissor_rect)
         r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
-        r.command_list->SetGraphicsRootConstantBufferView(12, renderer_frame_cb_address())
-        r.command_list->SetGraphicsRootDescriptorTable(15, renderer_srv_gpu(r.depth_srv_index))
+        renderer_bind_cbv(.Frame_Constants, renderer_frame_cb_address())
+        renderer_bind_srv(.Depth, r.depth_srv_index)
 
         // Raw occlusion, then the blur reads it (t8) and writes the final map.
         renderer_ssao_fullscreen(0, r.ssao_pipeline_state)
-        r.command_list->SetGraphicsRootDescriptorTable(14, renderer_srv_gpu(r.ao_srv_start))
+        renderer_bind_srv(.Texture_T8, r.ao_srv_start)
         renderer_ssao_fullscreen(1, r.ssao_blur_pipeline_state)
     }
     renderer_end_gpu_pass(.SSAO)

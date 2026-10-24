@@ -569,11 +569,7 @@ renderer_generate_irradiance :: proc(source_srv_index: u32) {
     heaps := []^d3d12.IDescriptorHeap{r.srv_heap}
     r.command_list->SetDescriptorHeaps(1, raw_data(heaps))
 
-    environment_srv: d3d12.GPU_DESCRIPTOR_HANDLE
-    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&environment_srv)
-    environment_srv.ptr += u64(source_srv_index) *
-                           u64(r.srv_descriptor_size)
-    r.command_list->SetGraphicsRootDescriptorTable(5, environment_srv)
+    renderer_bind_srv(.Environment, source_srv_index)
 
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
     r.command_list->DrawInstanced(3, 1, 0, 0)
@@ -710,11 +706,7 @@ renderer_generate_prefiltered_environment :: proc(source_srv_index: u32) {
     heaps := []^d3d12.IDescriptorHeap{r.srv_heap}
     r.command_list->SetDescriptorHeaps(1, raw_data(heaps))
 
-    environment_srv: d3d12.GPU_DESCRIPTOR_HANDLE
-    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&environment_srv)
-    environment_srv.ptr += u64(source_srv_index) *
-                           u64(r.srv_descriptor_size)
-    r.command_list->SetGraphicsRootDescriptorTable(5, environment_srv)
+    renderer_bind_srv(.Environment, source_srv_index)
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
 
     rtv_increment := r.device->GetDescriptorHandleIncrementSize(.RTV)
@@ -742,8 +734,8 @@ renderer_generate_prefiltered_environment :: proc(source_srv_index: u32) {
         r.command_list->RSSetScissorRects(1, &scissor)
 
         cb_offset := u64(mip) * u64(size_of(PrefilterConstants))
-        r.command_list->SetGraphicsRootConstantBufferView(
-            7,
+        renderer_bind_cbv(
+            .Prefilter_Constants,
             r.prefilter_constant_buffer->GetGPUVirtualAddress() + cb_offset,
         )
 

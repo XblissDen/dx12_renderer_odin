@@ -2,9 +2,7 @@ package main
 
 import "core:fmt"
 import alg "core:math/linalg"
-import win32 "core:sys/windows"
 import d3d12 "vendor:directx/d3d12"
-import d3dc "vendor:directx/d3d_compiler"
 
 SelectionConstants :: struct {
     model_view_projection: alg.Matrix4f32,
@@ -51,45 +49,15 @@ renderer_create_selection_pipeline :: proc() {
         (^rawptr)(&r.selection_root_signature),
     ))
 
-    path := win32.utf8_to_wstring("shaders/selection.hlsl")
-    entries := [2]cstring{"VSMain", "PSMain"}
-    targets := [2]cstring{"vs_5_1", "ps_5_1"}
-    shaders: [2]^d3d12.IBlob
-
-    flags: u32
-    when ODIN_DEBUG {
-        flags = u32(d3dc.D3DCOMPILE_FLAG.DEBUG | d3dc.D3DCOMPILE_FLAG.SKIP_OPTIMIZATION)
-    }
-
-    for i in 0..<2 {
-        messages: ^d3d12.IBlob
-        hr = d3dc.CompileFromFile(
-            path, nil, nil, entries[i], targets[i],
-            flags, 0, &shaders[i], &messages,
-        )
-        if messages != nil {
-            fmt.println("Selection shader:", cstring(messages->GetBufferPointer()))
-            messages->Release()
-        }
-        dx_check(hr)
-    }
-
-    defer {
-        for shader in shaders {
-            shader->Release()
-        }
-    }
+    vs := renderer_compile_shader("shaders/selection.hlsl", "VSMain", "vs_5_1")
+    defer vs->Release()
+    ps := renderer_compile_shader("shaders/selection.hlsl", "PSMain", "ps_5_1")
+    defer ps->Release()
 
     desc := d3d12.GRAPHICS_PIPELINE_STATE_DESC{
         pRootSignature = r.selection_root_signature,
-        VS = {
-            pShaderBytecode = shaders[0]->GetBufferPointer(),
-            BytecodeLength = shaders[0]->GetBufferSize(),
-        },
-        PS = {
-            pShaderBytecode = shaders[1]->GetBufferPointer(),
-            BytecodeLength = shaders[1]->GetBufferSize(),
-        },
+        VS = shader_bytecode(vs),
+        PS = shader_bytecode(ps),
         RasterizerState = {
             FillMode = .SOLID,
             CullMode = .NONE,
@@ -117,12 +85,7 @@ renderer_create_selection_pipeline :: proc() {
         SampleDesc = {Count = 1},
     }
     desc.RTVFormats[0] = .R8G8B8A8_UNORM
-
-    dx_check(r.device->CreateGraphicsPipelineState(
-        &desc,
-        d3d12.IPipelineState_UUID,
-        (^rawptr)(&r.selection_pipeline_state),
-    ))
+    renderer_create_pso(&desc, &r.selection_pipeline_state)
 }
 
 renderer_render_selection :: proc(scene: ^Scene) {
