@@ -35,6 +35,10 @@ main :: proc(){
     frames_for_fps: i32
 
     for g_running{
+        // Temporary allocations live for one frame (window title, wide-string
+        // conversions, texture mips during imports); without this they pile up.
+        defer free_all(context.temp_allocator)
+
         window_process_messages()
         if !g_running{
             break

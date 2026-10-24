@@ -81,11 +81,13 @@ renderer_velocity_rtv :: proc() -> d3d12.CPU_DESCRIPTOR_HANDLE {
 renderer_render_taa :: proc() {
     r := &g_renderer
     r.scene_color_srv_index = r.hdr_srv_index
+    renderer_begin_gpu_pass(.TAA)
     if r.post_anti_aliasing != .TAA {
+        // Empty timestamps: every pass's queries are resolved each frame.
+        renderer_end_gpu_pass(.TAA)
         return
     }
 
-    renderer_begin_gpu_pass(.TAA)
     write := r.taa_write_index
     read := 1 - write
 

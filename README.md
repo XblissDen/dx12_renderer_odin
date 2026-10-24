@@ -16,6 +16,12 @@ build.bat
 dx12_renderer.exe
 ```
 
+`build.bat` builds with `-o:speed` and passes extra arguments to `odin build`.
+`build.bat -debug` enables the D3D12 debug layer; its messages, and a report of
+GPU objects still alive at shutdown, are printed to stderr. That build uses the
+Windows subsystem, which has no console, so to see them build a console version
+instead: `odin build src -debug -o:speed`.
+
 Run from the project root so the relative `models/`, `textures/`, and `shaders/`
 paths resolve correctly. HDR environments are local assets registered in
 `assets.json`. The default is `textures/environments/autumn_field_puresky_4k.hdr`;

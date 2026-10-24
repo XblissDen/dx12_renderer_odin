@@ -214,6 +214,10 @@ renderer_render_post_process :: proc(scene: ^Scene) {
         r.command_list->SetGraphicsRootDescriptorTable(1, renderer_srv_gpu(r.ldr_srv_index))
         r.command_list->DrawInstanced(3, 1, 0, 0)
         renderer_end_gpu_pass(.FXAA)
+    } else {
+        // Empty timestamps: every pass's queries are resolved each frame.
+        renderer_begin_gpu_pass(.FXAA)
+        renderer_end_gpu_pass(.FXAA)
     }
 
     // The outline and UI draw after anti-aliasing, so text stays crisp.

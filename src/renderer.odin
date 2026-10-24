@@ -206,6 +206,7 @@ PrefilterConstants :: struct #align(256) {
 
 Renderer :: struct {
     device: ^d3d12.IDevice,
+    info_queue: ^d3d12.IInfoQueue, // Debug builds only.
     swap_chain: ^dxgi.ISwapChain3,
     command_queue: ^d3d12.ICommandQueue,
 
@@ -367,6 +368,36 @@ Renderer :: struct {
 
 g_renderer: Renderer
 
+// Debug builds only: prints new D3D12 debug-layer messages to stderr, at most
+// a few per message ID so a per-frame problem does not flood the console.
+DEBUG_MESSAGE_REPEAT_LIMIT :: 5
+g_debug_message_counts: map[d3d12.MESSAGE_ID]int
+
+renderer_print_debug_messages :: proc() {
+    when ODIN_DEBUG {
+        q := g_renderer.info_queue
+        if q == nil do return
+        count := q->GetNumStoredMessages()
+        for i in 0..<count {
+            size: d3d12.SIZE_T
+            if q->GetMessageA(i, nil, &size) < 0 do continue
+            buffer := make([]u8, int(size), context.temp_allocator)
+            message := (^d3d12.MESSAGE)(raw_data(buffer))
+            if q->GetMessageA(i, message, &size) < 0 do continue
+
+            seen := g_debug_message_counts[message.ID]
+            g_debug_message_counts[message.ID] = seen + 1
+            if seen < DEBUG_MESSAGE_REPEAT_LIMIT {
+                // IDs as numbers: Odin's enum lacks many of the debug layer's IDs.
+                fmt.eprintf("D3D12 %v [%d]: %s\n", message.Severity, i32(message.ID), message.pDescription)
+            } else if seen == DEBUG_MESSAGE_REPEAT_LIMIT {
+                fmt.eprintf("D3D12 [%d]: further repeats hidden\n", i32(message.ID))
+            }
+        }
+        q->ClearStoredMessages()
+    }
+}
+
 dx_check:: proc(hr: win32.HRESULT, loc := #caller_location){
     if hr < 0{
         fmt.panicf("DX12 error 0x%X at %v", u32(hr), loc)
@@ -440,6 +471,12 @@ renderer_init :: proc() {
 
     // DEVICE
     dx_check(d3d12.CreateDevice(adapter, ._12_0, d3d12.IDevice_UUID, (^rawptr)(&r.device)))
+
+    // Debug-layer messages go to an attached debugger; also read them back so
+    // a plain console run of a debug build shows them.
+    when ODIN_DEBUG {
+        r.device->QueryInterface(d3d12.IInfoQueue_UUID, (^rawptr)(&r.info_queue))
+    }
 
     // COMMAND QUEUE
     queue_desc := d3d12.COMMAND_QUEUE_DESC{
@@ -1786,6 +1823,7 @@ renderer_render_frame :: proc(scene: ^Scene) {
 
     renderer_submit_frame()
     dx_check(r.swap_chain->Present(1, {}))
+    renderer_print_debug_messages()
 }
 
 renderer_begin_gpu_pass :: proc(pass: GPU_Pass) {
@@ -1930,6 +1968,18 @@ renderer_destroy :: proc(){
     r.prefilter_pipeline_state->Release()
     if r.prefilter_constant_buffer != nil do r.prefilter_constant_buffer->Release()
 
+    // Everything above should be released by now: list anything still alive
+    // besides the device and its debug interfaces.
+    when ODIN_DEBUG {
+        debug_device: ^d3d12.IDebugDevice
+        if r.device->QueryInterface(d3d12.IDebugDevice_UUID, (^rawptr)(&debug_device)) >= 0 {
+            debug_device->ReportLiveDeviceObjects({.DETAIL, .IGNORE_INTERNAL})
+            debug_device->Release()
+        }
+    }
+    renderer_print_debug_messages()
+    if r.info_queue != nil do r.info_queue->Release()
+    delete(g_debug_message_counts)
     r.device->Release()
 }
 
