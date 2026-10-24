@@ -1,5 +1,6 @@
 package main
 
+import "core:fmt"
 import "core:os"
 
 EditorImport :: struct {
@@ -41,13 +42,13 @@ editor_draw_import_panel :: proc() {
     ui_next_window(788, 16, 440, 430)
     if ui_begin_panel("Asset import") {
         ui_begin_disabled(state.pending)
-        if ui_begin_combo("Type", "Model (OBJ)" if state.model else "Texture (PNG)") {
-            if ui_selectable("Model (OBJ)", state.model) {
+        if ui_begin_combo("Type", "Model (OBJ, glTF)" if state.model else "Texture (PNG, JPEG)") {
+            if ui_selectable("Model (OBJ, glTF)", state.model) {
                 state.model = true
                 state.path = {}
                 state.name = {}
             }
-            if ui_selectable("Texture (PNG)", !state.model) {
+            if ui_selectable("Texture (PNG, JPEG)", !state.model) {
                 state.model = false
                 state.path = {}
                 state.name = {}
@@ -67,9 +68,12 @@ editor_draw_import_panel :: proc() {
             }
         }
         path := editor_import_text(state.path[:])
-        debug_ui_text(os.base(path) if path != "" else "Choose an OBJ or PNG file.")
+        debug_ui_text(os.base(path) if path != "" else "Choose a model or texture file.")
         ui_input_text("Name", raw_data(state.name[:]), uint(len(state.name)))
-        if state.model {
+        if state.model && assets_is_gltf_path(path) {
+            debug_ui_text("Materials and textures come from the glTF file.")
+            debug_ui_text("Its buffers and images must sit next to it.")
+        } else if state.model {
             ui_checkbox("Flip V (Blender OBJ)", &state.flip_v)
             debug_ui_text("Optional default material: import textures first.")
             editor_import_map("Albedo", &state.maps[0], .albedo)
@@ -116,13 +120,15 @@ editor_process_asset_import :: proc() {
         flip_green = state.flip_green,
         material = material,
     })
+    // A successful glTF import can still carry a note (e.g. alpha drawn opaque).
     state.status = error
-    if error == "" {
-        if model != 0 {
-            g_editor_model_to_add = model
-            state.status = "Model imported. Use Add Model in the Scene panel."
-        }
-        if texture != 0 do state.status = "Texture imported and available in material pickers."
+    if model != 0 {
+        g_editor_model_to_add = model
+        state.status = "Model imported. Use Add Model in the Scene panel."
+        @(static) note_buffer: [512]u8
+        if error != "" do state.status = fmt.bprintf(note_buffer[:], "%s\n%s", state.status, error)
+    } else if texture != 0 {
+        state.status = "Texture imported and available in material pickers."
     }
 }
 
@@ -204,7 +210,7 @@ editor_add_model :: proc(scene: ^Scene, model: MeshHandle) {
         transform.position = scene.transforms[camera].position + camera_forward(&scene.cameras[camera]) * 3 - (asset.bounds.minimum + asset.bounds.maximum) * 0.5
     }
     source := g_editor_selected
-    snapshot := EditorMeshSnapshot{name = name, transform = transform, mesh_renderer = {mesh = model}, material = asset.material}
+    snapshot := EditorMeshSnapshot{name = name, transform = transform, mesh_renderer = {mesh = model}, material = asset.material, material_slots = asset.material_slots}
     entity := Entity(slot)
     if !editor_restore_created_mesh(scene, entity, snapshot) do return
     editor_push_command({kind = .Create_Mesh, entity = entity, source_entity = source, mesh_snapshot = snapshot})

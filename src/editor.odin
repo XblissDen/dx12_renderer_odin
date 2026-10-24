@@ -4,6 +4,8 @@ import "core:fmt"
 import "core:math"
 
 g_editor_selected: Entity = Entity(-1)
+// The entity whose material slot g_editor_material_slot refers to.
+g_editor_material_entity := -1
 g_editor_file_status: string
 
 editor_draw_scene :: proc(scene: ^Scene){
@@ -140,10 +142,35 @@ editor_draw_material_controls :: proc(scene: ^Scene, index: int) {
         return
     }
 
-    material := &scene.materials[index]
-
     ui_separator()
     debug_ui_text("Material")
+
+    // Multi-material models (glTF): choose which submesh material to edit.
+    if g_editor_material_entity != index {
+        g_editor_material_entity = index
+        g_editor_material_slot = 0
+    }
+    slot_count := scene_material_count(scene, index)
+    g_editor_material_slot = clamp(g_editor_material_slot, 0, slot_count - 1)
+    if slot_count > 1 {
+        names := &g_assets.meshes[scene.mesh_renderers[index].mesh].material_names
+        preview := names[g_editor_material_slot]
+        if preview == nil do preview = "Material"
+        if ui_begin_combo("Slot", preview) {
+            for slot in 0..<slot_count {
+                label := names[slot] if names[slot] != nil else "Material"
+                ui_push_id(i32(slot))
+                if ui_selectable(label, slot == g_editor_material_slot) {
+                    editor_finish_edit()
+                    g_editor_material_slot = slot
+                }
+                ui_pop_id()
+            }
+            ui_end_combo()
+        }
+    }
+
+    material := editor_material(scene, index)
 
     editor_draw_texture_controls(scene, index)
     editor_color(scene, index, .Material_Tint, "Tint")

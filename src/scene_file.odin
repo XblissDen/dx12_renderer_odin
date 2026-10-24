@@ -7,7 +7,7 @@ import "core:strings"
 import alg "core:math/linalg"
 
 SCENE_FILE_PATH :: "scene.json"
-SCENE_FILE_VERSION :: 6
+SCENE_FILE_VERSION :: 7 // 7: extra material slots per entity.
 
 ScenePostSettings :: struct{
     exposure: f32,
@@ -32,6 +32,8 @@ SceneFileEntity :: struct {
     transform: Maybe(Transform),
     mesh_renderer: Maybe(MeshRenderer),
     material: Maybe(Material),
+    // Version 7+: material slots 1 and up of multi-material models.
+    extra_materials: []Material,
     point_light: Maybe(PointLight),
     directional_light: Maybe(DirectionalLight),
     camera: Maybe(Camera),
@@ -109,6 +111,32 @@ scene_store_owned_name :: proc(name: string) -> (result: string, ok: bool) {
     return copied, error == nil
 }
 
+scene_file_validate_material :: proc(material: Material) -> string {
+    if !assets_texture_valid(material.texture) ||
+       !assets_optional_texture_valid(material.normal_texture) ||
+       !assets_optional_texture_valid(material.roughness_texture) ||
+       !assets_optional_texture_valid(material.metallic_texture) {
+        return "Unknown texture asset."
+    }
+    if !texture_asset_is_albedo(material.texture) {
+        return "Albedo needs a color texture."
+    }
+    if !(material.normal_strength >= 0) ||
+       (material.normal_strength > 0 && !texture_asset_is_normal(material.normal_texture)) {
+        return "Invalid normal map assignment."
+    }
+    if material.use_roughness_map && !texture_asset_is_roughness(material.roughness_texture) {
+        return "Invalid roughness map assignment."
+    }
+    if material.use_metallic_map && !texture_asset_is_metallic(material.metallic_texture) {
+        return "Invalid metallic map assignment."
+    }
+    if material.uv_scale <= 0 {
+        return "UV scale must be positive."
+    }
+    return ""
+}
+
 scene_file_validate :: proc(scene: ^Scene) -> string{
     if scene.entity_count < 1 || scene.entity_count > MAX_ENTITIES{
         return "Invalid entity count."
@@ -159,37 +187,14 @@ scene_file_validate :: proc(scene: ^Scene) -> string{
         }
 
         if scene.has_material[i]{
-            material := scene.materials[i]
-
-            if !assets_texture_valid(material.texture) ||
-               !assets_optional_texture_valid(material.normal_texture) ||
-               !assets_optional_texture_valid(material.roughness_texture) ||
-               !assets_optional_texture_valid(material.metallic_texture) {
-                return "Unknown texture asset."
+            count := scene.material_slots[i].count
+            if count < 0 || count > MAX_MODEL_MATERIALS {
+                return "Invalid material slot count."
             }
-
-            if !texture_asset_is_albedo(material.texture) {
-                return "Albedo needs a color texture."
-            }
-
-            if !(material.normal_strength >= 0) ||
-               (material.normal_strength > 0 &&
-                !texture_asset_is_normal(material.normal_texture)) {
-                return "Invalid normal map assignment."
-            }
-
-            if material.use_roughness_map &&
-               !texture_asset_is_roughness(material.roughness_texture) {
-                return "Invalid roughness map assignment."
-            }
-
-            if material.use_metallic_map &&
-               !texture_asset_is_metallic(material.metallic_texture) {
-                return "Invalid metallic map assignment."
-            }
-
-            if material.uv_scale <= 0{
-                return "UV scale must be positive."
+            for slot in 0..<scene_material_count(scene, i) {
+                if error := scene_file_validate_material(scene_material(scene, i, slot)^); error != "" {
+                    return error
+                }
             }
         }
     }
@@ -227,7 +232,10 @@ scene_save_to_file :: proc(scene: ^Scene, path: string) -> (ok: bool, message: s
         entity := SceneFileEntity{name = scene.names[i]}
         if scene.has_transform[i] do entity.transform = scene.transforms[i]
         if scene.has_mesh_renderer[i] do entity.mesh_renderer = scene.mesh_renderers[i]
-        if scene.has_material[i] do entity.material = scene.materials[i]
+        if scene.has_material[i] {
+            entity.material = scene.materials[i]
+            entity.extra_materials = scene.material_slots[i].extra[:scene_material_count(scene, i) - 1]
+        }
         if scene.has_point_light[i] do entity.point_light = scene.point_lights[i]
         if scene.has_directional_light[i] do entity.directional_light = scene.directional_lights[i]
         if scene.has_camera[i] do entity.camera = scene.cameras[i]
@@ -345,6 +353,11 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
         if material, ok := source.material.?; ok {
             staged.materials[index] = material
             staged.has_material[index] = true
+            if len(source.extra_materials) > MAX_MODEL_MATERIALS - 1 {
+                return false, "An entity has too many material slots."
+            }
+            copy(staged.material_slots[index].extra[:], source.extra_materials)
+            staged.material_slots[index].count = 1 + len(source.extra_materials)
         }
     }
 

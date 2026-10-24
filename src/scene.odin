@@ -5,6 +5,15 @@ import "core:math"
 
 MAX_ENTITIES :: 1024
 MAX_LIGHTS :: 16
+// Material slots one entity can use: one per submesh material of its model
+// (Sponza needs 25). Slot 0 lives in Scene.materials, the rest in MaterialSlots.
+MAX_MODEL_MATERIALS :: 32
+
+MaterialSlots :: struct {
+    extra: [MAX_MODEL_MATERIALS - 1]Material,
+    // Total slots including slot 0; zero means one.
+    count: int,
+}
 
 Entity :: distinct int
 
@@ -73,6 +82,7 @@ Scene :: struct{
 
     materials: [MAX_ENTITIES]Material,
     has_material: [MAX_ENTITIES]bool,
+    material_slots: [MAX_ENTITIES]MaterialSlots,
 
     directional_lights: [MAX_ENTITIES]DirectionalLight,
     has_directional_light: [MAX_ENTITIES]bool,
@@ -109,6 +119,7 @@ scene_clear_entity_slot :: proc(scene: ^Scene, index: int) {
 
     scene.materials[index] = {}
     scene.has_material[index] = false
+    scene.material_slots[index] = {}
 
     scene.point_lights[index] = {}
     scene.has_point_light[index] = false
@@ -173,6 +184,25 @@ scene_add_camera :: proc(scene: ^Scene, entity: Entity, camera: Camera){
     index := int(entity)
     scene.cameras[index] = camera
     scene.has_camera[index] = true
+}
+
+scene_material_count :: proc(scene: ^Scene, index: int) -> int {
+    return max(scene.material_slots[index].count, 1)
+}
+
+// Material slot `slot` of an entity. Slots the entity does not have (e.g.
+// after switching to a model with more materials) fall back to slot 0.
+scene_material :: proc(scene: ^Scene, index, slot: int) -> ^Material {
+    if slot <= 0 || slot >= scene_material_count(scene, index) {
+        return &scene.materials[index]
+    }
+    return &scene.material_slots[index].extra[slot - 1]
+}
+
+// Slot 0 plus the extra slots, e.g. a model asset's default materials.
+scene_set_materials :: proc(scene: ^Scene, entity: Entity, material: Material, slots: MaterialSlots) {
+    scene_add_material(scene, entity, material)
+    scene.material_slots[int(entity)] = slots
 }
 
 scene_add_material :: proc(scene: ^Scene, entity: Entity, material: Material){
@@ -343,7 +373,7 @@ scene_spawn_model :: proc(scene: ^Scene, mesh: MeshHandle, transform: Transform)
     entity := scene_create_entity(scene, asset.desc.name if asset.desc.name != "" else asset.desc.id)
     scene_add_transform(scene, entity, transform)
     scene_add_mesh_renderer(scene, entity, {mesh = mesh})
-    scene_add_material(scene, entity, asset.material)
+    scene_set_materials(scene, entity, asset.material, asset.material_slots)
     return entity
 }
 

@@ -33,7 +33,7 @@ renderer_create_frame_constant_buffers :: proc() {
     mapped: rawptr
 
     r.object_constant_buffer, mapped = renderer_create_mapped_upload_buffer(
-        u64(FRAME_COUNT * MAX_ENTITIES * size_of(ObjectConstants)),
+        u64(FRAME_COUNT * MAX_DRAWS * size_of(ObjectConstants)),
     )
     r.object_cb_mapped_data = ([^]ObjectConstants)(mapped)
 
@@ -84,7 +84,7 @@ renderer_create_timestamp_resources :: proc() {
 
 renderer_object_cb_address :: proc(draw_index: int) -> u64 {
     r := &g_renderer
-    index := int(r.frame_slot) * MAX_ENTITIES + draw_index
+    index := int(r.frame_slot) * MAX_DRAWS + draw_index
     return r.object_constant_buffer->GetGPUVirtualAddress() +
            u64(index * size_of(ObjectConstants))
 }

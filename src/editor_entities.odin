@@ -54,7 +54,7 @@ editor_restore_created_mesh :: proc(
 
     scene_add_transform(scene, entity, snapshot.transform)
     scene_add_mesh_renderer(scene, entity, snapshot.mesh_renderer)
-    scene_add_material(scene, entity, snapshot.material)
+    scene_set_materials(scene, entity, snapshot.material, snapshot.material_slots)
 
     return true
 }
@@ -101,6 +101,7 @@ editor_duplicate_selected :: proc(scene: ^Scene) {
         transform = scene.transforms[index],
         mesh_renderer = scene.mesh_renderers[index],
         material = scene.materials[index],
+        material_slots = scene.material_slots[index],
     }
 
     // Make the copy easier to distinguish from its source.
@@ -162,7 +163,7 @@ editor_restore_deleted_mesh :: proc(
 
     scene_add_transform(scene, entity, snapshot.transform)
     scene_add_mesh_renderer(scene, entity, snapshot.mesh_renderer)
-    scene_add_material(scene, entity, snapshot.material)
+    scene_set_materials(scene, entity, snapshot.material, snapshot.material_slots)
 
     scene.alive[index] = true
     return true
@@ -182,6 +183,7 @@ editor_delete_selected :: proc(scene: ^Scene) {
         transform = scene.transforms[index],
         mesh_renderer = scene.mesh_renderers[index],
         material = scene.materials[index],
+        material_slots = scene.material_slots[index],
     }
 
     if !editor_delete_mesh(scene, entity) {

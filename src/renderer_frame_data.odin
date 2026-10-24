@@ -6,30 +6,50 @@ import alg "core:math/linalg"
 CullingStats :: struct {
     scene_visible, scene_total: int,
     shadow_visible, shadow_total: int,
+    // More submesh draws than MAX_DRAWS this frame; the rest were skipped.
+    draws_dropped: bool,
 }
 
-FrameDraws :: struct {
-    draw_meshes: [MAX_ENTITIES]MeshHandle,
-    draw_textures: [MAX_ENTITIES]TextureHandle,
-    draw_count: int,
-    draw_normals: [MAX_ENTITIES]TextureHandle,
-    draw_roughness: [MAX_ENTITIES]TextureHandle,
-    draw_metallic: [MAX_ENTITIES]TextureHandle,
+// Draws per frame: one per (entity, submesh). Sizes the per-draw constant
+// buffer and material-table rings.
+MAX_DRAWS :: 4096
 
-    scene_indices: [MAX_ENTITIES]u32,
+// One submesh of one entity, with the material of its slot.
+Draw :: struct {
+    mesh: MeshHandle,
+    first_index, index_count: u32,
+    textures: [MATERIAL_TEXTURE_COUNT]TextureHandle, // albedo, normal, roughness, metallic
+    bounds: WorldBounds,
+    casts_shadow: bool,
+}
+
+// Rebuilt every frame; lives in the renderer (too large for the stack).
+FrameDraws :: struct {
+    draws: [MAX_DRAWS]Draw,
+    draw_count: int,
+
+    scene_indices: [MAX_DRAWS]u32,
     scene_draw_count: int,
 
-    shadow_indices: [SHADOW_CASCADE_COUNT][MAX_ENTITIES]u32,
+    shadow_indices: [SHADOW_CASCADE_COUNT][MAX_DRAWS]u32,
     shadow_draw_count: [SHADOW_CASCADE_COUNT]int,
+
+    caster_bounds: [MAX_DRAWS]WorldBounds,
+    caster_count: int,
 }
 
-renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
+renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     r := &g_renderer
     r.culling_stats = {}
+    data := &r.frame_draws
+    data.draw_count = 0
+    data.scene_draw_count = 0
+    data.shadow_draw_count = {}
+    data.caster_count = 0
 
     post := &r.post_cb_mapped_data[r.frame_slot]
     sky := &r.sky_cb_mapped_data[r.frame_slot]
-    object_cb_base := int(r.frame_slot) * MAX_ENTITIES
+    object_cb_base := int(r.frame_slot) * MAX_DRAWS
     environment_sin := math.sin(math.to_radians(r.environment_settings.rotation_degrees))
     environment_cos := math.cos(math.to_radians(r.environment_settings.rotation_degrees))
 
@@ -129,12 +149,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
 
     // The shadow volume depends on caster bounds, so gather every draw first
     // and cull once the volume is known.
-    draw_bounds: [MAX_ENTITIES]WorldBounds
-    casts_shadow: [MAX_ENTITIES]bool
-    caster_bounds: [MAX_ENTITIES]WorldBounds
-    caster_count := 0
-
-    for i in 0..<scene.entity_count{
+    entities: for i in 0..<scene.entity_count{
         if !scene.alive[i] {
             continue
         }
@@ -152,67 +167,50 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
         }
         r.previous_models[i] = model
         r.previous_model_frame[i] = r.frame_counter
+        normal_matrix := alg.matrix4_inverse_f32(model)
+
         mesh := scene.mesh_renderers[i].mesh
-        bounds := bounds_to_world(g_assets.meshes[mesh].bounds, model)
-        draw_bounds[data.draw_count] = bounds
+        for submesh in g_assets.meshes[mesh].data.submeshes {
+            if data.draw_count == MAX_DRAWS {
+                r.culling_stats.draws_dropped = true
+                break entities
+            }
+            material := scene_material(scene, i, int(submesh.material_slot))
+            draw := &data.draws[data.draw_count]
+            draw^ = Draw{
+                mesh = mesh,
+                first_index = submesh.first_index,
+                index_count = submesh.index_count,
+                textures = {material.texture, g_assets.flat_normal, g_assets.one, g_assets.one},
+                bounds = bounds_to_world(submesh.bounds, model),
+                // Unlit marker meshes do not cast shadows.
+                casts_shadow = !material.unlit,
+            }
+            if material.normal_strength > 0 do draw.textures[1] = material.normal_texture
+            if material.use_roughness_map do draw.textures[2] = material.roughness_texture
+            if material.use_metallic_map do draw.textures[3] = material.metallic_texture
 
-        // Match the existing policy: unlit marker meshes do not cast shadows.
-        if !scene.materials[i].unlit {
-            casts_shadow[data.draw_count] = true
-            caster_bounds[caster_count] = bounds
-            caster_count += 1
+            if draw.casts_shadow {
+                data.caster_bounds[data.caster_count] = draw.bounds
+                data.caster_count += 1
+            }
+
+            r.object_cb_mapped_data[object_cb_base + data.draw_count] = ObjectConstants{
+                model = alg.transpose(model),
+                previous_model = alg.transpose(previous_model),
+                // transpose(inverse_transpose(M)) is inverse(M).
+                normal_matrix = normal_matrix,
+                material_tint = material.tint,
+                uv_scale = material.uv_scale,
+                roughness = material.roughness,
+                metallic = material.metallic,
+                normal_strength = material.normal_strength,
+                unlit = u32(material.unlit),
+                use_roughness_map = u32(material.use_roughness_map),
+                use_metallic_map = u32(material.use_metallic_map),
+            }
+            data.draw_count += 1
         }
-
-        unlit: u32 = 0
-        if scene.materials[i].unlit{
-            unlit = 1
-        }
-
-        use_roughness_map: u32 = 0
-        if scene.materials[i].use_roughness_map {
-            use_roughness_map = 1
-        }
-
-        use_metallic_map: u32 = 0
-        if scene.materials[i].use_metallic_map {
-            use_metallic_map = 1
-        }
-
-        r.object_cb_mapped_data[object_cb_base + data.draw_count] = ObjectConstants{
-            model = alg.transpose(model),
-            previous_model = alg.transpose(previous_model),
-            // transpose(inverse_transpose(M)) is inverse(M).
-            normal_matrix = alg.matrix4_inverse_f32(model),
-            material_tint = scene.materials[i].tint,
-            uv_scale = scene.materials[i].uv_scale,
-            roughness = scene.materials[i].roughness,
-            metallic = scene.materials[i].metallic,
-            normal_strength = scene.materials[i].normal_strength,
-            unlit = unlit,
-            use_roughness_map = use_roughness_map,
-            use_metallic_map = use_metallic_map,
-        }
-
-        data.draw_textures[data.draw_count] = scene.materials[i].texture
-        data.draw_meshes[data.draw_count] = mesh
-        data.draw_normals[data.draw_count] = g_assets.flat_normal
-        data.draw_roughness[data.draw_count] = g_assets.one
-        data.draw_metallic[data.draw_count] = g_assets.one
-
-        if scene.materials[i].normal_strength > 0 {
-            data.draw_normals[data.draw_count] = scene.materials[i].normal_texture
-        }
-        if scene.materials[i].use_roughness_map {
-            data.draw_roughness[data.draw_count] =
-                scene.materials[i].roughness_texture
-        }
-        if scene.materials[i].use_metallic_map {
-            data.draw_metallic[data.draw_count] =
-                scene.materials[i].metallic_texture
-        }
-
-
-        data.draw_count += 1
     }
 
     shadow := renderer_fit_shadow(
@@ -222,7 +220,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
         f32(r.width) / f32(r.height),
         camera_far_clip(camera),
         r.shadow_distance,
-        caster_bounds[:caster_count],
+        data.caster_bounds[:data.caster_count],
     )
     cascade_frustums: [SHADOW_CASCADE_COUNT]Frustum
     cascade_view_projection: [SHADOW_CASCADE_COUNT]alg.Matrix4f32
@@ -268,7 +266,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
     }
 
     for draw_index in 0..<data.draw_count {
-        bounds := draw_bounds[draw_index]
+        bounds := data.draws[draw_index].bounds
 
         if !r.frustum_culling_enabled ||
            frustum_intersects_bounds(camera_frustum, bounds) {
@@ -276,7 +274,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
             data.scene_draw_count += 1
         }
 
-        if casts_shadow[draw_index] {
+        if data.draws[draw_index].casts_shadow {
             r.culling_stats.shadow_total += 1
 
             for cascade in 0..<SHADOW_CASCADE_COUNT {
@@ -298,7 +296,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> (data: FrameDraws) {
         r.culling_stats.shadow_visible += count
     }
 
-    return
+    return data
 }
 
 TAA_JITTER_SAMPLES :: 8

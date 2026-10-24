@@ -35,6 +35,31 @@ Additional assets can be registered through the editor's import panel.
 If the default HDR file is unavailable, startup uses ambient-color lighting and
 a solid background instead.
 
+## Importing models
+
+The import panel (**Import Assets...**) accepts OBJ, glTF 2.0 (`.gltf` with its
+`.bin` and images beside it, or a single `.glb`), and PNG/JPEG textures.
+
+A glTF import copies the model and every file it references into
+`models/imported/<id>/` (embedded GLB images become files there), registers it
+in `assets.json`, and is undone completely if any step fails:
+
+- The model is flattened into one entity: node transforms are baked into the
+  vertices, and primitives sharing a material become one submesh.
+- Each material becomes a *material slot* with its base color (texture and
+  factor), normal map, and metallic/roughness. The packed metallic-roughness
+  texture is registered as a roughness texture (green channel) and a metallic
+  texture (blue channel). Select a slot in the Inspector to edit it; scenes
+  (format version 7) save every slot.
+- Geometry is converted from glTF's right-handed space to the renderer's
+  left-handed one. Missing normals and tangents are generated.
+- Not supported yet: emissive and occlusion maps, alpha mask/blend (drawn
+  opaque, with a note after import), animation and skinning (the static pose
+  loads), and compressed meshes (Draco, meshopt), which are rejected.
+
+Textures load at startup with mip maps built on the CPU, so a model with many
+textures (Sponza has about 120 after splitting) adds several seconds there.
+
 ## Debug UI
 
 The **Renderer controls** panel has exposure/bloom sliders, FPS, wall-clock frame

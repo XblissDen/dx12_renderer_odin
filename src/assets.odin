@@ -7,7 +7,8 @@ import "core:mem"
 import "core:os"
 import "core:strings"
 import "core:image"
-import "core:image/png"
+import c "core:c"
+import stbi "vendor:stb/image"
 
 MeshHandle :: distinct u32
 TextureHandle :: distinct u32
@@ -15,17 +16,27 @@ EnvironmentHandle :: distinct u32
 TextureUsage :: enum {albedo, normal, roughness, metallic, data}
 TextureSource :: enum {file, checkerboard, solid}
 MeshImport :: struct {flip_v: bool}
-TextureImport :: struct {flip_green: bool}
+TextureImport :: struct {
+    flip_green: bool,
+    // Use one channel (0-3) of the image as gray, e.g. roughness (1) or
+    // metallic (2) from a glTF occlusion-roughness-metallic texture.
+    channel: Maybe(int),
+}
 
 AssetMaterial :: struct {
+    name: string,
     albedo, normal, roughness_map, metallic_map: string,
     // Optional factors: omitted values get defaults; an explicit zero stays zero.
     roughness, metallic, normal_strength, uv_scale: Maybe(f32),
+    tint: Maybe([3]f32),
 }
 MeshDesc :: struct {
     id, name, path: string,
     settings: MeshImport `json:"import"`,
+    // Single-material models (OBJ) use `material`. Multi-material models
+    // (glTF) list one entry per submesh material slot in `materials` instead.
     material: AssetMaterial,
+    materials: []AssetMaterial,
 }
 TextureDesc :: struct {
     id, name, path: string,
@@ -44,7 +55,16 @@ AssetManifest :: struct {
     environments: []EnvironmentDesc,
     default_environment: string,
 }
-MeshAsset :: struct {desc: MeshDesc, label: cstring, data: MeshData, bounds: MeshBounds, material: Material}
+MeshAsset :: struct {
+    desc: MeshDesc,
+    label: cstring,
+    data: MeshData,
+    bounds: MeshBounds,
+    // Default materials for new entities: slot 0, then the rest.
+    material: Material,
+    material_slots: MaterialSlots,
+    material_names: [MAX_MODEL_MATERIALS]cstring,
+}
 TextureAsset :: struct {desc: TextureDesc, label: cstring, hidden: bool}
 AssetRegistry :: struct {
     arena: mem.Dynamic_Arena,
@@ -79,7 +99,11 @@ assets_clone_import :: proc(value: $T, allocator: mem.Allocator) -> T {
     return result
 }
 
-assets_prepare_catalog :: proc(model: ^MeshDesc = nil, texture: ^TextureDesc = nil) -> (path, contents: string, ok: bool) {
+assets_prepare_catalog :: proc(
+    model: ^MeshDesc = nil,
+    texture: ^TextureDesc = nil,
+    extra_textures: []TextureDesc = nil,
+) -> (path, contents: string, ok: bool) {
     manifest := AssetManifest{version = 1}
     models := make([dynamic]MeshDesc, context.temp_allocator)
     textures := make([dynamic]TextureDesc, context.temp_allocator)
@@ -90,6 +114,7 @@ assets_prepare_catalog :: proc(model: ^MeshDesc = nil, texture: ^TextureDesc = n
     }
     if model != nil do append(&models, model^)
     if texture != nil do append(&textures, texture^)
+    for desc in extra_textures do append(&textures, desc)
     manifest.models, manifest.textures = models[:], textures[:]
     for asset in g_assets.environments[1:] do append(&environments, asset.desc)
     manifest.environments = environments[:]
@@ -123,7 +148,7 @@ assets_import_id :: proc(source: string, model: bool, usage: TextureUsage) -> (i
     if len(slug) == 0 do append(&slug, 'a')
     prefix := "model" if model else fmt.tprintf("texture.%v", usage)
     directory := "models/imported" if model else "textures/imported"
-    extension := ".obj" if model else ".png"
+    extension := strings.to_lower(os.ext(source), context.temp_allocator)
     for number := 0; ; number += 1 {
         suffix := "" if number == 0 else fmt.tprintf(".%d", number)
         id = fmt.tprintf("%s.%s%s", prefix, string(slug[:]), suffix)
@@ -133,10 +158,21 @@ assets_import_id :: proc(source: string, model: bool, usage: TextureUsage) -> (i
 }
 
 // Process imports between UI construction and renderer_begin_frame.
+assets_is_gltf_path :: proc(path: string) -> bool {
+    extension := os.ext(path)
+    return strings.equal_fold(extension, ".gltf") || strings.equal_fold(extension, ".glb")
+}
+
 assets_import :: proc(request: AssetImportRequest) -> (model: MeshHandle, texture: TextureHandle, message: string) {
     if request.path == "" do return 0, 0, "Choose a source file."
-    extension := ".obj" if request.model else ".png"
-    if !strings.equal_fold(os.ext(request.path), extension) do return 0, 0, "Choose an OBJ model or PNG texture."
+    if request.model && assets_is_gltf_path(request.path) {
+        model, message = assets_import_gltf(request)
+        return model, 0, message
+    }
+    extension := os.ext(request.path)
+    valid_extension := strings.equal_fold(extension, ".obj") if request.model else
+        strings.equal_fold(extension, ".png") || strings.equal_fold(extension, ".jpg") || strings.equal_fold(extension, ".jpeg")
+    if !valid_extension do return 0, 0, "Choose an OBJ/glTF model or a PNG/JPEG texture."
     if !request.model && g_renderer.srv_next >= SRV_HEAP_CAPACITY do return 0, 0, "The texture descriptor heap is full."
 
     scratch, owner: mem.Dynamic_Arena
@@ -251,6 +287,173 @@ assets_import :: proc(request: AssetImportRequest) -> (model: MeshHandle, textur
     return model, texture, ""
 }
 
+// Imports a .gltf/.glb, its buffers and its images into models/imported/<id>/,
+// and registers the model plus one texture per (image, use) in a single
+// catalog write. The packed metallic-roughness texture becomes a roughness
+// texture (green channel) and a metallic texture (blue channel). Nothing is
+// added, and the folder is removed again, unless every step succeeds.
+assets_import_gltf :: proc(request: AssetImportRequest) -> (model: MeshHandle, message: string) {
+    scratch, owner: mem.Dynamic_Arena
+    mem.dynamic_arena_init(&scratch)
+    defer mem.dynamic_arena_destroy(&scratch)
+    context.temp_allocator = mem.dynamic_arena_allocator(&scratch)
+    mem.dynamic_arena_init(&owner)
+    committed := false
+    defer if !committed do mem.dynamic_arena_destroy(&owner)
+    allocator := mem.dynamic_arena_allocator(&owner)
+
+    id, _ := assets_import_id(request.path, true, .albedo)
+    folder := fmt.tprintf("models/imported/%s", id)
+    if os.exists(folder) do return 0, "The import folder already exists; remove it or choose another name."
+    if os.make_directory_all(folder) != nil do return 0, "Cannot create the project import folder."
+    // The folder did not exist before, so removing it only undoes this import.
+    defer if !committed do os.remove_all(folder)
+
+    // Copy the model and every file it references, keeping relative paths.
+    external, external_error := gltf_external_files(request.path)
+    if external_error != "" do return 0, external_error
+    source_dir := os.dir(request.path)
+    model_path := fmt.tprintf("%s/%s", folder, os.base(request.path))
+    if os.copy_file(model_path, request.path) != nil do return 0, "Could not copy the model into the project."
+    for relative in external {
+        destination := fmt.tprintf("%s/%s", folder, relative)
+        if os.make_directory_all(os.dir(destination)) != nil do return 0, "Cannot create an import subfolder."
+        if os.copy_file(destination, fmt.tprintf("%s/%s", source_dir, relative)) != nil {
+            return 0, fmt.tprintf("Could not copy %s; is it next to the model?", relative)
+        }
+    }
+
+    gltf, load_error := gltf_load(model_path)
+    if load_error != "" do return 0, load_error
+    mesh_data := gltf.mesh
+    defer if !committed do mesh_destroy(mesh_data)
+
+    // Embedded images (GLB, data URIs) become files beside the model.
+    image_paths := make([]string, len(gltf.images), context.temp_allocator)
+    for image, i in gltf.images {
+        if image.uri != "" {
+            image_paths[i] = fmt.tprintf("%s/%s", folder, image.uri)
+            continue
+        }
+        extension := ".jpg" if image.mime_type == "image/jpeg" else ".png"
+        image_paths[i] = fmt.tprintf("%s/image%d%s", folder, i, extension)
+        if os.write_entire_file(image_paths[i], image.data) != nil do return 0, "Could not write an embedded glTF image."
+    }
+
+    // One texture per (image, use); several materials often share an image.
+    Texture_Key :: struct {image: int, usage: TextureUsage}
+    texture_ids := make(map[Texture_Key]string, allocator = context.temp_allocator)
+    texture_descs := make([dynamic]TextureDesc, context.temp_allocator)
+    texture_id :: proc(
+        image: int, usage: TextureUsage, model_id: string, image_paths: []string,
+        ids: ^map[Texture_Key]string, descs: ^[dynamic]TextureDesc,
+    ) -> string {
+        if image < 0 do return ""
+        key := Texture_Key{image, usage}
+        if existing, found := ids[key]; found do return existing
+        id := fmt.tprintf("%s.image%d.%v", model_id, image, usage)
+        desc := TextureDesc{id = id, name = os.stem(image_paths[image]), path = image_paths[image], usage = usage, source = .file}
+        // glTF packs roughness in green and metallic in blue.
+        if usage == .roughness do desc.settings.channel = 1
+        if usage == .metallic do desc.settings.channel = 2
+        append(descs, desc)
+        ids[key] = id
+        return id
+    }
+
+    materials := make([]AssetMaterial, len(gltf.materials), context.temp_allocator)
+    for source, slot in gltf.materials {
+        mr := source.metallic_roughness_image
+        materials[slot] = AssetMaterial{
+            name = source.name,
+            albedo = texture_id(source.base_color_image, .albedo, id, image_paths, &texture_ids, &texture_descs),
+            normal = texture_id(source.normal_image, .normal, id, image_paths, &texture_ids, &texture_descs),
+            roughness_map = texture_id(mr, .roughness, id, image_paths, &texture_ids, &texture_descs),
+            metallic_map = texture_id(mr, .metallic, id, image_paths, &texture_ids, &texture_descs),
+            roughness = clamp(source.roughness, 0, 1),
+            metallic = clamp(source.metallic, 0, 1),
+            normal_strength = max(source.normal_scale, 0),
+            tint = [3]f32{source.base_color.r, source.base_color.g, source.base_color.b},
+        }
+    }
+    if g_renderer.srv_next + u32(len(texture_descs)) > SRV_HEAP_CAPACITY {
+        return 0, "Not enough texture descriptor space for this model."
+    }
+
+    name := strings.trim_space(request.name)
+    if name == "" do name = os.stem(request.path)
+    mesh_desc := assets_clone_import(MeshDesc{id = id, name = name, path = model_path, materials = materials}, allocator)
+    for &desc in texture_descs do desc = assets_clone_import(desc, allocator)
+
+    catalog_tmp, catalog_contents, prepared := assets_prepare_catalog(model = &mesh_desc, extra_textures = texture_descs[:])
+    if !prepared do return 0, "Could not write the updated asset catalog."
+    defer os.remove(catalog_tmp)
+
+    // GPU uploads. Startup uploads reuse allocator 0; drain prior frame work first.
+    renderer_wait_for_gpu()
+    gpu_mesh: GpuMesh
+    gpu_textures := make([dynamic]GpuTexture, context.temp_allocator)
+    defer if !committed {
+        if gpu_mesh.vertex_buffer != nil do gpu_mesh.vertex_buffer->Release()
+        if gpu_mesh.index_buffer != nil do gpu_mesh.index_buffer->Release()
+        for texture in gpu_textures do if texture.resource != nil do texture.resource->Release()
+    }
+    if renderer_upload_mesh(&gpu_mesh, mesh_data) < 0 do return 0, "GPU model upload failed."
+    for desc, i in texture_descs {
+        pixels, width, height, pixel_error := assets_try_texture_pixels(desc, context.temp_allocator)
+        if pixel_error != "" do return 0, fmt.tprintf("%s (%s)", pixel_error, desc.path)
+        texture := GpuTexture{srv_index = g_renderer.srv_next + u32(i)}
+        if renderer_upload_texture(&texture, desc, pixels, width, height) < 0 do return 0, "GPU texture upload failed."
+        append(&gpu_textures, texture)
+    }
+
+    current, read_error := os.read_entire_file(g_assets.catalog_path, context.temp_allocator)
+    if read_error != nil || string(current) != g_assets.catalog_text do return 0, "Catalog changed on disk. Restart to load those edits before importing."
+    saved_text := strings.clone(catalog_contents) or_else panic("Catalog snapshot allocation failed")
+    defer if !committed do delete(saved_text)
+    if os.rename(catalog_tmp, g_assets.catalog_path) != nil do return 0, "Cannot replace assets.json; check whether it is writable."
+
+    // Committed on disk: register textures first, so the materials resolve.
+    committed = true
+    for desc in texture_descs {
+        assets_register_texture(desc)
+    }
+    textures := make([]GpuTexture, len(g_renderer.textures) + len(gpu_textures))
+    copy(textures, g_renderer.textures)
+    copy(textures[len(g_renderer.textures):], gpu_textures[:])
+    delete(g_renderer.textures)
+    g_renderer.textures = textures
+    g_renderer.srv_next += u32(len(gpu_textures))
+
+    material, slots, names, materials_ok := assets_model_materials(mesh_desc, mesh_data)
+    assert(materials_ok, "Imported glTF materials failed to resolve")
+    model = MeshHandle(len(g_assets.meshes))
+    append(&g_assets.meshes, MeshAsset{
+        desc = mesh_desc,
+        label = strings.clone_to_cstring(name, allocator) or_else panic("Asset label allocation failed"),
+        data = mesh_data,
+        bounds = mesh_compute_bounds(mesh_data),
+        material = material,
+        material_slots = slots,
+        material_names = names,
+    })
+    g_assets.mesh_ids[mesh_desc.id] = model
+    meshes := make([]GpuMesh, len(g_renderer.meshes) + 1)
+    copy(meshes, g_renderer.meshes)
+    meshes[len(meshes) - 1] = gpu_mesh
+    delete(g_renderer.meshes)
+    g_renderer.meshes = meshes
+
+    append(&g_assets.import_arenas, owner)
+    delete(g_assets.catalog_text)
+    g_assets.catalog_text = saved_text
+
+    if len(gltf.warnings) > 0 {
+        message = fmt.aprintf("Imported with %d note(s): %s", len(gltf.warnings), gltf.warnings[0], allocator = allocator)
+    }
+    return
+}
+
 assets_mesh_valid :: proc(h: MeshHandle) -> bool {return h != 0 && int(h) < len(g_assets.meshes)}
 assets_texture_valid :: proc(h: TextureHandle) -> bool {return h != 0 && int(h) < len(g_assets.textures)}
 assets_optional_texture_valid :: proc(h: TextureHandle) -> bool {return h == 0 || assets_texture_valid(h)}
@@ -283,8 +486,52 @@ assets_register_texture :: proc(desc: TextureDesc, hidden := false) -> TextureHa
     return handle
 }
 
+// A model's default materials, one per submesh slot, and their display names.
+assets_model_materials :: proc(desc: MeshDesc, mesh: MeshData) -> (
+    material: Material,
+    slots: MaterialSlots,
+    names: [MAX_MODEL_MATERIALS]cstring,
+    ok: bool,
+) {
+    sources := desc.materials if len(desc.materials) > 0 else []AssetMaterial{desc.material}
+    if len(sources) > MAX_MODEL_MATERIALS do return
+    for submesh in mesh.submeshes {
+        if int(submesh.material_slot) >= len(sources) do return
+    }
+
+    allocator := mem.dynamic_arena_allocator(&g_assets.arena)
+    for source, slot in sources {
+        resolved := assets_material(source) or_return
+        if slot == 0 {
+            material = resolved
+        } else {
+            slots.extra[slot - 1] = resolved
+        }
+        name := source.name if source.name != "" else fmt.tprintf("Material %d", slot)
+        names[slot] = strings.clone_to_cstring(name, allocator) or_else panic("Material name allocation failed")
+    }
+    slots.count = len(sources)
+    return material, slots, names, true
+}
+
+// OBJ or glTF geometry for a catalog entry.
+assets_load_mesh :: proc(desc: MeshDesc) -> (mesh: MeshData, error: string) {
+    extension := strings.to_lower(os.ext(desc.path), context.temp_allocator)
+    switch extension {
+        case ".gltf", ".glb":
+            model: Gltf_Model
+            model, error = gltf_load(desc.path)
+            return model.mesh, error
+        case:
+            ok: bool
+            mesh, ok = mesh_load_obj(desc.path, flip_v = desc.settings.flip_v)
+            if !ok do return {}, "Invalid or empty OBJ geometry."
+            return mesh, ""
+    }
+}
+
 assets_material :: proc(desc: AssetMaterial) -> (material: Material, ok: bool) {
-    material = {tint = {1, 1, 1}, texture = g_assets.white, roughness = 0.8, uv_scale = 1}
+    material = {tint = desc.tint.? or_else {1, 1, 1}, texture = g_assets.white, roughness = 0.8, uv_scale = 1}
     if desc.albedo != "" {
         material.texture = assets_texture(desc.albedo)
         if !texture_asset_is_albedo(material.texture) do return {}, false
@@ -322,10 +569,7 @@ assets_material :: proc(desc: AssetMaterial) -> (material: Material, ok: bool) {
 }
 
 assets_destroy :: proc() {
-    for asset in g_assets.meshes {
-        delete(asset.data.vertices)
-        delete(asset.data.indices)
-    }
+    for asset in g_assets.meshes do mesh_destroy(asset.data)
     delete(g_assets.meshes)
     delete(g_assets.textures)
     delete(g_assets.environments)
@@ -437,20 +681,26 @@ assets_init :: proc(path: string) -> (message: string) {
     }
     for desc in manifest.models {
         if desc.id == "" || desc.path == "" || assets_mesh(desc.id) != 0 do return "Empty/duplicate model ID or missing path."
-        mesh, ok := mesh_load_obj(desc.path, flip_v = desc.settings.flip_v)
-        if !ok do return "Failed to import model."
-        material, material_ok := assets_material(desc.material)
+        mesh, mesh_error := assets_load_mesh(desc)
+        if mesh_error != "" {
+            fmt.eprintln("Model", desc.id, ":", mesh_error)
+            return "Failed to import model."
+        }
+        material, slots, names, material_ok := assets_model_materials(desc, mesh)
         if !material_ok {
-            delete(mesh.vertices); delete(mesh.indices)
+            mesh_destroy(mesh)
             return "Invalid model default material reference."
         }
         bounds := mesh_compute_bounds(mesh)
         if !bounds.valid {
-            delete(mesh.vertices); delete(mesh.indices)
+            mesh_destroy(mesh)
             return "Model has no geometry."
         }
         handle := MeshHandle(len(g_assets.meshes))
-        append(&g_assets.meshes, MeshAsset{desc = desc, label = assets_label(desc.name, desc.id), data = mesh, bounds = bounds, material = material})
+        append(&g_assets.meshes, MeshAsset{
+            desc = desc, label = assets_label(desc.name, desc.id), data = mesh, bounds = bounds,
+            material = material, material_slots = slots, material_names = names,
+        })
         g_assets.mesh_ids[desc.id] = handle
     }
     assets_json_init()
@@ -475,23 +725,42 @@ assets_try_texture_pixels :: proc(desc: TextureDesc, allocator := context.alloca
         return
     }
 
-    img, err := image.load_from_file(desc.path, {.alpha_add_if_missing})
-    if err != nil {
-        return nil, 0, 0, "Could not decode the texture. Choose a valid PNG."
+    // stb_image decodes PNG and JPEG. 16-bit PNGs load at full precision and
+    // are rounded to 8 bits (stb's own reduction truncates).
+    path := strings.clone_to_cstring(desc.path, context.temp_allocator) or_else panic("Texture path allocation failed")
+    image_width, image_height, image_channels: c.int
+    wide := bool(stbi.is_16_bit(path))
+    decoded: rawptr
+    if wide {
+        decoded = stbi.load_16(path, &image_width, &image_height, &image_channels, 4)
+    } else {
+        decoded = stbi.load(path, &image_width, &image_height, &image_channels, 4)
     }
-    defer image.destroy(img)
-
-    if img.channels != 4 || (img.depth != 8 && img.depth != 16) {
-        return nil, 0, 0, "Unsupported texture pixel format."
+    if decoded == nil {
+        return nil, 0, 0, "Could not decode the texture. Choose a valid PNG or JPEG."
+    }
+    defer stbi.image_free(decoded)
+    if image_width <= 0 || image_height <= 0 || u64(image_width) * u64(image_height) > u64(image.MAX_DIMENSIONS) {
+        return nil, 0, 0, "Unsupported texture dimensions."
     }
 
-    width, height = u32(img.width), u32(img.height)
+    width, height = u32(image_width), u32(image_height)
     pixels = make([]u8, int(width * height) * 4, allocator)
-    if img.depth == 16 {
-        source := ([^]u16)(raw_data(img.pixels.buf[:]))
+    if wide {
+        source := ([^]u16)(decoded)
         for i in 0..<len(pixels) do pixels[i] = u8((u32(source[i]) + 128) / 257)
     } else {
-        copy(pixels, img.pixels.buf[:])
+        copy(pixels, ([^]u8)(decoded)[:len(pixels)])
+    }
+    if channel, has_channel := desc.settings.channel.?; has_channel {
+        if channel < 0 || channel > 3 do return nil, 0, 0, "Invalid texture channel."
+        for pixel in 0..<int(width * height) {
+            value := pixels[pixel * 4 + channel]
+            pixels[pixel * 4 + 0] = value
+            pixels[pixel * 4 + 1] = value
+            pixels[pixel * 4 + 2] = value
+            pixels[pixel * 4 + 3] = 255
+        }
     }
     if desc.settings.flip_green {
         for pixel in 0..<int(width * height) do pixels[pixel * 4 + 1] = 255 - pixels[pixel * 4 + 1]

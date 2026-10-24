@@ -10,11 +10,49 @@ import "core:math"
 MeshData :: struct {
     vertices: []Vertex,
     indices: []u32,
+    // Index ranges drawn with one material slot each; together they cover
+    // all indices. An OBJ has a single submesh.
+    submeshes: []Submesh,
 }
 
 MeshBounds :: struct {
     minimum, maximum: linalg.Vector3f32,
     valid: bool,
+}
+
+Submesh :: struct {
+    first_index, index_count: u32,
+    material_slot: u32,
+    // Local-space bounds of just this range, for per-draw culling.
+    bounds: MeshBounds,
+}
+
+// One submesh covering the whole mesh, for single-material sources.
+mesh_single_submesh :: proc(mesh: ^MeshData, allocator := context.allocator) {
+    mesh.submeshes = make([]Submesh, 1, allocator)
+    mesh.submeshes[0] = {index_count = u32(len(mesh.indices))}
+    mesh_compute_submesh_bounds(mesh^)
+}
+
+mesh_compute_submesh_bounds :: proc(mesh: MeshData) {
+    for &submesh in mesh.submeshes {
+        submesh.bounds = {}
+        for i in submesh.first_index..<submesh.first_index + submesh.index_count {
+            p := linalg.Vector3f32(mesh.vertices[mesh.indices[i]].position)
+            if !submesh.bounds.valid {
+                submesh.bounds = {minimum = p, maximum = p, valid = true}
+                continue
+            }
+            submesh.bounds.minimum = linalg.min(submesh.bounds.minimum, p)
+            submesh.bounds.maximum = linalg.max(submesh.bounds.maximum, p)
+        }
+    }
+}
+
+mesh_destroy :: proc(mesh: MeshData) {
+    delete(mesh.vertices)
+    delete(mesh.indices)
+    delete(mesh.submeshes)
 }
 
 mesh_compute_bounds :: proc(mesh: MeshData) -> MeshBounds{
@@ -157,6 +195,7 @@ mesh_load_obj :: proc(
     mesh.vertices = out_vertices[:]
     mesh.indices  = out_indices[:]
     mesh_generate_tangents(mesh)
+    mesh_single_submesh(&mesh, allocator)
     return mesh, true
 }
 

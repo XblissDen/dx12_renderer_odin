@@ -90,7 +90,7 @@ renderer_srv_gpu :: proc(index: u32) -> d3d12.GPU_DESCRIPTOR_HANDLE {
     return handle
 }
 
-renderer_render_depth_prepass :: proc(draw_meshes: []MeshHandle, draw_indices: []u32) {
+renderer_render_depth_prepass :: proc(draws: []Draw, draw_indices: []u32) {
     r := &g_renderer
 
     renderer_begin_gpu_pass(.Depth_Prepass)
@@ -118,18 +118,7 @@ renderer_render_depth_prepass :: proc(draw_meshes: []MeshHandle, draw_indices: [
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
     renderer_bind_cbv(.Frame_Constants, renderer_frame_cb_address())
 
-    for draw_index in draw_indices {
-        i := int(draw_index)
-        assert(i >= 0 && i < len(draw_meshes))
-        renderer_bind_cbv(.Object_Constants, renderer_object_cb_address(i))
-
-        mesh_index := int(draw_meshes[i])
-        assert(mesh_index > 0 && mesh_index < len(r.meshes))
-        gpu_mesh := &r.meshes[mesh_index]
-        r.command_list->IASetVertexBuffers(0, 1, &gpu_mesh.vertex_buffer_view)
-        r.command_list->IASetIndexBuffer(&gpu_mesh.index_buffer_view)
-        r.command_list->DrawIndexedInstanced(gpu_mesh.index_count, 1, 0, 0, 0)
-    }
+    for draw_index in draw_indices do renderer_draw(draws, draw_index)
 
     // Read-only from here to the end of the frame: SSAO samples it and the
     // lit and selection passes test against it.

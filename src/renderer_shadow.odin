@@ -226,7 +226,7 @@ renderer_create_shadow_map :: proc() {
 }
 
 renderer_render_shadow_pass :: proc(
-    draw_meshes: []MeshHandle,
+    draws: []Draw,
     cascade_draws: [SHADOW_CASCADE_COUNT][]u32,
 ) {
     r := &g_renderer
@@ -273,20 +273,7 @@ renderer_render_shadow_pass :: proc(
         // VSShadow reads this cascade's matrix from the frame constants.
         r.command_list->SetGraphicsRoot32BitConstant(u32(Root_Slot.Shadow_Cascade), u32(cascade), 0)
 
-        for draw_index in cascade_draws[cascade] {
-            i := int(draw_index)
-            assert(i >= 0 && i < len(draw_meshes))
-
-            renderer_bind_cbv(.Object_Constants, renderer_object_cb_address(i))
-
-            mesh_index := int(draw_meshes[i])
-            assert(mesh_index > 0 && mesh_index < len(r.meshes))
-            gpu_mesh := &r.meshes[mesh_index]
-
-            r.command_list->IASetVertexBuffers(0, 1, &gpu_mesh.vertex_buffer_view)
-            r.command_list->IASetIndexBuffer(&gpu_mesh.index_buffer_view)
-            r.command_list->DrawIndexedInstanced(gpu_mesh.index_count, 1, 0, 0, 0)
-        }
+        for draw_index in cascade_draws[cascade] do renderer_draw(draws, draw_index)
     }
 
     shadow_barrier.Transition.StateBefore = {.DEPTH_WRITE}

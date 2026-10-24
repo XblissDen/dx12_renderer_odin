@@ -120,10 +120,10 @@ window_open_asset_file :: proc(model: bool, output: []u8) -> i32 {
 
     path: [32768]u16
     filter: win32.wstring =
-        win32.L("Wavefront OBJ (*.obj)\x00*.obj\x00\x00")
+        win32.L("Models (*.obj;*.gltf;*.glb)\x00*.obj;*.gltf;*.glb\x00\x00")
 
     if !model {
-        filter = win32.L("PNG textures (*.png)\x00*.png\x00\x00")
+        filter = win32.L("Textures (*.png;*.jpg;*.jpeg)\x00*.png;*.jpg;*.jpeg\x00\x00")
     }
 
     dialog := win32.OPENFILENAMEW{

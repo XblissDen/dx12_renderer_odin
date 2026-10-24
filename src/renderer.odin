@@ -15,7 +15,7 @@ import "core:image/png"
 FRAME_COUNT :: 2
 
 SHADOW_MAP_SIZE :: 2048
-SRV_HEAP_CAPACITY :: 16384 // Includes FRAME_COUNT * MAX_ENTITIES material tables.
+SRV_HEAP_CAPACITY :: 65536 // Includes FRAME_COUNT * MAX_DRAWS material tables.
 
 BLOOM_TARGET_COUNT :: 2
 BLOOM_PASS_COUNT :: 3 // Extract, horizontal blur, vertical blur.
@@ -85,9 +85,9 @@ renderer_material_table :: proc(
     textures: [MATERIAL_TEXTURE_COUNT]TextureHandle,
 ) -> d3d12.GPU_DESCRIPTOR_HANDLE {
     r := &g_renderer
-    assert(draw_index >= 0 && draw_index < MAX_ENTITIES)
+    assert(draw_index >= 0 && draw_index < MAX_DRAWS)
     first := r.material_srv_start +
-             u32((int(r.frame_slot) * MAX_ENTITIES + draw_index) * MATERIAL_TEXTURE_COUNT)
+             u32((int(r.frame_slot) * MAX_DRAWS + draw_index) * MATERIAL_TEXTURE_COUNT)
 
     destination, source: d3d12.CPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetCPUDescriptorHandleForHeapStart(&destination)
@@ -319,6 +319,9 @@ Renderer :: struct {
     // A model is only reused if it was recorded on the previous frame.
     frame_counter: u64,
     previous_view_projection: alg.Matrix4f32,
+    // This frame's submesh draws (rebuilt by renderer_prepare_frame).
+    frame_draws: FrameDraws,
+
     previous_models: [MAX_ENTITIES]alg.Matrix4f32,
     previous_model_frame: [MAX_ENTITIES]u64,
 
@@ -635,6 +638,21 @@ ROOT_LAYOUT := [Root_Slot]Root_Param{
     .Shadow_Cascade      = {.Constants, 5, 1, .VERTEX},
     .Texture_T8          = {.Table, 8, 1, .PIXEL},
     .Depth               = {.Table, 9, 1, .PIXEL},
+}
+
+// Binds a draw's object constants and geometry and draws its submesh range.
+renderer_draw :: proc(draws: []Draw, draw_index: u32) {
+    r := &g_renderer
+    i := int(draw_index)
+    assert(i < len(draws))
+    draw := draws[i]
+    renderer_bind_cbv(.Object_Constants, renderer_object_cb_address(i))
+
+    assert(int(draw.mesh) > 0 && int(draw.mesh) < len(r.meshes))
+    gpu_mesh := &r.meshes[draw.mesh]
+    r.command_list->IASetVertexBuffers(0, 1, &gpu_mesh.vertex_buffer_view)
+    r.command_list->IASetIndexBuffer(&gpu_mesh.index_buffer_view)
+    r.command_list->DrawIndexedInstanced(draw.index_count, 1, draw.first_index, 0, 0)
 }
 
 renderer_bind_cbv :: proc(slot: Root_Slot, address: u64) {
@@ -1165,7 +1183,7 @@ renderer_load_textures :: proc(){
     r.srv_descriptor_size = r.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV)
 
     // Per frame in flight and per draw: albedo, normal, roughness, metallic.
-    r.material_srv_start = renderer_alloc_srv(FRAME_COUNT * MAX_ENTITIES * MATERIAL_TEXTURE_COUNT)
+    r.material_srv_start = renderer_alloc_srv(FRAME_COUNT * MAX_DRAWS * MATERIAL_TEXTURE_COUNT)
 
     r.shadow_srv_index = renderer_alloc_srv()
     r.hdr_srv_index = renderer_alloc_srv()
@@ -1418,27 +1436,18 @@ renderer_render_frame :: proc(scene: ^Scene) {
 
     frame := renderer_prepare_frame(scene)
 
+    draws := frame.draws[:frame.draw_count]
     cascade_draws: [SHADOW_CASCADE_COUNT][]u32
     for cascade in 0..<SHADOW_CASCADE_COUNT {
         cascade_draws[cascade] = frame.shadow_indices[cascade][:frame.shadow_draw_count[cascade]]
     }
-    renderer_render_shadow_pass(frame.draw_meshes[:frame.draw_count], cascade_draws)
+    renderer_render_shadow_pass(draws, cascade_draws)
 
     // Depth first: SSAO reads it, and the lit pass only shades visible pixels.
-    renderer_render_depth_prepass(
-        frame.draw_meshes[:frame.draw_count],
-        frame.scene_indices[:frame.scene_draw_count],
-    )
+    visible := frame.scene_indices[:frame.scene_draw_count]
+    renderer_render_depth_prepass(draws, visible)
     renderer_render_ssao()
-
-    renderer_render_scene_pass(
-        frame.draw_meshes[:frame.draw_count],
-        frame.draw_textures[:frame.draw_count],
-        frame.draw_normals[:frame.draw_count],
-        frame.draw_roughness[:frame.draw_count],
-        frame.draw_metallic[:frame.draw_count],
-        frame.scene_indices[:frame.scene_draw_count],
-    )
+    renderer_render_scene_pass(draws, visible)
 
     // TAA resolves in HDR, so bloom and tone mapping see the stable image.
     renderer_render_taa()

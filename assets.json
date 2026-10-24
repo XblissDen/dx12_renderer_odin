@@ -9,6 +9,7 @@
         "flip_v": false
       },
       "material": {
+        "name": "",
         "albedo": "portrait",
         "normal": "",
         "roughness_map": "",
@@ -16,8 +17,12 @@
         "roughness": 0.80000001,
         "metallic": null,
         "normal_strength": null,
-        "uv_scale": null
-      }
+        "uv_scale": null,
+        "tint": null
+      },
+      "materials": [
+
+      ]
     },
     {
       "id": "pyramid",
@@ -27,6 +32,7 @@
         "flip_v": false
       },
       "material": {
+        "name": "",
         "albedo": "checkerboard",
         "normal": "",
         "roughness_map": "",
@@ -34,8 +40,12 @@
         "roughness": 0.28000000,
         "metallic": 0.75000000,
         "normal_strength": null,
-        "uv_scale": null
-      }
+        "uv_scale": null,
+        "tint": null
+      },
+      "materials": [
+
+      ]
     },
     {
       "id": "model.cannon_01_2k.2",
@@ -45,6 +55,7 @@
         "flip_v": true
       },
       "material": {
+        "name": "",
         "albedo": "texture.albedo.cannon_01_diff_2k.1",
         "normal": "texture.normal.cannon_01_nor_dx_2k.1",
         "roughness_map": "texture.roughness.cannon_01_rough_2k.1",
@@ -52,8 +63,628 @@
         "roughness": null,
         "metallic": null,
         "normal_strength": null,
-        "uv_scale": null
-      }
+        "uv_scale": null,
+        "tint": null
+      },
+      "materials": [
+
+      ]
+    },
+    {
+      "id": "model.boxtextured",
+      "name": "BoxTextured",
+      "path": "models/imported/model.boxtextured/BoxTextured.gltf",
+      "import": {
+        "flip_v": false
+      },
+      "material": {
+        "name": "",
+        "albedo": "",
+        "normal": "",
+        "roughness_map": "",
+        "metallic_map": "",
+        "roughness": null,
+        "metallic": null,
+        "normal_strength": null,
+        "uv_scale": null,
+        "tint": null
+      },
+      "materials": [
+        {
+          "name": "Texture",
+          "albedo": "model.boxtextured.image0.albedo",
+          "normal": "",
+          "roughness_map": "",
+          "metallic_map": "",
+          "roughness": 1.00000000,
+          "metallic": 0.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ]
+        }
+      ]
+    },
+    {
+      "id": "model.damagedhelmet",
+      "name": "DamagedHelmet",
+      "path": "models/imported/model.damagedhelmet/DamagedHelmet.glb",
+      "import": {
+        "flip_v": false
+      },
+      "material": {
+        "name": "",
+        "albedo": "",
+        "normal": "",
+        "roughness_map": "",
+        "metallic_map": "",
+        "roughness": null,
+        "metallic": null,
+        "normal_strength": null,
+        "uv_scale": null,
+        "tint": null
+      },
+      "materials": [
+        {
+          "name": "Material_MR",
+          "albedo": "model.damagedhelmet.image0.albedo",
+          "normal": "model.damagedhelmet.image4.normal",
+          "roughness_map": "model.damagedhelmet.image1.roughness",
+          "metallic_map": "model.damagedhelmet.image1.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ]
+        }
+      ]
+    },
+    {
+      "id": "model.flighthelmet",
+      "name": "FlightHelmet",
+      "path": "models/imported/model.flighthelmet/FlightHelmet.gltf",
+      "import": {
+        "flip_v": false
+      },
+      "material": {
+        "name": "",
+        "albedo": "",
+        "normal": "",
+        "roughness_map": "",
+        "metallic_map": "",
+        "roughness": null,
+        "metallic": null,
+        "normal_strength": null,
+        "uv_scale": null,
+        "tint": null
+      },
+      "materials": [
+        {
+          "name": "HoseMat",
+          "albedo": "model.flighthelmet.image2.albedo",
+          "normal": "model.flighthelmet.image0.normal",
+          "roughness_map": "model.flighthelmet.image1.roughness",
+          "metallic_map": "model.flighthelmet.image1.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ]
+        },
+        {
+          "name": "RubberWoodMat",
+          "albedo": "model.flighthelmet.image2.albedo",
+          "normal": "model.flighthelmet.image0.normal",
+          "roughness_map": "model.flighthelmet.image1.roughness",
+          "metallic_map": "model.flighthelmet.image1.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ]
+        },
+        {
+          "name": "GlassPlasticMat",
+          "albedo": "model.flighthelmet.image5.albedo",
+          "normal": "model.flighthelmet.image3.normal",
+          "roughness_map": "model.flighthelmet.image4.roughness",
+          "metallic_map": "model.flighthelmet.image4.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ]
+        },
+        {
+          "name": "MetalPartsMat",
+          "albedo": "model.flighthelmet.image8.albedo",
+          "normal": "model.flighthelmet.image6.normal",
+          "roughness_map": "model.flighthelmet.image7.roughness",
+          "metallic_map": "model.flighthelmet.image7.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ]
+        },
+        {
+          "name": "LeatherPartsMat",
+          "albedo": "model.flighthelmet.image11.albedo",
+          "normal": "model.flighthelmet.image9.normal",
+          "roughness_map": "model.flighthelmet.image10.roughness",
+          "metallic_map": "model.flighthelmet.image10.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ]
+        },
+        {
+          "name": "LensesMat",
+          "albedo": "model.flighthelmet.image14.albedo",
+          "normal": "model.flighthelmet.image12.normal",
+          "roughness_map": "model.flighthelmet.image13.roughness",
+          "metallic_map": "model.flighthelmet.image13.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ]
+        }
+      ]
+    },
+    {
+      "id": "model.sponza",
+      "name": "Sponza",
+      "path": "models/imported/model.sponza/Sponza.gltf",
+      "import": {
+        "flip_v": false
+      },
+      "material": {
+        "name": "",
+        "albedo": "",
+        "normal": "",
+        "roughness_map": "",
+        "metallic_map": "",
+        "roughness": null,
+        "metallic": null,
+        "normal_strength": null,
+        "uv_scale": null,
+        "tint": null
+      },
+      "materials": [
+        {
+          "name": "Material 0",
+          "albedo": "model.sponza.image1.albedo",
+          "normal": "model.sponza.image0.normal",
+          "roughness_map": "model.sponza.image2.roughness",
+          "metallic_map": "model.sponza.image2.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 3",
+          "albedo": "model.sponza.image4.albedo",
+          "normal": "model.sponza.image3.normal",
+          "roughness_map": "model.sponza.image5.roughness",
+          "metallic_map": "model.sponza.image5.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 1",
+          "albedo": "model.sponza.image7.albedo",
+          "normal": "model.sponza.image6.normal",
+          "roughness_map": "model.sponza.image8.roughness",
+          "metallic_map": "model.sponza.image8.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 4",
+          "albedo": "model.sponza.image10.albedo",
+          "normal": "model.sponza.image9.normal",
+          "roughness_map": "model.sponza.image11.roughness",
+          "metallic_map": "model.sponza.image11.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 5",
+          "albedo": "model.sponza.image13.albedo",
+          "normal": "model.sponza.image12.normal",
+          "roughness_map": "model.sponza.image14.roughness",
+          "metallic_map": "model.sponza.image14.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 6",
+          "albedo": "model.sponza.image16.albedo",
+          "normal": "model.sponza.image15.normal",
+          "roughness_map": "model.sponza.image17.roughness",
+          "metallic_map": "model.sponza.image17.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 7",
+          "albedo": "model.sponza.image19.albedo",
+          "normal": "model.sponza.image18.normal",
+          "roughness_map": "model.sponza.image20.roughness",
+          "metallic_map": "model.sponza.image20.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 8",
+          "albedo": "model.sponza.image22.albedo",
+          "normal": "model.sponza.image21.normal",
+          "roughness_map": "model.sponza.image23.roughness",
+          "metallic_map": "model.sponza.image23.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 9",
+          "albedo": "model.sponza.image25.albedo",
+          "normal": "model.sponza.image24.normal",
+          "roughness_map": "model.sponza.image26.roughness",
+          "metallic_map": "model.sponza.image26.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 10",
+          "albedo": "model.sponza.image28.albedo",
+          "normal": "model.sponza.image27.normal",
+          "roughness_map": "model.sponza.image29.roughness",
+          "metallic_map": "model.sponza.image29.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 11",
+          "albedo": "model.sponza.image31.albedo",
+          "normal": "model.sponza.image30.normal",
+          "roughness_map": "model.sponza.image32.roughness",
+          "metallic_map": "model.sponza.image32.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 12",
+          "albedo": "model.sponza.image34.albedo",
+          "normal": "model.sponza.image33.normal",
+          "roughness_map": "model.sponza.image35.roughness",
+          "metallic_map": "model.sponza.image35.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 2",
+          "albedo": "model.sponza.image68.albedo",
+          "normal": "",
+          "roughness_map": "",
+          "metallic_map": "",
+          "roughness": 1.00000000,
+          "metallic": 0.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 13",
+          "albedo": "model.sponza.image37.albedo",
+          "normal": "model.sponza.image36.normal",
+          "roughness_map": "model.sponza.image38.roughness",
+          "metallic_map": "model.sponza.image38.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 14",
+          "albedo": "model.sponza.image40.albedo",
+          "normal": "model.sponza.image39.normal",
+          "roughness_map": "model.sponza.image41.roughness",
+          "metallic_map": "model.sponza.image41.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 15",
+          "albedo": "model.sponza.image43.albedo",
+          "normal": "model.sponza.image42.normal",
+          "roughness_map": "model.sponza.image41.roughness",
+          "metallic_map": "model.sponza.image41.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 16",
+          "albedo": "model.sponza.image45.albedo",
+          "normal": "model.sponza.image44.normal",
+          "roughness_map": "model.sponza.image41.roughness",
+          "metallic_map": "model.sponza.image41.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 17",
+          "albedo": "model.sponza.image47.albedo",
+          "normal": "model.sponza.image46.normal",
+          "roughness_map": "model.sponza.image48.roughness",
+          "metallic_map": "model.sponza.image48.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 18",
+          "albedo": "model.sponza.image50.albedo",
+          "normal": "model.sponza.image49.normal",
+          "roughness_map": "model.sponza.image48.roughness",
+          "metallic_map": "model.sponza.image48.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 19",
+          "albedo": "model.sponza.image52.albedo",
+          "normal": "model.sponza.image51.normal",
+          "roughness_map": "model.sponza.image48.roughness",
+          "metallic_map": "model.sponza.image48.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 20",
+          "albedo": "model.sponza.image54.albedo",
+          "normal": "model.sponza.image53.normal",
+          "roughness_map": "model.sponza.image55.roughness",
+          "metallic_map": "model.sponza.image55.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 21",
+          "albedo": "model.sponza.image57.albedo",
+          "normal": "model.sponza.image56.normal",
+          "roughness_map": "model.sponza.image58.roughness",
+          "metallic_map": "model.sponza.image58.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 22",
+          "albedo": "model.sponza.image60.albedo",
+          "normal": "model.sponza.image59.normal",
+          "roughness_map": "model.sponza.image61.roughness",
+          "metallic_map": "model.sponza.image61.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 23",
+          "albedo": "model.sponza.image63.albedo",
+          "normal": "model.sponza.image62.normal",
+          "roughness_map": "model.sponza.image64.roughness",
+          "metallic_map": "model.sponza.image64.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        },
+        {
+          "name": "Material 24",
+          "albedo": "model.sponza.image66.albedo",
+          "normal": "model.sponza.image65.normal",
+          "roughness_map": "model.sponza.image67.roughness",
+          "metallic_map": "model.sponza.image67.metallic",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ]
+        }
+      ]
     }
   ],
   "textures": [
@@ -64,7 +695,8 @@
       "usage": "albedo",
       "source": "file",
       "import": {
-        "flip_green": false
+        "flip_green": false,
+        "channel": null
       },
       "width": 0,
       "height": 0,
@@ -83,7 +715,8 @@
       "usage": "albedo",
       "source": "checkerboard",
       "import": {
-        "flip_green": false
+        "flip_green": false,
+        "channel": null
       },
       "width": 512,
       "height": 512,
@@ -102,7 +735,8 @@
       "usage": "albedo",
       "source": "file",
       "import": {
-        "flip_green": false
+        "flip_green": false,
+        "channel": null
       },
       "width": 0,
       "height": 0,
@@ -121,7 +755,8 @@
       "usage": "normal",
       "source": "file",
       "import": {
-        "flip_green": false
+        "flip_green": false,
+        "channel": null
       },
       "width": 0,
       "height": 0,
@@ -140,7 +775,8 @@
       "usage": "roughness",
       "source": "file",
       "import": {
-        "flip_green": false
+        "flip_green": false,
+        "channel": null
       },
       "width": 0,
       "height": 0,
@@ -159,7 +795,8 @@
       "usage": "albedo",
       "source": "file",
       "import": {
-        "flip_green": false
+        "flip_green": false,
+        "channel": null
       },
       "width": 0,
       "height": 0,
@@ -178,7 +815,8 @@
       "usage": "metallic",
       "source": "file",
       "import": {
-        "flip_green": false
+        "flip_green": false,
+        "channel": null
       },
       "width": 0,
       "height": 0,
@@ -197,7 +835,8 @@
       "usage": "normal",
       "source": "file",
       "import": {
-        "flip_green": false
+        "flip_green": false,
+        "channel": null
       },
       "width": 0,
       "height": 0,
@@ -216,7 +855,2288 @@
       "usage": "roughness",
       "source": "file",
       "import": {
-        "flip_green": false
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.boxtextured.image0.albedo",
+      "name": "CesiumLogoFlat",
+      "path": "models/imported/model.boxtextured/CesiumLogoFlat.png",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.damagedhelmet.image0.albedo",
+      "name": "image0",
+      "path": "models/imported/model.damagedhelmet/image0.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.damagedhelmet.image4.normal",
+      "name": "image4",
+      "path": "models/imported/model.damagedhelmet/image4.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.damagedhelmet.image1.roughness",
+      "name": "image1",
+      "path": "models/imported/model.damagedhelmet/image1.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.damagedhelmet.image1.metallic",
+      "name": "image1",
+      "path": "models/imported/model.damagedhelmet/image1.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image2.albedo",
+      "name": "FlightHelmet_Materials_RubberWoodMat_BaseColor",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_RubberWoodMat_BaseColor.png",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image0.normal",
+      "name": "FlightHelmet_Materials_RubberWoodMat_Normal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_RubberWoodMat_Normal.png",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image1.roughness",
+      "name": "FlightHelmet_Materials_RubberWoodMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_RubberWoodMat_OcclusionRoughMetal.png",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image1.metallic",
+      "name": "FlightHelmet_Materials_RubberWoodMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_RubberWoodMat_OcclusionRoughMetal.png",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image5.albedo",
+      "name": "FlightHelmet_Materials_GlassPlasticMat_BaseColor",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_GlassPlasticMat_BaseColor.png",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image3.normal",
+      "name": "FlightHelmet_Materials_GlassPlasticMat_Normal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_GlassPlasticMat_Normal.png",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image4.roughness",
+      "name": "FlightHelmet_Materials_GlassPlasticMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_GlassPlasticMat_OcclusionRoughMetal.png",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image4.metallic",
+      "name": "FlightHelmet_Materials_GlassPlasticMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_GlassPlasticMat_OcclusionRoughMetal.png",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image8.albedo",
+      "name": "FlightHelmet_Materials_MetalPartsMat_BaseColor",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_MetalPartsMat_BaseColor.png",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image6.normal",
+      "name": "FlightHelmet_Materials_MetalPartsMat_Normal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_MetalPartsMat_Normal.png",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image7.roughness",
+      "name": "FlightHelmet_Materials_MetalPartsMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_MetalPartsMat_OcclusionRoughMetal.png",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image7.metallic",
+      "name": "FlightHelmet_Materials_MetalPartsMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_MetalPartsMat_OcclusionRoughMetal.png",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image11.albedo",
+      "name": "FlightHelmet_Materials_LeatherPartsMat_BaseColor",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_LeatherPartsMat_BaseColor.png",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image9.normal",
+      "name": "FlightHelmet_Materials_LeatherPartsMat_Normal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_LeatherPartsMat_Normal.png",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image10.roughness",
+      "name": "FlightHelmet_Materials_LeatherPartsMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_LeatherPartsMat_OcclusionRoughMetal.png",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image10.metallic",
+      "name": "FlightHelmet_Materials_LeatherPartsMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_LeatherPartsMat_OcclusionRoughMetal.png",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image14.albedo",
+      "name": "FlightHelmet_Materials_LensesMat_BaseColor",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_LensesMat_BaseColor.png",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image12.normal",
+      "name": "FlightHelmet_Materials_LensesMat_Normal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_LensesMat_Normal.png",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image13.roughness",
+      "name": "FlightHelmet_Materials_LensesMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_LensesMat_OcclusionRoughMetal.png",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image13.metallic",
+      "name": "FlightHelmet_Materials_LensesMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_LensesMat_OcclusionRoughMetal.png",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image1.albedo",
+      "name": "5061699253647017043",
+      "path": "models/imported/model.sponza/5061699253647017043.png",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image0.normal",
+      "name": "8773302468495022225",
+      "path": "models/imported/model.sponza/8773302468495022225.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image2.roughness",
+      "name": "11872827283454512094",
+      "path": "models/imported/model.sponza/11872827283454512094.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image2.metallic",
+      "name": "11872827283454512094",
+      "path": "models/imported/model.sponza/11872827283454512094.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image4.albedo",
+      "name": "8006627369776289000",
+      "path": "models/imported/model.sponza/8006627369776289000.png",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image3.normal",
+      "name": "12501374198249454378",
+      "path": "models/imported/model.sponza/12501374198249454378.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image5.roughness",
+      "name": "715093869573992647",
+      "path": "models/imported/model.sponza/715093869573992647.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image5.metallic",
+      "name": "715093869573992647",
+      "path": "models/imported/model.sponza/715093869573992647.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image7.albedo",
+      "name": "7268504077753552595",
+      "path": "models/imported/model.sponza/7268504077753552595.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image6.normal",
+      "name": "4477655471536070370",
+      "path": "models/imported/model.sponza/4477655471536070370.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image8.roughness",
+      "name": "8503262930880235456",
+      "path": "models/imported/model.sponza/8503262930880235456.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image8.metallic",
+      "name": "8503262930880235456",
+      "path": "models/imported/model.sponza/8503262930880235456.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image10.albedo",
+      "name": "8750083169368950601",
+      "path": "models/imported/model.sponza/8750083169368950601.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image9.normal",
+      "name": "13982482287905699490",
+      "path": "models/imported/model.sponza/13982482287905699490.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image11.roughness",
+      "name": "16885566240357350108",
+      "path": "models/imported/model.sponza/16885566240357350108.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image11.metallic",
+      "name": "16885566240357350108",
+      "path": "models/imported/model.sponza/16885566240357350108.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image13.albedo",
+      "name": "5792855332885324923",
+      "path": "models/imported/model.sponza/5792855332885324923.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image12.normal",
+      "name": "16299174074766089871",
+      "path": "models/imported/model.sponza/16299174074766089871.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image14.roughness",
+      "name": "11968150294050148237",
+      "path": "models/imported/model.sponza/11968150294050148237.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image14.metallic",
+      "name": "11968150294050148237",
+      "path": "models/imported/model.sponza/11968150294050148237.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image16.albedo",
+      "name": "14650633544276105767",
+      "path": "models/imported/model.sponza/14650633544276105767.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image15.normal",
+      "name": "2051777328469649772",
+      "path": "models/imported/model.sponza/2051777328469649772.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image17.roughness",
+      "name": "4871783166746854860",
+      "path": "models/imported/model.sponza/4871783166746854860.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image17.metallic",
+      "name": "4871783166746854860",
+      "path": "models/imported/model.sponza/4871783166746854860.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image19.albedo",
+      "name": "15295713303328085182",
+      "path": "models/imported/model.sponza/15295713303328085182.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image18.normal",
+      "name": "10388182081421875623",
+      "path": "models/imported/model.sponza/10388182081421875623.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image20.roughness",
+      "name": "9916269861720640319",
+      "path": "models/imported/model.sponza/9916269861720640319.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image20.metallic",
+      "name": "9916269861720640319",
+      "path": "models/imported/model.sponza/9916269861720640319.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image22.albedo",
+      "name": "6047387724914829168",
+      "path": "models/imported/model.sponza/6047387724914829168.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image21.normal",
+      "name": "15722799267630235092",
+      "path": "models/imported/model.sponza/15722799267630235092.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image23.roughness",
+      "name": "8051790464816141987",
+      "path": "models/imported/model.sponza/8051790464816141987.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image23.metallic",
+      "name": "8051790464816141987",
+      "path": "models/imported/model.sponza/8051790464816141987.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image25.albedo",
+      "name": "5823059166183034438",
+      "path": "models/imported/model.sponza/5823059166183034438.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image24.normal",
+      "name": "14267839433702832875",
+      "path": "models/imported/model.sponza/14267839433702832875.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image26.roughness",
+      "name": "13824894030729245199",
+      "path": "models/imported/model.sponza/13824894030729245199.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image26.metallic",
+      "name": "13824894030729245199",
+      "path": "models/imported/model.sponza/13824894030729245199.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image28.albedo",
+      "name": "7441062115984513793",
+      "path": "models/imported/model.sponza/7441062115984513793.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image27.normal",
+      "name": "6667038893015345571",
+      "path": "models/imported/model.sponza/6667038893015345571.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image29.roughness",
+      "name": "8114461559286000061",
+      "path": "models/imported/model.sponza/8114461559286000061.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image29.metallic",
+      "name": "8114461559286000061",
+      "path": "models/imported/model.sponza/8114461559286000061.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image31.albedo",
+      "name": "11490520546946913238",
+      "path": "models/imported/model.sponza/11490520546946913238.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image30.normal",
+      "name": "3628158980083700836",
+      "path": "models/imported/model.sponza/3628158980083700836.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image32.roughness",
+      "name": "3455394979645218238",
+      "path": "models/imported/model.sponza/3455394979645218238.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image32.metallic",
+      "name": "3455394979645218238",
+      "path": "models/imported/model.sponza/3455394979645218238.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image34.albedo",
+      "name": "6151467286084645207",
+      "path": "models/imported/model.sponza/6151467286084645207.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image33.normal",
+      "name": "7645212358685992005",
+      "path": "models/imported/model.sponza/7645212358685992005.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image35.roughness",
+      "name": "8783994986360286082",
+      "path": "models/imported/model.sponza/8783994986360286082.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image35.metallic",
+      "name": "8783994986360286082",
+      "path": "models/imported/model.sponza/8783994986360286082.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image68.albedo",
+      "name": "white",
+      "path": "models/imported/model.sponza/white.png",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image37.albedo",
+      "name": "4975155472559461469",
+      "path": "models/imported/model.sponza/4975155472559461469.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image36.normal",
+      "name": "2299742237651021498",
+      "path": "models/imported/model.sponza/2299742237651021498.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image38.roughness",
+      "name": "3371964815757888145",
+      "path": "models/imported/model.sponza/3371964815757888145.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image38.metallic",
+      "name": "3371964815757888145",
+      "path": "models/imported/model.sponza/3371964815757888145.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image40.albedo",
+      "name": "4675343432951571524",
+      "path": "models/imported/model.sponza/4675343432951571524.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image39.normal",
+      "name": "7056944414013900257",
+      "path": "models/imported/model.sponza/7056944414013900257.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image41.roughness",
+      "name": "7815564343179553343",
+      "path": "models/imported/model.sponza/7815564343179553343.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image41.metallic",
+      "name": "7815564343179553343",
+      "path": "models/imported/model.sponza/7815564343179553343.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image43.albedo",
+      "name": "2775690330959970771",
+      "path": "models/imported/model.sponza/2775690330959970771.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image42.normal",
+      "name": "2374361008830720677",
+      "path": "models/imported/model.sponza/2374361008830720677.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image45.albedo",
+      "name": "2185409758123873465",
+      "path": "models/imported/model.sponza/2185409758123873465.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image44.normal",
+      "name": "332936164838540657",
+      "path": "models/imported/model.sponza/332936164838540657.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image47.albedo",
+      "name": "17876391417123941155",
+      "path": "models/imported/model.sponza/17876391417123941155.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image46.normal",
+      "name": "6593109234861095314",
+      "path": "models/imported/model.sponza/6593109234861095314.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image48.roughness",
+      "name": "466164707995436622",
+      "path": "models/imported/model.sponza/466164707995436622.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image48.metallic",
+      "name": "466164707995436622",
+      "path": "models/imported/model.sponza/466164707995436622.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image50.albedo",
+      "name": "11474523244911310074",
+      "path": "models/imported/model.sponza/11474523244911310074.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image49.normal",
+      "name": "4601176305987539675",
+      "path": "models/imported/model.sponza/4601176305987539675.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image52.albedo",
+      "name": "9288698199695299068",
+      "path": "models/imported/model.sponza/9288698199695299068.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image51.normal",
+      "name": "4910669866631290573",
+      "path": "models/imported/model.sponza/4910669866631290573.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image54.albedo",
+      "name": "16275776544635328252",
+      "path": "models/imported/model.sponza/16275776544635328252.png",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image53.normal",
+      "name": "14170708867020035030",
+      "path": "models/imported/model.sponza/14170708867020035030.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image55.roughness",
+      "name": "1219024358953944284",
+      "path": "models/imported/model.sponza/1219024358953944284.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image55.metallic",
+      "name": "1219024358953944284",
+      "path": "models/imported/model.sponza/1219024358953944284.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image57.albedo",
+      "name": "755318871556304029",
+      "path": "models/imported/model.sponza/755318871556304029.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image56.normal",
+      "name": "3827035219084910048",
+      "path": "models/imported/model.sponza/3827035219084910048.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image58.roughness",
+      "name": "2411100444841994089",
+      "path": "models/imported/model.sponza/2411100444841994089.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image58.metallic",
+      "name": "2411100444841994089",
+      "path": "models/imported/model.sponza/2411100444841994089.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image60.albedo",
+      "name": "8481240838833932244",
+      "path": "models/imported/model.sponza/8481240838833932244.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image59.normal",
+      "name": "10381718147657362067",
+      "path": "models/imported/model.sponza/10381718147657362067.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image61.roughness",
+      "name": "17556969131407844942",
+      "path": "models/imported/model.sponza/17556969131407844942.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image61.metallic",
+      "name": "17556969131407844942",
+      "path": "models/imported/model.sponza/17556969131407844942.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image63.albedo",
+      "name": "6772804448157695701",
+      "path": "models/imported/model.sponza/6772804448157695701.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image62.normal",
+      "name": "759203620573749278",
+      "path": "models/imported/model.sponza/759203620573749278.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image64.roughness",
+      "name": "13196865903111448057",
+      "path": "models/imported/model.sponza/13196865903111448057.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image64.metallic",
+      "name": "13196865903111448057",
+      "path": "models/imported/model.sponza/13196865903111448057.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image66.albedo",
+      "name": "2969916736137545357",
+      "path": "models/imported/model.sponza/2969916736137545357.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image65.normal",
+      "name": "14118779221266351425",
+      "path": "models/imported/model.sponza/14118779221266351425.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image67.roughness",
+      "name": "8747919177698443163",
+      "path": "models/imported/model.sponza/8747919177698443163.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.sponza.image67.metallic",
+      "name": "8747919177698443163",
+      "path": "models/imported/model.sponza/8747919177698443163.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
       },
       "width": 0,
       "height": 0,

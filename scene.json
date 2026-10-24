@@ -1,0 +1,1075 @@
+{
+  "version": 7,
+  "entities": [
+    {
+      "name": "Cube (left)",
+      "transform": {
+        "position": [
+          -2.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation": [
+          0.00000000,
+          332.15444946,
+          0.00000000
+        ],
+        "rotation_speed": 0.60000002,
+        "scale": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ]
+      },
+      "mesh_renderer": {
+        "mesh": "cube"
+      },
+      "material": {
+        "tint": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ],
+        "texture": "portrait",
+        "unlit": false,
+        "roughness": 0.85000002,
+        "metallic": 0.00000000,
+        "normal_texture": "",
+        "normal_strength": 0.00000000,
+        "uv_scale": 1.00000000,
+        "roughness_texture": "",
+        "use_roughness_map": false,
+        "metallic_texture": "",
+        "use_metallic_map": false
+      },
+      "extra_materials": [
+
+      ],
+      "point_light": null,
+      "directional_light": null,
+      "camera": null
+    },
+    {
+      "name": "Pyramid",
+      "transform": {
+        "position": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation": [
+          0.00000000,
+          332.15444946,
+          0.00000000
+        ],
+        "rotation_speed": 0.60000002,
+        "scale": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ]
+      },
+      "mesh_renderer": {
+        "mesh": "pyramid"
+      },
+      "material": {
+        "tint": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ],
+        "texture": "checkerboard",
+        "unlit": false,
+        "roughness": 0.28000000,
+        "metallic": 0.75000000,
+        "normal_texture": "",
+        "normal_strength": 0.00000000,
+        "uv_scale": 1.00000000,
+        "roughness_texture": "",
+        "use_roughness_map": false,
+        "metallic_texture": "",
+        "use_metallic_map": false
+      },
+      "extra_materials": [
+
+      ],
+      "point_light": null,
+      "directional_light": null,
+      "camera": null
+    },
+    {
+      "name": "Cube (right)",
+      "transform": {
+        "position": [
+          2.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation": [
+          0.00000000,
+          332.15444946,
+          0.00000000
+        ],
+        "rotation_speed": 0.60000002,
+        "scale": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ]
+      },
+      "mesh_renderer": {
+        "mesh": "cube"
+      },
+      "material": {
+        "tint": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ],
+        "texture": "portrait",
+        "unlit": false,
+        "roughness": 0.15000001,
+        "metallic": 0.00000000,
+        "normal_texture": "",
+        "normal_strength": 0.00000000,
+        "uv_scale": 1.00000000,
+        "roughness_texture": "",
+        "use_roughness_map": false,
+        "metallic_texture": "",
+        "use_metallic_map": false
+      },
+      "extra_materials": [
+
+      ],
+      "point_light": null,
+      "directional_light": null,
+      "camera": null
+    },
+    {
+      "name": "Ground",
+      "transform": {
+        "position": [
+          0.00000000,
+          -4.50000000,
+          0.00000000
+        ],
+        "rotation": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation_speed": 0.00000000,
+        "scale": [
+          8.00000000,
+          8.00000000,
+          8.00000000
+        ]
+      },
+      "mesh_renderer": {
+        "mesh": "cube"
+      },
+      "material": {
+        "tint": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ],
+        "texture": "stone.albedo",
+        "unlit": false,
+        "roughness": 1.00000000,
+        "metallic": 0.00000000,
+        "normal_texture": "stone.normal",
+        "normal_strength": 1.00000000,
+        "uv_scale": 4.00000000,
+        "roughness_texture": "stone.roughness",
+        "use_roughness_map": true,
+        "metallic_texture": "",
+        "use_metallic_map": false
+      },
+      "extra_materials": [
+
+      ],
+      "point_light": null,
+      "directional_light": null,
+      "camera": null
+    },
+    {
+      "name": "Sun",
+      "transform": null,
+      "mesh_renderer": null,
+      "material": null,
+      "extra_materials": [
+
+      ],
+      "point_light": null,
+      "directional_light": {
+        "direction": [
+          0.68376344,
+          -0.56980288,
+          0.45584229
+        ],
+        "color": [
+          1.00000000,
+          0.94999999,
+          0.85000002
+        ],
+        "intensity": 0.80000001
+      },
+      "camera": null
+    },
+    {
+      "name": "Warm point light",
+      "transform": {
+        "position": [
+          1.31338477,
+          1.50000000,
+          -1.50831711
+        ],
+        "rotation": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation_speed": 0.00000000,
+        "scale": [
+          0.20000000,
+          0.20000000,
+          0.20000000
+        ]
+      },
+      "mesh_renderer": {
+        "mesh": "cube"
+      },
+      "material": {
+        "tint": [
+          0.89999998,
+          0.55000001,
+          0.40000001
+        ],
+        "texture": "checkerboard",
+        "unlit": true,
+        "roughness": 0.00000000,
+        "metallic": 0.00000000,
+        "normal_texture": "",
+        "normal_strength": 0.00000000,
+        "uv_scale": 1.00000000,
+        "roughness_texture": "",
+        "use_roughness_map": false,
+        "metallic_texture": "",
+        "use_metallic_map": false
+      },
+      "extra_materials": [
+
+      ],
+      "point_light": {
+        "color": [
+          0.89999998,
+          0.55000001,
+          0.40000001
+        ],
+        "intensity": 3.00000000,
+        "orbit_radius": 2.00000000,
+        "orbit_angle": 332.15444946,
+        "orbit_speed": 0.60000002,
+        "orbit_enabled": true
+      },
+      "directional_light": null,
+      "camera": null
+    },
+    {
+      "name": "Cool point light",
+      "transform": {
+        "position": [
+          -1.31390452,
+          1.50000000,
+          1.50786436
+        ],
+        "rotation": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation_speed": 0.00000000,
+        "scale": [
+          0.20000000,
+          0.20000000,
+          0.20000000
+        ]
+      },
+      "mesh_renderer": {
+        "mesh": "cube"
+      },
+      "material": {
+        "tint": [
+          0.30000001,
+          0.55000001,
+          1.00000000
+        ],
+        "texture": "checkerboard",
+        "unlit": true,
+        "roughness": 0.00000000,
+        "metallic": 0.00000000,
+        "normal_texture": "",
+        "normal_strength": 0.00000000,
+        "uv_scale": 1.00000000,
+        "roughness_texture": "",
+        "use_roughness_map": false,
+        "metallic_texture": "",
+        "use_metallic_map": false
+      },
+      "extra_materials": [
+
+      ],
+      "point_light": {
+        "color": [
+          0.30000001,
+          0.55000001,
+          1.00000000
+        ],
+        "intensity": 3.00000000,
+        "orbit_radius": 2.00000000,
+        "orbit_angle": 335.29638672,
+        "orbit_speed": 0.60000002,
+        "orbit_enabled": true
+      },
+      "directional_light": null,
+      "camera": null
+    },
+    {
+      "name": "",
+      "transform": {
+        "position": [
+          -2.83755994,
+          0.62584895,
+          -5.78848886
+        ],
+        "rotation": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation_speed": 0.00000000,
+        "scale": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ]
+      },
+      "mesh_renderer": null,
+      "material": null,
+      "extra_materials": [
+
+      ],
+      "point_light": null,
+      "directional_light": null,
+      "camera": {
+        "yaw": 32.54551315,
+        "pitch": -0.18261713,
+        "speed": 3.00000000,
+        "sensitivity": 0.00300000,
+        "far_clip": 100.00000000
+      }
+    },
+    {
+      "name": "DamagedHelmet",
+      "transform": {
+        "position": [
+          -0.38162926,
+          0.58753896,
+          3.15990496
+        ],
+        "rotation": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation_speed": 0.00000000,
+        "scale": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ]
+      },
+      "mesh_renderer": {
+        "mesh": "model.damagedhelmet"
+      },
+      "material": {
+        "tint": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ],
+        "texture": "model.damagedhelmet.image0.albedo",
+        "unlit": false,
+        "roughness": 1.00000000,
+        "metallic": 1.00000000,
+        "normal_texture": "model.damagedhelmet.image4.normal",
+        "normal_strength": 1.00000000,
+        "uv_scale": 1.00000000,
+        "roughness_texture": "model.damagedhelmet.image1.roughness",
+        "use_roughness_map": true,
+        "metallic_texture": "model.damagedhelmet.image1.metallic",
+        "use_metallic_map": true
+      },
+      "extra_materials": [
+
+      ],
+      "point_light": null,
+      "directional_light": null,
+      "camera": null
+    },
+    {
+      "name": "FlightHelmet",
+      "transform": {
+        "position": [
+          -0.37212941,
+          -0.19353670,
+          -2.05555940
+        ],
+        "rotation": [
+          0.00000000,
+          59.03136826,
+          0.00000000
+        ],
+        "rotation_speed": 0.17453292,
+        "scale": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ]
+      },
+      "mesh_renderer": {
+        "mesh": "model.flighthelmet"
+      },
+      "material": {
+        "tint": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ],
+        "texture": "model.flighthelmet.image2.albedo",
+        "unlit": false,
+        "roughness": 1.00000000,
+        "metallic": 1.00000000,
+        "normal_texture": "model.flighthelmet.image0.normal",
+        "normal_strength": 1.00000000,
+        "uv_scale": 1.00000000,
+        "roughness_texture": "model.flighthelmet.image1.roughness",
+        "use_roughness_map": true,
+        "metallic_texture": "model.flighthelmet.image1.metallic",
+        "use_metallic_map": true
+      },
+      "extra_materials": [
+        {
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "texture": "model.flighthelmet.image2.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.flighthelmet.image0.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.flighthelmet.image1.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.flighthelmet.image1.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "texture": "model.flighthelmet.image5.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.flighthelmet.image3.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.flighthelmet.image4.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.flighthelmet.image4.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "texture": "model.flighthelmet.image8.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.flighthelmet.image6.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.flighthelmet.image7.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.flighthelmet.image7.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "texture": "model.flighthelmet.image11.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.flighthelmet.image9.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.flighthelmet.image10.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.flighthelmet.image10.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "texture": "model.flighthelmet.image14.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.flighthelmet.image12.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.flighthelmet.image13.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.flighthelmet.image13.metallic",
+          "use_metallic_map": true
+        }
+      ],
+      "point_light": null,
+      "directional_light": null,
+      "camera": null
+    },
+    {
+      "name": "Sponza",
+      "transform": {
+        "position": [
+          30.25507736,
+          -4.78333759,
+          5.48147583
+        ],
+        "rotation": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation_speed": 0.00000000,
+        "scale": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ]
+      },
+      "mesh_renderer": {
+        "mesh": "model.sponza"
+      },
+      "material": {
+        "tint": [
+          0.58800000,
+          0.58800000,
+          0.58800000
+        ],
+        "texture": "model.sponza.image1.albedo",
+        "unlit": false,
+        "roughness": 1.00000000,
+        "metallic": 1.00000000,
+        "normal_texture": "model.sponza.image0.normal",
+        "normal_strength": 1.00000000,
+        "uv_scale": 1.00000000,
+        "roughness_texture": "model.sponza.image2.roughness",
+        "use_roughness_map": true,
+        "metallic_texture": "model.sponza.image2.metallic",
+        "use_metallic_map": true
+      },
+      "extra_materials": [
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image4.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image3.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image5.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image5.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image7.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image6.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image8.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image8.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image10.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image9.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image11.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image11.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image13.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image12.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image14.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image14.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image16.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image15.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image17.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image17.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image19.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image18.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image20.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image20.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image22.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image21.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image23.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image23.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image25.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image24.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image26.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image26.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image28.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image27.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image29.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image29.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image31.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image30.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image32.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image32.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image34.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image33.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image35.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image35.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image68.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 0.00000000,
+          "normal_texture": "",
+          "normal_strength": 0.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "",
+          "use_roughness_map": false,
+          "metallic_texture": "",
+          "use_metallic_map": false
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image37.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image36.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image38.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image38.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image40.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image39.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image41.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image41.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image43.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image42.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image41.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image41.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image45.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image44.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image41.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image41.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image47.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image46.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image48.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image48.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image50.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image49.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image48.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image48.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image52.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image51.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image48.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image48.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image54.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image53.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image55.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image55.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image57.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image56.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image58.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image58.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image60.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image59.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image61.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image61.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image63.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image62.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image64.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image64.metallic",
+          "use_metallic_map": true
+        },
+        {
+          "tint": [
+            0.58800000,
+            0.58800000,
+            0.58800000
+          ],
+          "texture": "model.sponza.image66.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.sponza.image65.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.sponza.image67.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.sponza.image67.metallic",
+          "use_metallic_map": true
+        }
+      ],
+      "point_light": null,
+      "directional_light": null,
+      "camera": null
+    }
+  ],
+  "post_process": {
+    "exposure": 1.00000000,
+    "bloom_threshold": 1.00000000,
+    "bloom_strength": 0.60000002,
+    "tone_mapper": "ACES",
+    "anti_aliasing": "FXAA"
+  },
+  "environment": {
+    "asset": "autumn_field_puresky",
+    "intensity": 1.00000000,
+    "rotation_degrees": 0.00000000,
+    "background_brightness": 1.00000000,
+    "ambient_mode": "HDRI",
+    "ambient_color": [
+      0.15000001,
+      0.18000001,
+      0.22000000
+    ],
+    "ambient_intensity": 1.00000000,
+    "background_mode": "HDRI",
+    "background_color": [
+      0.05000000,
+      0.06000000,
+      0.08000000
+    ],
+    "manual_sun": false
+  },
+  "shadow": {
+    "bias_constant": 1.00000000,
+    "bias_slope": 1.50000000,
+    "distance": 40.00000000
+  },
+  "ambient_occlusion": {
+    "enabled": true,
+    "radius": 1.00000000,
+    "intensity": 2.00000000
+  }
+}

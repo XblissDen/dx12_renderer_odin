@@ -2,19 +2,8 @@ package main
 
 import d3d12 "vendor:directx/d3d12"
 
-renderer_render_scene_pass :: proc(
-    draw_meshes: []MeshHandle,
-    draw_textures: []TextureHandle,
-    draw_normals: []TextureHandle,
-    draw_roughness: []TextureHandle,
-    draw_metallic: []TextureHandle,
-    draw_indices: []u32,
-) {
+renderer_render_scene_pass :: proc(draws: []Draw, draw_indices: []u32) {
     r := &g_renderer
-    assert(len(draw_meshes) == len(draw_textures))
-    assert(len(draw_meshes) == len(draw_normals))
-    assert(len(draw_meshes) == len(draw_roughness))
-    assert(len(draw_meshes) == len(draw_metallic))
 
     renderer_begin_gpu_pass(.Scene)
     hdr_barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
@@ -76,22 +65,11 @@ renderer_render_scene_pass :: proc(
     renderer_bind_cbv(.Frame_Constants, renderer_frame_cb_address())
 
     for draw_index in draw_indices{
-        i := int(draw_index)
-        assert(i >= 0 && i < len(draw_meshes))
-
-        renderer_bind_cbv(.Object_Constants, renderer_object_cb_address(i))
         r.command_list->SetGraphicsRootDescriptorTable(
             u32(Root_Slot.Material),
-            renderer_material_table(i, {draw_textures[i], draw_normals[i], draw_roughness[i], draw_metallic[i]}),
+            renderer_material_table(int(draw_index), draws[draw_index].textures),
         )
-
-        mesh_index := int(draw_meshes[i])
-        assert(mesh_index > 0 && mesh_index < len(r.meshes))
-
-        gpu_mesh := &r.meshes[mesh_index]
-        r.command_list->IASetVertexBuffers(0, 1, &gpu_mesh.vertex_buffer_view)
-        r.command_list->IASetIndexBuffer(&gpu_mesh.index_buffer_view)
-        r.command_list->DrawIndexedInstanced(gpu_mesh.index_count, 1, 0, 0, 0)
+        renderer_draw(draws, draw_index)
     }
 
     // Scene render target becomes a shader input.
