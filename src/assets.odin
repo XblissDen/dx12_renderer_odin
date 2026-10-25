@@ -1,11 +1,13 @@
 package main
 
+import "base:runtime"
 import "core:encoding/json"
 import "core:fmt"
 import "core:io"
 import "core:mem"
 import "core:os"
 import "core:strings"
+import "core:thread"
 import "core:image"
 import c "core:c"
 import stbi "vendor:stb/image"
@@ -422,12 +424,18 @@ assets_import_gltf :: proc(request: AssetImportRequest) -> (model: MeshHandle, m
         for texture in gpu_textures do if texture.resource != nil do texture.resource->Release()
     }
     if renderer_upload_mesh(&gpu_mesh, mesh_data) < 0 do return 0, "GPU model upload failed."
-    for desc, i in texture_descs {
-        pixels, width, height, pixel_error := assets_try_texture_pixels(desc, context.temp_allocator)
-        if pixel_error != "" do return 0, fmt.tprintf("%s (%s)", pixel_error, desc.path)
-        texture := GpuTexture{srv_index = g_renderer.srv_next + u32(i)}
-        if renderer_upload_texture(&texture, desc, pixels, width, height) < 0 do return 0, "GPU texture upload failed."
-        append(&gpu_textures, texture)
+    batch := assets_decode_batch_size()
+    for first := 0; first < len(texture_descs); first += batch {
+        descs := texture_descs[first:min(first + batch, len(texture_descs))]
+        decoded := make([]DecodedTexture, len(descs), context.temp_allocator)
+        assets_decode_textures(descs, decoded)
+        defer for texture in decoded do delete(texture.pixels, runtime.heap_allocator())
+        for texture, i in decoded {
+            if texture.message != "" do return 0, fmt.tprintf("%s (%s)", texture.message, descs[i].path)
+            gpu := GpuTexture{srv_index = g_renderer.srv_next + u32(first + i)}
+            if renderer_upload_texture(&gpu, descs[i], texture.pixels, texture.width, texture.height) < 0 do return 0, "GPU texture upload failed."
+            append(&gpu_textures, gpu)
+        }
     }
 
     current, read_error := os.read_entire_file(g_assets.catalog_path, context.temp_allocator)
@@ -815,6 +823,37 @@ assets_try_texture_pixels :: proc(desc: TextureDesc, allocator := context.alloca
     return
 }
 
+DecodedTexture :: struct {
+    pixels: []u8, // From runtime.heap_allocator(); the caller deletes them.
+    width, height: u32,
+    message: string, // Empty on success.
+}
+
+// Decoding PNG/JPEG is most of the cost of loading textures, so a batch
+// decodes on one thread per texture.
+assets_decode_textures :: proc(descs: []TextureDesc, results: []DecodedTexture) {
+    assert(len(descs) == len(results))
+    Job :: struct {desc: ^TextureDesc, result: ^DecodedTexture}
+    decode :: proc(job: Job) {
+        // The heap allocator is thread-safe; each thread has its own temp allocator.
+        result := job.result
+        result.pixels, result.width, result.height, result.message =
+            assets_try_texture_pixels(job.desc^, runtime.heap_allocator())
+    }
+    threads := make([]^thread.Thread, len(descs), context.temp_allocator)
+    for &desc, i in descs {
+        threads[i] = thread.create_and_start_with_poly_data(Job{&desc, &results[i]}, decode)
+    }
+    thread.join_multiple(..threads)
+    for t in threads do thread.destroy(t)
+}
+
+// Textures to decode at once: one per core, which also bounds the memory
+// held by decoded pixels waiting for upload.
+assets_decode_batch_size :: proc() -> int {
+    return clamp(os.get_processor_core_count(), 1, 16)
+}
+
 g_asset_marshalers: map[typeid]json.User_Marshaler
 g_asset_unmarshalers: map[typeid]json.User_Unmarshaler
 g_asset_json_installed: bool
@@ -880,17 +919,6 @@ assets_unmarshal_texture :: proc(parser: ^json.Parser, value: any) -> json.Unmar
     if id != "" && handle == 0 do return json.Unmarshal_Data_Error.Invalid_Data
     (^TextureHandle)(value.data)^ = handle
     return nil
-}
-
-assets_texture_pixels :: proc(
-    desc: TextureDesc,
-    allocator := context.allocator,
-) -> (pixels: []u8, width, height: u32) {
-    data, w, h, message := assets_try_texture_pixels(desc, allocator)
-    if message != "" {
-        panic(message)
-    }
-    return data, w, h
 }
 
 assets_marshal_environment :: proc(w: io.Writer, value: any, options: ^json.Marshal_Options) -> json.Marshal_Error {

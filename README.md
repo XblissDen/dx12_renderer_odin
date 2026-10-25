@@ -70,8 +70,12 @@ in `assets.json`, and is undone completely if any step fails:
 - Models imported before emission, occlusion and cutouts existed keep the
   materials stored in `assets.json`; import them again to pick these up.
 
-Textures load at startup with mip maps built on the CPU, so a model with many
-textures (Sponza has about 120 after splitting) adds several seconds there.
+Textures load at startup and on import. PNG/JPEG decoding runs on worker
+threads, one texture per core at a time; only the full-size image is
+uploaded, and the GPU renders the mip chain from it (`shaders/texture_mips.hlsl`):
+2x2 averages in linear space for color, renormalized directions for normal
+maps, rounded the same way as the CPU filter it replaced. With Sponza and the
+helmets in the catalog (129 textures), textures take about 1.2 s.
 
 ## Debug UI
 
