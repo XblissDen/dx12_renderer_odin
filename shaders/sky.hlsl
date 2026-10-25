@@ -47,5 +47,18 @@ float4 PSMain(VSOutput input) : SV_TARGET
     float u = atan2(direction.z, direction.x) / (2.0f * 3.14159265f) + 0.5f;
     float v = acos(clamp(direction.y, -1.0f, 1.0f)) / 3.14159265f;
 
-    return float4(g_environment.Sample(g_sampler, float2(u, v)).rgb * background_brightness, 1.0f);
+    // Choose the mip from the angle a pixel covers, not from how fast (u, v)
+    // change. Plain Sample() goes wrong in two places: u wraps from 1 to 0
+    // where atan2 crosses -pi/pi (a line along that meridian), and near the
+    // poles u sweeps the whole panorama within a few pixels (a dot at the
+    // zenith and nadir). Both select the smallest mip, the sky's average color
+    // with the sun in it. A 2:1 panorama has the same texels per radian in u
+    // and v, so the angle maps directly to a level; the sampler wraps u, so
+    // filtering across the seam stays seamless.
+    float angle_x = length(ddx(direction));
+    float angle_y = length(ddy(direction));
+    float2 uv_dx = float2(angle_x / (2.0f * 3.14159265f), 0.0f);
+    float2 uv_dy = float2(0.0f, angle_y / 3.14159265f);
+
+    return float4(g_environment.SampleGrad(g_sampler, float2(u, v), uv_dx, uv_dy).rgb * background_brightness, 1.0f);
 }
