@@ -392,13 +392,10 @@ float FilterSpecularRoughness(float material_roughness, float3 N)
 }
 
 // Lit surface color; `transparent` adds coverage in alpha for blending.
+// Unlit materials are handled by the entry points: an early return here makes
+// FXC report X4000 (see CascadeVisibility).
 float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
 {
-    if (unlit != 0)
-    {
-        return float4(material_tint * 4.0f, 1.0f);
-    }
-
     // Albedo SRVs are _SRGB, so the sampler returns filtered linear values.
     float2 material_uv = input.texcoord * uv_scale;
 
@@ -627,14 +624,22 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
     return float4(result, transparent ? saturate(albedo_sample.a * opacity) : 1.0f);
 }
 
+// Unlit materials (light markers): a bright flat color.
+float4 UnlitColor()
+{
+    return float4(material_tint * 4.0f, 1.0f);
+}
+
 float4 PSMain(PSInput input, bool is_front_face : SV_IsFrontFace) : SV_TARGET
 {
+    if (unlit != 0) return UnlitColor();
     return ShadeSurface(input, is_front_face, false);
 }
 
 // Blended materials, drawn over the opaque image (alpha blending).
 float4 PSTransparent(PSInput input, bool is_front_face : SV_IsFrontFace) : SV_TARGET
 {
+    if (unlit != 0) return UnlitColor();
     return ShadeSurface(input, is_front_face, true);
 }
 

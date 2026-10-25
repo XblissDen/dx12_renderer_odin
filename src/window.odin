@@ -211,12 +211,15 @@ wparam: win32.WPARAM, lparam: win32.LPARAM) -> win32.LRESULT{
                     case win32.WPARAM('6'): g_bloom_steps += 1
                 }
 
-                // W/E/R pick the gizmo; while the mouse is captured, W moves the camera.
+                // W/E/R pick the gizmo and Q switches world/local axes; while
+                // the mouse is captured, W moves the camera.
                 if !g_cursor_locked && g_editor_gizmo.active == .None {
                     switch wparam {
                         case win32.WPARAM('W'): g_editor_gizmo.mode = .Translate
                         case win32.WPARAM('E'): g_editor_gizmo.mode = .Rotate
                         case win32.WPARAM('R'): g_editor_gizmo.mode = .Scale
+                        case win32.WPARAM('Q'):
+                            g_editor_gizmo.space = .Local if g_editor_gizmo.space == .World else .World
                     }
                 }
             }

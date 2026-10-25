@@ -2,11 +2,14 @@ package main
 
 import "core:math"
 import alg "core:math/linalg"
+import win32 "core:sys/windows"
 
-// Viewport handles for the selected entity. Move and rotate use world axes;
-// scale uses the entity's local axes, because scale is applied before rotation.
+// Viewport handles for the selected entity. Move and rotate use world or
+// local axes (`space`); scale always uses the entity's local axes, because
+// scale is applied before rotation (scaling along world axes would shear).
 GizmoMode :: enum {Translate, Rotate, Scale}
 GizmoHandle :: enum {None, X, Y, Z, Center}
+GizmoSpace :: enum {World, Local}
 
 GIZMO_SIZE_PIXELS :: f32(110)
 GIZMO_PICK_PIXELS :: f32(8)
@@ -17,8 +20,16 @@ GIZMO_UNIFORM_SCALE_RATE :: f32(0.01)
 
 EditorGizmo :: struct {
     mode: GizmoMode,
+    space: GizmoSpace,
     hovered: GizmoHandle,
     active: GizmoHandle,
+
+    // Snapping: drags move, rotate and scale in whole steps. Holding Ctrl
+    // during a drag inverts `snap`.
+    snap: bool,
+    snap_distance: f32,      // World units.
+    snap_angle_degrees: f32,
+    snap_scale: f32,         // Added to (or, for uniform scale, multiplied into) the scale.
 
     // Drag state, captured when a handle is pressed.
     entity: Entity,
@@ -26,12 +37,23 @@ EditorGizmo :: struct {
     before: [3]f32,
     start_transform: Transform,
     start_rotation: alg.Matrix4f32,
+    // Handle axes at the start; local axes would otherwise follow a spinning entity.
+    start_axes: [3]alg.Vector3f32,
     start_param: f32,
     start_point: alg.Vector3f32,
     start_mouse_x: f32,
 }
 
-g_editor_gizmo: EditorGizmo
+g_editor_gizmo := EditorGizmo{
+    snap_distance = 0.25,
+    snap_angle_degrees = 15,
+    snap_scale = 0.1,
+}
+
+// Rounds `value` to a whole number of steps; unchanged when step is not positive.
+gizmo_snap :: proc(value, step: f32) -> f32 {
+    return math.round(value / step) * step if step > 0 else value
+}
 
 // Per-frame projection of the gizmo into the viewport.
 GizmoView :: struct {
@@ -161,7 +183,7 @@ editor_gizmo_view :: proc(scene: ^Scene, index: int) -> (view: GizmoView, ok: bo
     view.size = depth * math.tan(CAMERA_FOV_Y * 0.5) * 2 * GIZMO_SIZE_PIXELS / view.height
 
     view.axes = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}
-    if g_editor_gizmo.mode == .Scale {
+    if g_editor_gizmo.mode == .Scale || g_editor_gizmo.space == .Local {
         rotation := transform_rotation_matrix(transform.rotation)
         for i in 0..<3 {
             view.axes[i] = alg.normalize(alg.Vector3f32{rotation[0, i], rotation[1, i], rotation[2, i]})
@@ -315,7 +337,7 @@ editor_gizmo_begin :: proc(scene: ^Scene, index: int, view: GizmoView, handle: G
             if !ok do return
             gizmo.start_point = hit - view.center
         case:
-            // Scale handles use local axes; move handles use world axes.
+            // The view's axes: local for scale and in local space, else world.
             s, ok := gizmo_axis_param(ray, view.center, view.axes[axis_index])
             if !ok do return
             gizmo.start_param = s
@@ -328,6 +350,7 @@ editor_gizmo_begin :: proc(scene: ^Scene, index: int, view: GizmoView, handle: G
     gizmo.before = editor_value(scene, index, gizmo.field)
     gizmo.start_transform = transform
     gizmo.start_rotation = transform_rotation_matrix(transform.rotation)
+    gizmo.start_axes = view.axes
 }
 
 editor_gizmo_drag :: proc(scene: ^Scene, view: GizmoView, mouse: SceneMouse) {
@@ -339,20 +362,36 @@ editor_gizmo_drag :: proc(scene: ^Scene, view: GizmoView, mouse: SceneMouse) {
 
     start := gizmo.start_transform
     axis_index := int(gizmo.active) - int(GizmoHandle.X)
+    snap := gizmo.snap != key_down(win32.VK_CONTROL)
     value: [3]f32
 
+    // Snapping counts steps from where the drag started (increments, not a
+    // grid), so the same steps work in world and local space.
     switch {
         case gizmo.active == .Center && gizmo.mode == .Translate:
             hit, ok := gizmo_plane_hit(ray, start.position, view.camera_forward)
             if !ok do return
-            value = start.position + (hit - gizmo.start_point)
+            delta := hit - gizmo.start_point
+            if snap {
+                // Whole steps along each of the handle axes.
+                snapped: alg.Vector3f32
+                for axis in gizmo.start_axes {
+                    snapped += axis * gizmo_snap(alg.dot(delta, axis), gizmo.snap_distance)
+                }
+                delta = snapped
+            }
+            value = start.position + delta
 
         case gizmo.active == .Center && gizmo.mode == .Scale:
             factor := math.exp((mouse.x - gizmo.start_mouse_x) * GIZMO_UNIFORM_SCALE_RATE)
+            if snap {
+                // Proportional steps, e.g. 0.1 = 10% of the starting size.
+                factor = max(1 + gizmo_snap(factor - 1, gizmo.snap_scale), gizmo.snap_scale)
+            }
             value = start.scale * factor
 
         case gizmo.mode == .Rotate:
-            axis := view.axes[axis_index]
+            axis := gizmo.start_axes[axis_index]
             hit, ok := gizmo_plane_hit(ray, start.position, axis)
             if !ok do return
             current := hit - start.position
@@ -360,24 +399,30 @@ editor_gizmo_drag :: proc(scene: ^Scene, view: GizmoView, mouse: SceneMouse) {
                 alg.dot(axis, alg.cross(gizmo.start_point, current)),
                 alg.dot(gizmo.start_point, current),
             )
+            if snap do angle = gizmo_snap(angle, math.to_radians(gizmo.snap_angle_degrees))
+            // Rotating about a local axis (R applied to e_i) equals R * rotate(e_i).
             rotation := alg.matrix4_rotate_f32(angle, axis) * gizmo.start_rotation
             value = transform_rotation_from_matrix(rotation)
 
         case gizmo.mode == .Translate:
-            axis := view.axes[axis_index]
+            axis := gizmo.start_axes[axis_index]
             s, ok := gizmo_axis_param(ray, start.position, axis)
             if !ok do return
-            value = start.position + axis * (s - gizmo.start_param)
+            distance := s - gizmo.start_param
+            if snap do distance = gizmo_snap(distance, gizmo.snap_distance)
+            value = start.position + axis * distance
 
         case:
             // Scale along one local axis by how far the handle moved along it.
-            // Use the axis from the drag start: spin may rotate the entity meanwhile.
-            r := gizmo.start_rotation
-            axis := alg.normalize(alg.Vector3f32{r[0, axis_index], r[1, axis_index], r[2, axis_index]})
+            axis := gizmo.start_axes[axis_index]
             s, ok := gizmo_axis_param(ray, start.position, axis)
             if !ok || math.abs(gizmo.start_param) < 0.000001 do return
             value = start.scale
             value[axis_index] *= s / gizmo.start_param
+            if snap {
+                change := gizmo_snap(value[axis_index] - start.scale[axis_index], gizmo.snap_scale)
+                value[axis_index] = start.scale[axis_index] + change
+            }
     }
 
     editor_apply_value(scene, gizmo.entity, gizmo.field, value)
@@ -464,5 +509,19 @@ editor_draw_gizmo_controls :: proc() {
             gizmo.mode = mode
         }
     }
+
+    // Scale always uses local axes, so the space choice does not apply to it.
+    ui_begin_disabled(gizmo.mode == .Scale || gizmo.active != .None)
+    space_labels := [GizmoSpace]cstring{.World = "World", .Local = "Local (Q)"}
+    for space in GizmoSpace {
+        if space != .World do ui_same_line()
+        if ui_radio_button(space_labels[space], gizmo.space == space) do gizmo.space = space
+    }
+    ui_end_disabled()
+
+    ui_checkbox("Snap (hold Ctrl to toggle)", &gizmo.snap)
+    ui_drag_float("Move step", &gizmo.snap_distance, 0.01, 0.01, 100)
+    ui_drag_float("Rotate step (degrees)", &gizmo.snap_angle_degrees, 0.5, 1, 180)
+    ui_drag_float("Scale step", &gizmo.snap_scale, 0.01, 0.01, 10)
     debug_ui_text("Drag handles in the viewport; right-click cancels.")
 }

@@ -132,10 +132,15 @@ the same frame. The final GPU timing includes tone mapping and the UI draw.
   the inactive HDRI/color controls. Older scenes retain HDRI lighting/backgrounds.
 
 - **Gizmos**: with the mouse released, click an object and drag its handles in the
-  viewport. **W** moves along world axes (center square: move in the view plane),
-  **E** rotates around world axes, **R** scales along the object's local axes (center
-  square: uniform). Right-click during a drag cancels it; each drag is one undo step.
-  The same modes are in the Inspector. Orbiting point lights cannot be moved.
+  viewport. **W** moves (center square: move in the view plane), **E** rotates,
+  **R** scales along the object's local axes (center square: uniform). **Q**
+  switches moving and rotating between world and local axes; scale is always
+  local, since scaling a rotated object along world axes would shear it.
+  **Snap** moves, rotates and scales in whole steps counted from where the drag
+  started (defaults: 0.25 units, 15°, 0.1, or 10% for uniform scale); holding
+  **Ctrl** during a drag flips it. Right-click during a drag cancels it; each
+  drag is one undo step. The modes, space, snapping and step sizes are in the
+  Inspector. Orbiting point lights cannot be moved.
 - **L**: release/capture the mouse. Release it to interact with the panel;
   capture it for the existing WASD/mouse camera controls.
 - **F1**: hide/show the panel.
