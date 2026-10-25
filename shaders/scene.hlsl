@@ -31,7 +31,11 @@ cbuffer ObjectConstants : register(b0)
 
     uint use_roughness_map;
     uint use_metallic_map;
-    float2 _object_pad;
+    uint use_occlusion_map;
+    float occlusion_strength;
+
+    float3 emissive; // Color times strength; zero for none.
+    float  alpha_cutoff; // Used by the cutout (alpha-mask) pipelines only.
 };
 
 // Shared by every draw in a frame.
@@ -85,11 +89,14 @@ cbuffer ShadowCascade : register(b5)
     uint shadow_cascade_index;
 };
 
-// The material table (root slot Material): albedo, normal, roughness, metallic.
+// The material table (root slot Material): albedo, normal, roughness,
+// metallic, emissive, occlusion. Unused maps are neutral (white, flat normal).
 Texture2D         g_texture       : register(t10);
 Texture2D<float4> g_normal_map    : register(t11);
 Texture2D<float4> g_roughness_map : register(t12);
 Texture2D<float4> g_metallic_map  : register(t13);
+Texture2D<float4> g_emissive_map  : register(t14);
+Texture2D<float4> g_occlusion_map : register(t15);
 
 SamplerState g_sampler : register(s0);
 SamplerState g_material_sampler : register(s2);
@@ -129,11 +136,26 @@ float4 ObjectToClip(float3 position, out float4 world_pos, out float4 view_pos)
     return mul(view_pos, projection);
 }
 
+// Cutout materials: discards the pixel where albedo alpha is below the
+// cutoff. Mip maps average alpha toward the cutoff, which would make thin
+// cutouts (leaves, chains) thin out and vanish with distance; scaling alpha
+// up with the mip level keeps their coverage (Ben Golus, "Anti-aliased Alpha
+// Test").
+void ClipAlpha(float2 texcoord)
+{
+    float2 uv = texcoord * uv_scale;
+    float alpha = g_texture.Sample(g_material_sampler, uv).a;
+    float mip = g_texture.CalculateLevelOfDetail(g_material_sampler, uv);
+    alpha *= 1.0f + max(mip, 0.0f) * 0.25f;
+    clip(alpha - alpha_cutoff);
+}
+
 struct VelocityInput
 {
     float4 position      : SV_POSITION;
     float4 current_clip  : TEXCOORD0; // Unjittered.
     float4 previous_clip : TEXCOORD1;
+    float2 texcoord      : TEXCOORD2;
 };
 
 VelocityInput VSDepth(VSInput input)
@@ -144,6 +166,7 @@ VelocityInput VSDepth(VSInput input)
     output.current_clip = mul(world_pos, view_projection);
     float4 previous_world = mul(float4(input.position, 1.0f), previous_model);
     output.previous_clip = mul(previous_world, previous_view_projection);
+    output.texcoord = input.texcoord;
     return output;
 }
 
@@ -154,6 +177,14 @@ float2 PSVelocity(VelocityInput input) : SV_TARGET
     float2 current = input.current_clip.xy / input.current_clip.w;
     float2 previous = input.previous_clip.xy / input.previous_clip.w;
     return (current - previous) * float2(0.5f, -0.5f);
+}
+
+// The prepass for cutouts: their depth only where alpha passes. The lit pass
+// then shades exactly those pixels (EQUAL depth test).
+float2 PSVelocityMasked(VelocityInput input) : SV_TARGET
+{
+    ClipAlpha(input.texcoord);
+    return PSVelocity(input);
 }
 
 PSInput VSMain(VSInput input)
@@ -176,10 +207,25 @@ PSInput VSMain(VSInput input)
     return output;
 }
 
-float4 VSShadow(VSInput input) : SV_POSITION
+struct ShadowInput
 {
+    float4 position : SV_POSITION;
+    float2 texcoord : TEXCOORD0; // Read by cutouts only.
+};
+
+ShadowInput VSShadow(VSInput input)
+{
+    ShadowInput output;
     float4 world_pos = mul(float4(input.position, 1.0f), model);
-    return mul(world_pos, cascade_view_projection[shadow_cascade_index]);
+    output.position = mul(world_pos, cascade_view_projection[shadow_cascade_index]);
+    output.texcoord = input.texcoord;
+    return output;
+}
+
+// Cutouts cast shadows through their holes. Opaque casters have no pixel shader.
+void PSShadowMasked(ShadowInput input)
+{
+    ClipAlpha(input.texcoord);
 }
 
 // 5x5 tent filter from 9 bilinear comparison taps (Ignacio Castano's
@@ -343,7 +389,7 @@ float FilterSpecularRoughness(float material_roughness, float3 N)
     return pow(saturate(alpha * alpha + kernel), 0.25f);
 }
 
-float4 PSMain(PSInput input) : SV_TARGET
+float4 PSMain(PSInput input, bool is_front_face : SV_IsFrontFace) : SV_TARGET
 {
     if (unlit != 0)
     {
@@ -377,14 +423,18 @@ float4 PSMain(PSInput input) : SV_TARGET
     }
     float material_metallic = saturate(metallic_value);
     
-    float3 N = normalize(input.normal);
+    // Back faces (visible only on double-sided materials) are lit from their
+    // own side: the whole surface basis flips, as in the glTF sample viewer.
+    float face_sign = is_front_face ? 1.0f : -1.0f;
+    float3 geometric_normal = normalize(input.normal) * face_sign;
+    float3 N = geometric_normal;
     if (normal_strength > 0.0f)
     {
         // Rebuild an orthogonal surface basis after interpolation.
         float3 T = normalize(
             input.tangent.xyz - N * dot(N, input.tangent.xyz)
-        );
-        float3 B = cross(N, T) * input.tangent.w;
+        ) * face_sign;
+        float3 B = cross(N, T) * input.tangent.w * face_sign;
 
         // Normal maps encode signed directions in unsigned RGB channels.
         float3 tangent_normal = g_normal_map.Sample(
@@ -447,6 +497,13 @@ float4 PSMain(PSInput input) : SV_TARGET
     {
         ambient_occlusion = g_ao.Load(int3(input.position.xy, 0));
     }
+    // Baked occlusion (glTF's definition: red channel, blended in by strength)
+    // adds the detail SSAO cannot see, such as creases inside a model.
+    if (use_occlusion_map != 0u)
+    {
+        float baked = g_occlusion_map.Sample(g_material_sampler, material_uv).r;
+        ambient_occlusion *= 1.0f + occlusion_strength * (baked - 1.0f);
+    }
     float n_dot_v = max(dot(N, V), 0.0f);
     // Lagarde's specular occlusion: reflections fade with AO, less so at
     // grazing angles and on smooth surfaces.
@@ -466,7 +523,6 @@ float4 PSMain(PSInput input) : SV_TARGET
 
     // Use the interpolated geometric normal: normal-map detail does not change
     // the depth stored in the shadow map.
-    float3 geometric_normal = normalize(input.normal);
     float geometric_n_dot_l = saturate(dot(geometric_normal, sun_L));
     float tan_angle = min(
         sqrt(1.0f - geometric_n_dot_l * geometric_n_dot_l) /
@@ -547,6 +603,13 @@ float4 PSMain(PSInput input) : SV_TARGET
             float3(0.35f, 0.5f, 1.0f), float3(1.0f, 1.0f, 0.3f),
         };
         if (cascade < SHADOW_CASCADE_COUNT) result *= cascade_tints[cascade];
+    }
+
+    // Emission is not lit or shadowed; bloom picks up its bright parts.
+    [branch]
+    if (any(emissive > 0.0f))
+    {
+        result += emissive * g_emissive_map.Sample(g_material_sampler, material_uv).rgb;
     }
 
     if (ao_show != 0u)

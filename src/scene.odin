@@ -57,6 +57,35 @@ Material :: struct{
 
     metallic_texture: TextureHandle,
     use_metallic_map: bool,
+
+    // Light the surface gives off: color times strength, times the map's
+    // (sRGB) color when one is used. Zero strength means none.
+    emissive: [3]f32,
+    emissive_strength: f32,
+    emissive_texture: TextureHandle,
+    use_emissive_map: bool,
+
+    // Baked ambient occlusion from the map's red channel, multiplied with
+    // SSAO; strength blends from none (0) to the full map (1).
+    occlusion_texture: TextureHandle,
+    use_occlusion_map: bool,
+    occlusion_strength: f32,
+
+    // Cutout: pixels whose albedo alpha is below alpha_cutoff are not drawn.
+    alpha_mask: bool,
+    alpha_cutoff: f32,
+    // Drawn without back-face culling; back faces are lit from their side.
+    double_sided: bool,
+}
+
+// Ranges of the emission, occlusion and cutout values. NaN fails every test.
+material_effects_valid :: proc(material: Material) -> bool {
+    for channel in material.emissive {
+        if !(channel >= 0) do return false
+    }
+    return material.emissive_strength >= 0 &&
+           material.occlusion_strength >= 0 && material.occlusion_strength <= 1 &&
+           material.alpha_cutoff >= 0 && material.alpha_cutoff <= 1
 }
 
 MeshRenderer :: struct {

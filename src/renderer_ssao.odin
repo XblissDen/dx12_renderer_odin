@@ -112,13 +112,15 @@ renderer_render_depth_prepass :: proc(draws: []Draw, draw_indices: []u32) {
     r.command_list->ClearRenderTargetView(velocity_rtv, &zero, 0, nil)
 
     r.command_list->SetGraphicsRootSignature(r.root_signature)
-    r.command_list->SetPipelineState(r.depth_prepass_pipeline_state)
+    // Cutouts read their albedo alpha through the material table.
+    heaps := []^d3d12.IDescriptorHeap{r.srv_heap}
+    r.command_list->SetDescriptorHeaps(1, raw_data(heaps))
     r.command_list->RSSetViewports(1, &r.viewport)
     r.command_list->RSSetScissorRects(1, &r.scissor_rect)
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
     renderer_bind_cbv(.Frame_Constants, renderer_frame_cb_address())
 
-    for draw_index in draw_indices do renderer_draw(draws, draw_index)
+    renderer_draw_list(draws, draw_indices, r.depth_prepass_pipeline_states)
 
     // Read-only from here to the end of the frame: SSAO samples it and the
     // lit and selection passes test against it.

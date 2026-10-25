@@ -18,6 +18,12 @@ EditorField :: enum {
     Material_Normal_Strength,
     Material_UV_Scale,
     Material_Use_Roughness_Map,
+    Material_Emissive,
+    Material_Emissive_Strength,
+    Material_Occlusion_Strength,
+    Material_Alpha_Mask,
+    Material_Alpha_Cutoff,
+    Material_Double_Sided,
 
     Point_Color,
     Point_Intensity,
@@ -35,6 +41,8 @@ EditorField :: enum {
     Material_Normal_Map,
     Material_Roughness_Map,
     Material_Metallic_Map,
+    Material_Emissive_Map,
+    Material_Occlusion_Map,
 }
 
 EditorCommandKind :: enum {
@@ -123,10 +131,18 @@ editor_field_exists :: proc(
              .Material_Normal_Strength,
              .Material_UV_Scale,
              .Material_Use_Roughness_Map,
+             .Material_Emissive,
+             .Material_Emissive_Strength,
+             .Material_Occlusion_Strength,
+             .Material_Alpha_Mask,
+             .Material_Alpha_Cutoff,
+             .Material_Double_Sided,
              .Material_Albedo_Texture,
              .Material_Normal_Map,
              .Material_Roughness_Map,
-             .Material_Metallic_Map:
+             .Material_Metallic_Map,
+             .Material_Emissive_Map,
+             .Material_Occlusion_Map:
             return scene.has_material[index]
 
         case .Point_Orbit_Height:
@@ -181,7 +197,20 @@ editor_value :: proc(
             return {editor_material(scene, index).uv_scale, 0, 0}
         case .Material_Use_Roughness_Map:
             return editor_bool_value(editor_material(scene, index).use_roughness_map)
-        case .Material_Albedo_Texture, .Material_Normal_Map, .Material_Roughness_Map, .Material_Metallic_Map, .Mesh_Asset:
+        case .Material_Emissive:
+            return editor_material(scene, index).emissive
+        case .Material_Emissive_Strength:
+            return {editor_material(scene, index).emissive_strength, 0, 0}
+        case .Material_Occlusion_Strength:
+            return {editor_material(scene, index).occlusion_strength, 0, 0}
+        case .Material_Alpha_Mask:
+            return editor_bool_value(editor_material(scene, index).alpha_mask)
+        case .Material_Alpha_Cutoff:
+            return {editor_material(scene, index).alpha_cutoff, 0, 0}
+        case .Material_Double_Sided:
+            return editor_bool_value(editor_material(scene, index).double_sided)
+        case .Material_Albedo_Texture, .Material_Normal_Map, .Material_Roughness_Map, .Material_Metallic_Map,
+             .Material_Emissive_Map, .Material_Occlusion_Map, .Mesh_Asset:
             panic("Use typed asset history for asset references")
 
         case .Point_Color:
@@ -246,7 +275,20 @@ editor_apply_value :: proc(
             editor_material(scene, index).uv_scale = value[0]
         case .Material_Use_Roughness_Map:
             editor_material(scene, index).use_roughness_map = value[0] != 0
-        case .Material_Albedo_Texture, .Material_Normal_Map, .Material_Roughness_Map, .Material_Metallic_Map, .Mesh_Asset:
+        case .Material_Emissive:
+            editor_material(scene, index).emissive = value
+        case .Material_Emissive_Strength:
+            editor_material(scene, index).emissive_strength = max(value[0], 0)
+        case .Material_Occlusion_Strength:
+            editor_material(scene, index).occlusion_strength = clamp(value[0], 0, 1)
+        case .Material_Alpha_Mask:
+            editor_material(scene, index).alpha_mask = value[0] != 0
+        case .Material_Alpha_Cutoff:
+            editor_material(scene, index).alpha_cutoff = clamp(value[0], 0, 1)
+        case .Material_Double_Sided:
+            editor_material(scene, index).double_sided = value[0] != 0
+        case .Material_Albedo_Texture, .Material_Normal_Map, .Material_Roughness_Map, .Material_Metallic_Map,
+             .Material_Emissive_Map, .Material_Occlusion_Map, .Mesh_Asset:
             return false
 
         case .Point_Color:
@@ -519,6 +561,8 @@ editor_asset_value :: proc(scene: ^Scene, index: int, field: EditorField) -> Edi
         case .Material_Normal_Map: return {texture = editor_material(scene, index).normal_texture, strength = editor_material(scene, index).normal_strength, enabled = editor_material(scene, index).normal_strength > 0}
         case .Material_Roughness_Map: return {texture = editor_material(scene, index).roughness_texture, enabled = editor_material(scene, index).use_roughness_map}
         case .Material_Metallic_Map: return {texture = editor_material(scene, index).metallic_texture, enabled = editor_material(scene, index).use_metallic_map}
+        case .Material_Emissive_Map: return {texture = editor_material(scene, index).emissive_texture, enabled = editor_material(scene, index).use_emissive_map}
+        case .Material_Occlusion_Map: return {texture = editor_material(scene, index).occlusion_texture, strength = editor_material(scene, index).occlusion_strength, enabled = editor_material(scene, index).use_occlusion_map}
         case: panic("Not an asset field")
     }
 }
@@ -545,6 +589,16 @@ editor_apply_asset :: proc(scene: ^Scene, index: int, field: EditorField, value:
             if !assets_optional_texture_valid(value.texture) || (value.enabled && !texture_asset_is_metallic(value.texture)) do return false
             editor_material(scene, index).metallic_texture = value.texture
             editor_material(scene, index).use_metallic_map = value.enabled
+        case .Material_Emissive_Map:
+            if !assets_optional_texture_valid(value.texture) || (value.enabled && !texture_asset_is_emissive(value.texture)) do return false
+            editor_material(scene, index).emissive_texture = value.texture
+            editor_material(scene, index).use_emissive_map = value.enabled
+        case .Material_Occlusion_Map:
+            if !assets_optional_texture_valid(value.texture) || (value.enabled && !texture_asset_is_occlusion(value.texture)) do return false
+            if !(value.strength >= 0 && value.strength <= 1) do return false
+            editor_material(scene, index).occlusion_texture = value.texture
+            editor_material(scene, index).use_occlusion_map = value.enabled
+            editor_material(scene, index).occlusion_strength = value.strength
         case: return false
     }
     return true

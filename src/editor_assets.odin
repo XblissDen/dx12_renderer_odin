@@ -81,7 +81,8 @@ editor_draw_import_panel :: proc() {
             editor_import_map("Roughness", &state.maps[2], .roughness)
             editor_import_map("Metallic", &state.maps[3], .metallic)
         } else {
-            names := [4]cstring{"Albedo", "Normal", "Roughness", "Metallic"}
+            // In TextureUsage order; `data` is internal.
+            names := [6]cstring{"Albedo", "Normal", "Roughness", "Metallic", "Emissive", "Occlusion"}
             if ui_begin_combo("Usage", names[int(state.usage)]) {
                 for name, i in names {
                     if ui_selectable(name, int(state.usage) == i) do state.usage = TextureUsage(i)
@@ -162,6 +163,8 @@ editor_texture_picker :: proc(scene: ^Scene, index: int, field: EditorField, lab
         if ui_selectable("White" if field == .Material_Albedo_Texture else "None", empty_selected) {
             value := EditorAssetValue{texture = current.texture}
             if field == .Material_Albedo_Texture do value.texture = g_assets.white
+            // Occlusion keeps its strength for when a map is chosen again.
+            if field == .Material_Occlusion_Map do value.strength = current.strength
             editor_commit_asset(scene, index, field, value)
         }
         for i in 1..<len(g_assets.textures) {
@@ -173,6 +176,7 @@ editor_texture_picker :: proc(scene: ^Scene, index: int, field: EditorField, lab
                 value := EditorAssetValue{texture = TextureHandle(i)}
                 if field != .Material_Albedo_Texture do value.enabled = true
                 if field == .Material_Normal_Map do value.strength = strength
+                if field == .Material_Occlusion_Map do value.strength = min(strength, 1)
                 editor_commit_asset(scene, index, field, value)
             }
             ui_pop_id()
@@ -194,6 +198,8 @@ editor_draw_texture_controls :: proc(scene: ^Scene, index: int) {
     editor_texture_picker(scene, index, .Material_Normal_Map, "Normal map", .normal)
     editor_texture_picker(scene, index, .Material_Roughness_Map, "Roughness map", .roughness)
     editor_texture_picker(scene, index, .Material_Metallic_Map, "Metallic map", .metallic)
+    editor_texture_picker(scene, index, .Material_Emissive_Map, "Emissive map", .emissive)
+    editor_texture_picker(scene, index, .Material_Occlusion_Map, "Occlusion map", .occlusion)
 }
 
 editor_add_model :: proc(scene: ^Scene, model: MeshHandle) {

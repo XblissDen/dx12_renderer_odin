@@ -256,7 +256,9 @@ renderer_render_shadow_pass :: proc(
     r.command_list->RSSetViewports(1, &shadow_viewport)
     r.command_list->RSSetScissorRects(1, &shadow_scissor)
     r.command_list->SetGraphicsRootSignature(r.root_signature)
-    r.command_list->SetPipelineState(r.shadow_pipeline_state)
+    // Cutouts read their albedo alpha through the material table.
+    shadow_heaps := []^d3d12.IDescriptorHeap{r.srv_heap}
+    r.command_list->SetDescriptorHeaps(1, raw_data(shadow_heaps))
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
     renderer_bind_cbv(.Frame_Constants, renderer_frame_cb_address())
 
@@ -273,7 +275,7 @@ renderer_render_shadow_pass :: proc(
         // VSShadow reads this cascade's matrix from the frame constants.
         r.command_list->SetGraphicsRoot32BitConstant(u32(Root_Slot.Shadow_Cascade), u32(cascade), 0)
 
-        for draw_index in cascade_draws[cascade] do renderer_draw(draws, draw_index)
+        renderer_draw_list(draws, cascade_draws[cascade], r.shadow_pipeline_states)
     }
 
     shadow_barrier.Transition.StateBefore = {.DEPTH_WRITE}

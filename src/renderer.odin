@@ -77,8 +77,9 @@ renderer_alloc_srv :: proc(count: u32 = 1) -> u32 {
     return result
 }
 
-// Copies a draw's material textures (albedo, normal, roughness, metallic)
-// into its slot of this frame's material ring and returns the table to bind.
+// Copies a draw's material textures (albedo, normal, roughness, metallic,
+// emissive, occlusion) into its slot of this frame's material ring and
+// returns the table to bind.
 // The slot is free: begin_frame waited for the frame that last used it.
 renderer_material_table :: proc(
     draw_index: int,
@@ -176,7 +177,13 @@ ObjectConstants :: struct #align(256) {
 
     use_roughness_map: u32,
     use_metallic_map: u32,
-    _pad0: [2]f32,
+    use_occlusion_map: u32,
+    occlusion_strength: f32,
+
+    // Emission color times strength; the shader multiplies in the map.
+    emissive: [3]f32,
+    // Albedo alpha below this is cut out (alpha-mask materials only).
+    alpha_cutoff: f32,
 }
 
 #assert(size_of(ObjectConstants) == 256)
@@ -272,12 +279,12 @@ Renderer :: struct {
 
     shadow_map: ^d3d12.IResource,
     shadow_dsv_heap: ^d3d12.IDescriptorHeap,
-    shadow_pipeline_state: ^d3d12.IPipelineState,
+    shadow_pipeline_states: [Draw_Variant]^d3d12.IPipelineState,
 
     hdr_texture: ^d3d12.IResource,
     hdr_rtv_heap: ^d3d12.IDescriptorHeap,
 
-    hdr_pipeline_state: ^d3d12.IPipelineState,
+    hdr_pipeline_states: [Draw_Variant]^d3d12.IPipelineState,
     post_pipeline_state: ^d3d12.IPipelineState,
 
     bloom_targets: [BLOOM_TARGET_COUNT]^d3d12.IResource,
@@ -341,7 +348,7 @@ Renderer :: struct {
     ao_targets: [AO_TARGET_COUNT]^d3d12.IResource,
     ao_rtv_heap: ^d3d12.IDescriptorHeap,
     ao_srv_start, depth_srv_index: u32,
-    depth_prepass_pipeline_state: ^d3d12.IPipelineState,
+    depth_prepass_pipeline_states: [Draw_Variant]^d3d12.IPipelineState,
     ssao_pipeline_state: ^d3d12.IPipelineState,
     ssao_blur_pipeline_state: ^d3d12.IPipelineState,
 
@@ -605,7 +612,7 @@ Root_Slot :: enum u32 {
     Irradiance,          // t3
     Prefilter_Constants, // b3
     Prefiltered,         // t4
-    Material,            // t10-t13: albedo, normal, roughness, metallic
+    Material,            // t10-t15: albedo, normal, roughness, metallic, emissive, occlusion
     Frame_Constants,     // b4: camera, lights, shadows, AO, TAA matrices
     Shadow_Cascade,      // b5: root constant, the cascade being drawn
     Texture_T8,          // t8: ambient occlusion, or TAA motion vectors
@@ -621,7 +628,7 @@ Root_Param :: struct {
     visibility: d3d12.SHADER_VISIBILITY,
 }
 
-MATERIAL_TEXTURE_COUNT :: 4
+MATERIAL_TEXTURE_COUNT :: 6
 
 ROOT_LAYOUT := [Root_Slot]Root_Param{
     .Object_Constants    = {.CBV, 0, 0, .ALL},
@@ -653,6 +660,22 @@ renderer_draw :: proc(draws: []Draw, draw_index: u32) {
     r.command_list->IASetVertexBuffers(0, 1, &gpu_mesh.vertex_buffer_view)
     r.command_list->IASetIndexBuffer(&gpu_mesh.index_buffer_view)
     r.command_list->DrawIndexedInstanced(draw.index_count, 1, draw.first_index, 0, 0)
+}
+
+// Draws a pass's draws with their material tables, switching to each draw's
+// pipeline variant from `pipelines` when it changes. The SRV heap must be set.
+renderer_draw_list :: proc(draws: []Draw, indices: []u32, pipelines: [Draw_Variant]^d3d12.IPipelineState) {
+    r := &g_renderer
+    current: Maybe(Draw_Variant)
+    for draw_index in indices {
+        draw := &draws[draw_index]
+        if current != draw.variant {
+            r.command_list->SetPipelineState(pipelines[draw.variant])
+            current = draw.variant
+        }
+        r.command_list->SetGraphicsRootDescriptorTable(u32(Root_Slot.Material), draw.material_table)
+        renderer_draw(draws, draw_index)
+    }
 }
 
 renderer_bind_cbv :: proc(slot: Root_Slot, address: u64) {
@@ -792,6 +815,10 @@ renderer_create_pipelines :: proc() {
     defer depth_vs->Release()
     velocity_ps := renderer_compile_shader("shaders/scene.hlsl", "PSVelocity", "ps_5_1")
     defer velocity_ps->Release()
+    velocity_mask_ps := renderer_compile_shader("shaders/scene.hlsl", "PSVelocityMasked", "ps_5_1")
+    defer velocity_mask_ps->Release()
+    shadow_mask_ps := renderer_compile_shader("shaders/scene.hlsl", "PSShadowMasked", "ps_5_1")
+    defer shadow_mask_ps->Release()
     fullscreen_vs := renderer_compile_shader("shaders/post_process.hlsl", "VSMain", "vs_5_1")
     defer fullscreen_vs->Release()
 
@@ -830,29 +857,41 @@ renderer_create_pipelines :: proc() {
     }
     mesh_desc.RTVFormats[0] = .R16G16B16A16_FLOAT
 
-    // Shadow cascades: depth only. No rasterizer bias: scene.hlsl applies the
-    // adjustable receiver bias.
-    shadow_desc := mesh_desc
-    shadow_desc.VS = shader_bytecode(shadow_vs)
-    shadow_desc.PS = {}
-    shadow_desc.NumRenderTargets = 0
-    shadow_desc.RTVFormats[0] = .UNKNOWN
-    renderer_create_pso(&shadow_desc, &r.shadow_pipeline_state)
+    // One pipeline per draw variant in each mesh pass: double-sided materials
+    // draw without culling, and cutouts discard pixels in the depth-only passes.
+    for variant in Draw_Variant {
+        masked := variant == .Masked || variant == .Masked_Double_Sided
+        variant_desc := mesh_desc
+        if variant == .Double_Sided || variant == .Masked_Double_Sided {
+            variant_desc.RasterizerState.CullMode = .NONE
+        }
 
-    // Depth prepass, which also writes per-pixel motion for TAA. VSDepth
-    // computes positions with the same code as VSMain, so the lit pass can
-    // test LESS_EQUAL against it.
-    depth_desc := mesh_desc
-    depth_desc.VS = shader_bytecode(depth_vs)
-    depth_desc.PS = shader_bytecode(velocity_ps)
-    depth_desc.RTVFormats[0] = .R16G16_FLOAT
-    renderer_create_pso(&depth_desc, &r.depth_prepass_pipeline_state)
+        // Shadow cascades: depth only. No rasterizer bias: scene.hlsl applies
+        // the adjustable receiver bias.
+        shadow_desc := variant_desc
+        shadow_desc.VS = shader_bytecode(shadow_vs)
+        shadow_desc.PS = shader_bytecode(shadow_mask_ps) if masked else {}
+        shadow_desc.NumRenderTargets = 0
+        shadow_desc.RTVFormats[0] = .UNKNOWN
+        renderer_create_pso(&shadow_desc, &r.shadow_pipeline_states[variant])
 
-    // Lit pass into the HDR target, testing against the prepass without writing.
-    lit_desc := mesh_desc
-    lit_desc.DepthStencilState.DepthFunc = .LESS_EQUAL
-    lit_desc.DepthStencilState.DepthWriteMask = .ZERO
-    renderer_create_pso(&lit_desc, &r.hdr_pipeline_state)
+        // Depth prepass, which also writes per-pixel motion for TAA. VSDepth
+        // computes positions with the same code as VSMain, so the lit pass can
+        // test LESS_EQUAL against it.
+        depth_desc := variant_desc
+        depth_desc.VS = shader_bytecode(depth_vs)
+        depth_desc.PS = shader_bytecode(velocity_mask_ps if masked else velocity_ps)
+        depth_desc.RTVFormats[0] = .R16G16_FLOAT
+        renderer_create_pso(&depth_desc, &r.depth_prepass_pipeline_states[variant])
+
+        // Lit pass into the HDR target, testing against the prepass without
+        // writing. Cutouts shade only where their prepass depth survived
+        // (EQUAL), so the lit pass does not repeat the alpha test.
+        lit_desc := variant_desc
+        lit_desc.DepthStencilState.DepthFunc = .EQUAL if masked else .LESS_EQUAL
+        lit_desc.DepthStencilState.DepthWriteMask = .ZERO
+        renderer_create_pso(&lit_desc, &r.hdr_pipeline_states[variant])
+    }
 
     // Full-screen triangle: no input layout, culling, or depth.
     fullscreen := mesh_desc
@@ -1246,7 +1285,7 @@ renderer_upload_texture :: proc(
 
     width, height := u64(width32), u64(height32)
     is_normal_map := desc.usage == .normal
-    is_linear_data := desc.usage != .albedo
+    is_linear_data := desc.usage != .albedo && desc.usage != .emissive
 
     // Color textures are sRGB-encoded: the _SRGB format makes the sampler
     // decode to linear before filtering. Data maps stay UNORM.
@@ -1561,7 +1600,7 @@ renderer_destroy :: proc(){
     r.srv_heap->Release()
     r.srv_staging_heap->Release()
 
-    r.shadow_pipeline_state->Release()
+    for pso in r.shadow_pipeline_states do pso->Release()
     r.shadow_map->Release()
     r.shadow_dsv_heap->Release()
 
@@ -1574,7 +1613,7 @@ renderer_destroy :: proc(){
     r.taa_rtv_heap->Release()
     r.velocity_rtv_heap->Release()
     r.taa_resolve_pipeline_state->Release()
-    r.hdr_pipeline_state->Release()
+    for pso in r.hdr_pipeline_states do pso->Release()
     r.post_pipeline_state->Release()
     r.selection_pipeline_state->Release()
     r.selection_root_signature->Release()
@@ -1586,7 +1625,7 @@ renderer_destroy :: proc(){
 
     for target in r.ao_targets do target->Release()
     r.ao_rtv_heap->Release()
-    r.depth_prepass_pipeline_state->Release()
+    for pso in r.depth_prepass_pipeline_states do pso->Release()
     r.ssao_pipeline_state->Release()
     r.ssao_blur_pipeline_state->Release()
 

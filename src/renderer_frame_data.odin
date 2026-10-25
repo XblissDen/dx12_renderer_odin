@@ -2,6 +2,7 @@ package main
 
 import "core:math"
 import alg "core:math/linalg"
+import d3d12 "vendor:directx/d3d12"
 
 CullingStats :: struct {
     scene_visible, scene_total: int,
@@ -14,11 +15,18 @@ CullingStats :: struct {
 // buffer and material-table rings.
 MAX_DRAWS :: 4096
 
+// How a draw's material changes its pipelines (one per variant in each mesh
+// pass): cutouts discard pixels in the depth-only passes, and double-sided
+// materials draw without back-face culling.
+Draw_Variant :: enum u8 {Opaque, Masked, Double_Sided, Masked_Double_Sided}
+
 // One submesh of one entity, with the material of its slot.
 Draw :: struct {
     mesh: MeshHandle,
     first_index, index_count: u32,
-    textures: [MATERIAL_TEXTURE_COUNT]TextureHandle, // albedo, normal, roughness, metallic
+    // Albedo, normal, roughness, metallic, emissive and occlusion textures.
+    material_table: d3d12.GPU_DESCRIPTOR_HANDLE,
+    variant: Draw_Variant,
     bounds: WorldBounds,
     casts_shadow: bool,
 }
@@ -177,18 +185,27 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
             }
             material := scene_material(scene, i, int(submesh.material_slot))
             draw := &data.draws[data.draw_count]
+            // Unused maps get neutral textures: flat normal, white elsewhere.
+            textures := [MATERIAL_TEXTURE_COUNT]TextureHandle{
+                material.texture, g_assets.flat_normal, g_assets.one, g_assets.one, g_assets.white, g_assets.one,
+            }
+            if material.normal_strength > 0 do textures[1] = material.normal_texture
+            if material.use_roughness_map do textures[2] = material.roughness_texture
+            if material.use_metallic_map do textures[3] = material.metallic_texture
+            if material.use_emissive_map do textures[4] = material.emissive_texture
+            if material.use_occlusion_map do textures[5] = material.occlusion_texture
+
             draw^ = Draw{
                 mesh = mesh,
                 first_index = submesh.first_index,
                 index_count = submesh.index_count,
-                textures = {material.texture, g_assets.flat_normal, g_assets.one, g_assets.one},
+                // The depth-only passes bind it too, for cutouts.
+                material_table = renderer_material_table(data.draw_count, textures),
+                variant = Draw_Variant(int(material.alpha_mask) + 2 * int(material.double_sided)),
                 bounds = bounds_to_world(submesh.bounds, model),
                 // Unlit marker meshes do not cast shadows.
                 casts_shadow = !material.unlit,
             }
-            if material.normal_strength > 0 do draw.textures[1] = material.normal_texture
-            if material.use_roughness_map do draw.textures[2] = material.roughness_texture
-            if material.use_metallic_map do draw.textures[3] = material.metallic_texture
 
             if draw.casts_shadow {
                 data.caster_bounds[data.caster_count] = draw.bounds
@@ -208,6 +225,10 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
                 unlit = u32(material.unlit),
                 use_roughness_map = u32(material.use_roughness_map),
                 use_metallic_map = u32(material.use_metallic_map),
+                use_occlusion_map = u32(material.use_occlusion_map),
+                occlusion_strength = material.occlusion_strength,
+                emissive = material.emissive * material.emissive_strength,
+                alpha_cutoff = material.alpha_cutoff,
             }
             data.draw_count += 1
         }

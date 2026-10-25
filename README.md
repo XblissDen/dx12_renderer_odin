@@ -47,15 +47,28 @@ in `assets.json`, and is undone completely if any step fails:
 - The model is flattened into one entity: node transforms are baked into the
   vertices, and primitives sharing a material become one submesh.
 - Each material becomes a *material slot* with its base color (texture and
-  factor), normal map, and metallic/roughness. The packed metallic-roughness
-  texture is registered as a roughness texture (green channel) and a metallic
-  texture (blue channel). Select a slot in the Inspector to edit it; scenes
-  (format version 7) save every slot.
+  factor), normal map, metallic/roughness, emission, occlusion, alpha cutout
+  and double-sidedness. The packed metallic-roughness texture is registered as
+  a roughness texture (green channel) and a metallic texture (blue channel);
+  the occlusion map uses the red channel, often of that same texture. Select a
+  slot in the Inspector to edit it; scenes (format version 8) save every slot.
+- **Emission** (color, strength, and an optional sRGB map) is added after
+  lighting, so bright parts bloom. `KHR_materials_emissive_strength` is read.
+- **Occlusion maps** darken ambient light only, multiplied with SSAO and
+  blended in by their strength.
+- **Alpha mask** materials are cutouts: pixels whose albedo alpha is below the
+  cutoff are discarded in the depth prepass and shadow pass, and the lit pass
+  shades only what the prepass kept. Alpha is scaled up with the mip level so
+  thin cutouts (leaves, chains) keep their coverage at a distance.
+- **Double-sided** materials draw without back-face culling, and back faces
+  are lit from their own side.
 - Geometry is converted from glTF's right-handed space to the renderer's
   left-handed one. Missing normals and tangents are generated.
-- Not supported yet: emissive and occlusion maps, alpha mask/blend (drawn
-  opaque, with a note after import), animation and skinning (the static pose
-  loads), and compressed meshes (Draco, meshopt), which are rejected.
+- Not supported yet: alpha blending (drawn opaque, with a note after import),
+  animation and skinning (the static pose loads), and compressed meshes
+  (Draco, meshopt), which are rejected. Clicking selects through cutout holes.
+- Models imported before emission, occlusion and cutouts existed keep the
+  materials stored in `assets.json`; import them again to pick these up.
 
 Textures load at startup with mip maps built on the CPU, so a model with many
 textures (Sponza has about 120 after splitting) adds several seconds there.
@@ -88,7 +101,8 @@ the same frame. The final GPU timing includes tone mapping and the UI draw.
   objects meet, using a depth prepass, 16 view-space samples per pixel within
   **AO radius** (world units), and a depth-aware blur. **AO intensity** is the
   exponent applied to the result. Direct sun and point light are unaffected.
-  **Show AO only** displays the occlusion buffer for tuning.
+  Materials with an occlusion map multiply it in. **Show AO only** displays the
+  combined occlusion for tuning.
 - **Sun from HDRI** (HDRI lighting, on by default): the panorama's sun is found when
   it loads, removed from the image-based lighting, and becomes the shadowed
   directional light, with its measured direction, color and intensity. It follows

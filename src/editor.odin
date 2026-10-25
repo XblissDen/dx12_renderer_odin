@@ -200,6 +200,26 @@ editor_draw_material_controls :: proc(scene: ^Scene, index: int) {
     editor_drag_number(
         scene, index, .Material_UV_Scale, "UV tiling", 0.1, 0.1, 32.0,
     )
+
+    editor_color(scene, index, .Material_Emissive, "Emission")
+    editor_drag_number(
+        scene, index, .Material_Emissive_Strength, "Emission strength", 0.05, 0.0, 100.0,
+    )
+    if material.use_emissive_map && (material.emissive == {} || material.emissive_strength == 0) {
+        debug_ui_text("Set an emission color and strength to see the map.")
+    }
+
+    if material.use_occlusion_map {
+        editor_slider(
+            scene, index, .Material_Occlusion_Strength, "Occlusion strength", 0.0, 1.0,
+        )
+    }
+
+    editor_checkbox(scene, index, .Material_Alpha_Mask, "Alpha cutout")
+    if material.alpha_mask {
+        editor_slider(scene, index, .Material_Alpha_Cutoff, "Alpha cutoff", 0.0, 1.0)
+    }
+    editor_checkbox(scene, index, .Material_Double_Sided, "Double-sided")
 }
 
 editor_draw_point_light_controls :: proc(scene: ^Scene, index: int) {

@@ -42,14 +42,7 @@ renderer_render_scene_pass :: proc(draws: []Draw, draw_indices: []u32) {
     dsv_handle := renderer_depth_dsv(read_only = true)
     r.command_list->OMSetRenderTargets(1, &hdr_rtv, false, &dsv_handle)
 
-    // Pipeline
     r.command_list->SetGraphicsRootSignature(r.root_signature)
-    r.command_list->SetPipelineState(r.hdr_pipeline_state)
-
-    // heap + texture bind
-    heaps := []^d3d12.IDescriptorHeap{ r.srv_heap }
-    r.command_list->SetDescriptorHeaps(u32(len(heaps)), raw_data(heaps))
-
     renderer_bind_srv(.Texture_T1, r.shadow_srv_index)
     renderer_bind_srv(.Irradiance, r.irradiance_srv_index)
     renderer_bind_srv(.Prefiltered, r.prefilter_srv_index)
@@ -64,13 +57,7 @@ renderer_render_scene_pass :: proc(draws: []Draw, draw_indices: []u32) {
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
     renderer_bind_cbv(.Frame_Constants, renderer_frame_cb_address())
 
-    for draw_index in draw_indices{
-        r.command_list->SetGraphicsRootDescriptorTable(
-            u32(Root_Slot.Material),
-            renderer_material_table(int(draw_index), draws[draw_index].textures),
-        )
-        renderer_draw(draws, draw_index)
-    }
+    renderer_draw_list(draws, draw_indices, r.hdr_pipeline_states)
 
     // Scene render target becomes a shader input.
     hdr_barrier.Transition.StateBefore = {.RENDER_TARGET}

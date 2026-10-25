@@ -13,7 +13,8 @@ import stbi "vendor:stb/image"
 MeshHandle :: distinct u32
 TextureHandle :: distinct u32
 EnvironmentHandle :: distinct u32
-TextureUsage :: enum {albedo, normal, roughness, metallic, data}
+// Emissive maps are sRGB color like albedo; occlusion maps are linear data.
+TextureUsage :: enum {albedo, normal, roughness, metallic, emissive, occlusion, data}
 TextureSource :: enum {file, checkerboard, solid}
 MeshImport :: struct {flip_v: bool}
 TextureImport :: struct {
@@ -25,10 +26,12 @@ TextureImport :: struct {
 
 AssetMaterial :: struct {
     name: string,
-    albedo, normal, roughness_map, metallic_map: string,
+    albedo, normal, roughness_map, metallic_map, emissive_map, occlusion_map: string,
     // Optional factors: omitted values get defaults; an explicit zero stays zero.
     roughness, metallic, normal_strength, uv_scale: Maybe(f32),
-    tint: Maybe([3]f32),
+    emissive_strength, occlusion_strength, alpha_cutoff: Maybe(f32),
+    tint, emissive: Maybe([3]f32),
+    alpha_mask, double_sided: bool,
 }
 MeshDesc :: struct {
     id, name, path: string,
@@ -356,6 +359,8 @@ assets_import_gltf :: proc(request: AssetImportRequest) -> (model: MeshHandle, m
         // glTF packs roughness in green and metallic in blue.
         if usage == .roughness do desc.settings.channel = 1
         if usage == .metallic do desc.settings.channel = 2
+        // Occlusion is red, often in that same texture.
+        if usage == .occlusion do desc.settings.channel = 0
         append(descs, desc)
         ids[key] = id
         return id
@@ -374,6 +379,24 @@ assets_import_gltf :: proc(request: AssetImportRequest) -> (model: MeshHandle, m
             metallic = clamp(source.metallic, 0, 1),
             normal_strength = max(source.normal_scale, 0),
             tint = [3]f32{source.base_color.r, source.base_color.g, source.base_color.b},
+            emissive_map = texture_id(source.emissive_image, .emissive, id, image_paths, &texture_ids, &texture_descs),
+            occlusion_map = texture_id(source.occlusion_image, .occlusion, id, image_paths, &texture_ids, &texture_descs),
+            occlusion_strength = clamp(source.occlusion_strength, 0, 1),
+            alpha_mask = source.alpha_mode == "MASK",
+            double_sided = source.double_sided,
+        }
+        if source.emissive != {} {
+            materials[slot].emissive = source.emissive
+            materials[slot].emissive_strength = max(source.emissive_strength, 0)
+        } else if source.emissive_image >= 0 {
+            // A zero factor turns the map off; keep it, but dark.
+            materials[slot].emissive = [3]f32{}
+        }
+        if materials[slot].alpha_mask {
+            // Alpha is texture alpha times the factor's; dividing the cutoff
+            // by the factor gives the same test on texture alpha alone.
+            factor := source.base_color.a
+            materials[slot].alpha_cutoff = clamp(source.alpha_cutoff / factor, 0, 1) if factor > 0 else 1
         }
     }
     if g_renderer.srv_next + u32(len(texture_descs)) > SRV_HEAP_CAPACITY {
@@ -473,6 +496,8 @@ texture_asset_is_albedo :: proc(h: TextureHandle) -> bool {return assets_texture
 texture_asset_is_normal :: proc(h: TextureHandle) -> bool {return assets_texture_usage(h, .normal)}
 texture_asset_is_roughness :: proc(h: TextureHandle) -> bool {return assets_texture_usage(h, .roughness)}
 texture_asset_is_metallic :: proc(h: TextureHandle) -> bool {return assets_texture_usage(h, .metallic)}
+texture_asset_is_emissive :: proc(h: TextureHandle) -> bool {return assets_texture_usage(h, .emissive)}
+texture_asset_is_occlusion :: proc(h: TextureHandle) -> bool {return assets_texture_usage(h, .occlusion)}
 
 assets_label :: proc(name, id: string) -> cstring {
     text := name if len(name) > 0 else id
@@ -560,9 +585,31 @@ assets_material :: proc(desc: AssetMaterial) -> (material: Material, ok: bool) {
         material.use_metallic_map = true
         if !has_metallic do material.metallic = 1
     }
+    // A map without a color glows with the map's own colors.
+    emissive, has_emissive := desc.emissive.([3]f32)
+    if desc.emissive_map != "" {
+        material.emissive_texture = assets_texture(desc.emissive_map)
+        if !texture_asset_is_emissive(material.emissive_texture) do return {}, false
+        material.use_emissive_map = true
+        if !has_emissive do emissive, has_emissive = {1, 1, 1}, true
+    }
+    if has_emissive {
+        material.emissive = emissive
+        material.emissive_strength = desc.emissive_strength.? or_else 1
+    }
+    if desc.occlusion_map != "" {
+        material.occlusion_texture = assets_texture(desc.occlusion_map)
+        if !texture_asset_is_occlusion(material.occlusion_texture) do return {}, false
+        material.use_occlusion_map = true
+        material.occlusion_strength = desc.occlusion_strength.? or_else 1
+    }
+    material.alpha_mask = desc.alpha_mask
+    material.alpha_cutoff = desc.alpha_cutoff.? or_else 0.5
+    material.double_sided = desc.double_sided
     if !(material.roughness >= 0 && material.roughness <= 1) ||
        !(material.metallic >= 0 && material.metallic <= 1) ||
-       !(material.normal_strength >= 0) || !(material.uv_scale > 0) {
+       !(material.normal_strength >= 0) || !(material.uv_scale > 0) ||
+       !material_effects_valid(material) {
         return {}, false
     }
     return material, true

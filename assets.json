@@ -14,11 +14,19 @@
         "normal": "",
         "roughness_map": "",
         "metallic_map": "",
+        "emissive_map": "",
+        "occlusion_map": "",
         "roughness": 0.80000001,
         "metallic": null,
         "normal_strength": null,
         "uv_scale": null,
-        "tint": null
+        "emissive_strength": null,
+        "occlusion_strength": null,
+        "alpha_cutoff": null,
+        "tint": null,
+        "emissive": null,
+        "alpha_mask": false,
+        "double_sided": false
       },
       "materials": [
 
@@ -37,43 +45,28 @@
         "normal": "",
         "roughness_map": "",
         "metallic_map": "",
+        "emissive_map": "",
+        "occlusion_map": "",
         "roughness": 0.28000000,
         "metallic": 0.75000000,
         "normal_strength": null,
         "uv_scale": null,
-        "tint": null
+        "emissive_strength": null,
+        "occlusion_strength": null,
+        "alpha_cutoff": null,
+        "tint": null,
+        "emissive": null,
+        "alpha_mask": false,
+        "double_sided": false
       },
       "materials": [
 
       ]
     },
     {
-      "id": "model.cannon_01_2k.2",
-      "name": "cannon_01_2k",
-      "path": "models/imported/model.cannon_01_2k.2.obj",
-      "import": {
-        "flip_v": true
-      },
-      "material": {
-        "name": "",
-        "albedo": "texture.albedo.cannon_01_diff_2k.1",
-        "normal": "texture.normal.cannon_01_nor_dx_2k.1",
-        "roughness_map": "texture.roughness.cannon_01_rough_2k.1",
-        "metallic_map": "texture.metallic.cannon_01_metal_2k.1",
-        "roughness": null,
-        "metallic": null,
-        "normal_strength": null,
-        "uv_scale": null,
-        "tint": null
-      },
-      "materials": [
-
-      ]
-    },
-    {
-      "id": "model.boxtextured",
-      "name": "BoxTextured",
-      "path": "models/imported/model.boxtextured/BoxTextured.gltf",
+      "id": "model.flighthelmet",
+      "name": "FlightHelmet",
+      "path": "models/imported/model.flighthelmet/FlightHelmet.gltf",
       "import": {
         "flip_v": false
       },
@@ -83,28 +76,164 @@
         "normal": "",
         "roughness_map": "",
         "metallic_map": "",
+        "emissive_map": "",
+        "occlusion_map": "",
         "roughness": null,
         "metallic": null,
         "normal_strength": null,
         "uv_scale": null,
-        "tint": null
+        "emissive_strength": null,
+        "occlusion_strength": null,
+        "alpha_cutoff": null,
+        "tint": null,
+        "emissive": null,
+        "alpha_mask": false,
+        "double_sided": false
       },
       "materials": [
         {
-          "name": "Texture",
-          "albedo": "model.boxtextured.image0.albedo",
-          "normal": "",
-          "roughness_map": "",
-          "metallic_map": "",
+          "name": "HoseMat",
+          "albedo": "model.flighthelmet.image2.albedo",
+          "normal": "model.flighthelmet.image0.normal",
+          "roughness_map": "model.flighthelmet.image1.roughness",
+          "metallic_map": "model.flighthelmet.image1.metallic",
+          "emissive_map": "",
+          "occlusion_map": "model.flighthelmet.image1.occlusion",
           "roughness": 1.00000000,
-          "metallic": 0.00000000,
+          "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             1.00000000,
             1.00000000,
             1.00000000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": true
+        },
+        {
+          "name": "RubberWoodMat",
+          "albedo": "model.flighthelmet.image2.albedo",
+          "normal": "model.flighthelmet.image0.normal",
+          "roughness_map": "model.flighthelmet.image1.roughness",
+          "metallic_map": "model.flighthelmet.image1.metallic",
+          "emissive_map": "",
+          "occlusion_map": "model.flighthelmet.image1.occlusion",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
+        },
+        {
+          "name": "GlassPlasticMat",
+          "albedo": "model.flighthelmet.image5.albedo",
+          "normal": "model.flighthelmet.image3.normal",
+          "roughness_map": "model.flighthelmet.image4.roughness",
+          "metallic_map": "model.flighthelmet.image4.metallic",
+          "emissive_map": "",
+          "occlusion_map": "model.flighthelmet.image4.occlusion",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
+        },
+        {
+          "name": "MetalPartsMat",
+          "albedo": "model.flighthelmet.image8.albedo",
+          "normal": "model.flighthelmet.image6.normal",
+          "roughness_map": "model.flighthelmet.image7.roughness",
+          "metallic_map": "model.flighthelmet.image7.metallic",
+          "emissive_map": "",
+          "occlusion_map": "model.flighthelmet.image7.occlusion",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
+        },
+        {
+          "name": "LeatherPartsMat",
+          "albedo": "model.flighthelmet.image11.albedo",
+          "normal": "model.flighthelmet.image9.normal",
+          "roughness_map": "model.flighthelmet.image10.roughness",
+          "metallic_map": "model.flighthelmet.image10.metallic",
+          "emissive_map": "",
+          "occlusion_map": "model.flighthelmet.image10.occlusion",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
+        },
+        {
+          "name": "LensesMat",
+          "albedo": "model.flighthelmet.image14.albedo",
+          "normal": "model.flighthelmet.image12.normal",
+          "roughness_map": "model.flighthelmet.image13.roughness",
+          "metallic_map": "model.flighthelmet.image13.metallic",
+          "emissive_map": "",
+          "occlusion_map": "model.flighthelmet.image13.occlusion",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         }
       ]
     },
@@ -121,11 +250,19 @@
         "normal": "",
         "roughness_map": "",
         "metallic_map": "",
+        "emissive_map": "",
+        "occlusion_map": "",
         "roughness": null,
         "metallic": null,
         "normal_strength": null,
         "uv_scale": null,
-        "tint": null
+        "emissive_strength": null,
+        "occlusion_strength": null,
+        "alpha_cutoff": null,
+        "tint": null,
+        "emissive": null,
+        "alpha_mask": false,
+        "double_sided": false
       },
       "materials": [
         {
@@ -134,133 +271,27 @@
           "normal": "model.damagedhelmet.image4.normal",
           "roughness_map": "model.damagedhelmet.image1.roughness",
           "metallic_map": "model.damagedhelmet.image1.metallic",
+          "emissive_map": "model.damagedhelmet.image2.emissive",
+          "occlusion_map": "model.damagedhelmet.image3.occlusion",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": 1.00000000,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             1.00000000,
             1.00000000,
             1.00000000
-          ]
-        }
-      ]
-    },
-    {
-      "id": "model.flighthelmet",
-      "name": "FlightHelmet",
-      "path": "models/imported/model.flighthelmet/FlightHelmet.gltf",
-      "import": {
-        "flip_v": false
-      },
-      "material": {
-        "name": "",
-        "albedo": "",
-        "normal": "",
-        "roughness_map": "",
-        "metallic_map": "",
-        "roughness": null,
-        "metallic": null,
-        "normal_strength": null,
-        "uv_scale": null,
-        "tint": null
-      },
-      "materials": [
-        {
-          "name": "HoseMat",
-          "albedo": "model.flighthelmet.image2.albedo",
-          "normal": "model.flighthelmet.image0.normal",
-          "roughness_map": "model.flighthelmet.image1.roughness",
-          "metallic_map": "model.flighthelmet.image1.metallic",
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_strength": 1.00000000,
-          "uv_scale": null,
-          "tint": [
+          ],
+          "emissive": [
             1.00000000,
             1.00000000,
             1.00000000
-          ]
-        },
-        {
-          "name": "RubberWoodMat",
-          "albedo": "model.flighthelmet.image2.albedo",
-          "normal": "model.flighthelmet.image0.normal",
-          "roughness_map": "model.flighthelmet.image1.roughness",
-          "metallic_map": "model.flighthelmet.image1.metallic",
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_strength": 1.00000000,
-          "uv_scale": null,
-          "tint": [
-            1.00000000,
-            1.00000000,
-            1.00000000
-          ]
-        },
-        {
-          "name": "GlassPlasticMat",
-          "albedo": "model.flighthelmet.image5.albedo",
-          "normal": "model.flighthelmet.image3.normal",
-          "roughness_map": "model.flighthelmet.image4.roughness",
-          "metallic_map": "model.flighthelmet.image4.metallic",
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_strength": 1.00000000,
-          "uv_scale": null,
-          "tint": [
-            1.00000000,
-            1.00000000,
-            1.00000000
-          ]
-        },
-        {
-          "name": "MetalPartsMat",
-          "albedo": "model.flighthelmet.image8.albedo",
-          "normal": "model.flighthelmet.image6.normal",
-          "roughness_map": "model.flighthelmet.image7.roughness",
-          "metallic_map": "model.flighthelmet.image7.metallic",
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_strength": 1.00000000,
-          "uv_scale": null,
-          "tint": [
-            1.00000000,
-            1.00000000,
-            1.00000000
-          ]
-        },
-        {
-          "name": "LeatherPartsMat",
-          "albedo": "model.flighthelmet.image11.albedo",
-          "normal": "model.flighthelmet.image9.normal",
-          "roughness_map": "model.flighthelmet.image10.roughness",
-          "metallic_map": "model.flighthelmet.image10.metallic",
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_strength": 1.00000000,
-          "uv_scale": null,
-          "tint": [
-            1.00000000,
-            1.00000000,
-            1.00000000
-          ]
-        },
-        {
-          "name": "LensesMat",
-          "albedo": "model.flighthelmet.image14.albedo",
-          "normal": "model.flighthelmet.image12.normal",
-          "roughness_map": "model.flighthelmet.image13.roughness",
-          "metallic_map": "model.flighthelmet.image13.metallic",
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_strength": 1.00000000,
-          "uv_scale": null,
-          "tint": [
-            1.00000000,
-            1.00000000,
-            1.00000000
-          ]
+          ],
+          "alpha_mask": false,
+          "double_sided": false
         }
       ]
     },
@@ -277,11 +308,19 @@
         "normal": "",
         "roughness_map": "",
         "metallic_map": "",
+        "emissive_map": "",
+        "occlusion_map": "",
         "roughness": null,
         "metallic": null,
         "normal_strength": null,
         "uv_scale": null,
-        "tint": null
+        "emissive_strength": null,
+        "occlusion_strength": null,
+        "alpha_cutoff": null,
+        "tint": null,
+        "emissive": null,
+        "alpha_mask": false,
+        "double_sided": false
       },
       "materials": [
         {
@@ -290,15 +329,23 @@
           "normal": "model.sponza.image0.normal",
           "roughness_map": "model.sponza.image2.roughness",
           "metallic_map": "model.sponza.image2.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": 0.50000000,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": true,
+          "double_sided": true
         },
         {
           "name": "Material 3",
@@ -306,15 +353,23 @@
           "normal": "model.sponza.image3.normal",
           "roughness_map": "model.sponza.image5.roughness",
           "metallic_map": "model.sponza.image5.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": 0.50000000,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": true,
+          "double_sided": true
         },
         {
           "name": "Material 1",
@@ -322,15 +377,23 @@
           "normal": "model.sponza.image6.normal",
           "roughness_map": "model.sponza.image8.roughness",
           "metallic_map": "model.sponza.image8.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         },
         {
           "name": "Material 4",
@@ -338,15 +401,23 @@
           "normal": "model.sponza.image9.normal",
           "roughness_map": "model.sponza.image11.roughness",
           "metallic_map": "model.sponza.image11.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         },
         {
           "name": "Material 5",
@@ -354,15 +425,23 @@
           "normal": "model.sponza.image12.normal",
           "roughness_map": "model.sponza.image14.roughness",
           "metallic_map": "model.sponza.image14.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         },
         {
           "name": "Material 6",
@@ -370,15 +449,23 @@
           "normal": "model.sponza.image15.normal",
           "roughness_map": "model.sponza.image17.roughness",
           "metallic_map": "model.sponza.image17.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         },
         {
           "name": "Material 7",
@@ -386,15 +473,23 @@
           "normal": "model.sponza.image18.normal",
           "roughness_map": "model.sponza.image20.roughness",
           "metallic_map": "model.sponza.image20.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         },
         {
           "name": "Material 8",
@@ -402,15 +497,23 @@
           "normal": "model.sponza.image21.normal",
           "roughness_map": "model.sponza.image23.roughness",
           "metallic_map": "model.sponza.image23.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         },
         {
           "name": "Material 9",
@@ -418,15 +521,23 @@
           "normal": "model.sponza.image24.normal",
           "roughness_map": "model.sponza.image26.roughness",
           "metallic_map": "model.sponza.image26.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         },
         {
           "name": "Material 10",
@@ -434,15 +545,23 @@
           "normal": "model.sponza.image27.normal",
           "roughness_map": "model.sponza.image29.roughness",
           "metallic_map": "model.sponza.image29.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         },
         {
           "name": "Material 11",
@@ -450,15 +569,23 @@
           "normal": "model.sponza.image30.normal",
           "roughness_map": "model.sponza.image32.roughness",
           "metallic_map": "model.sponza.image32.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         },
         {
           "name": "Material 12",
@@ -466,15 +593,23 @@
           "normal": "model.sponza.image33.normal",
           "roughness_map": "model.sponza.image35.roughness",
           "metallic_map": "model.sponza.image35.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         },
         {
           "name": "Material 2",
@@ -482,15 +617,23 @@
           "normal": "",
           "roughness_map": "",
           "metallic_map": "",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 0.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         },
         {
           "name": "Material 13",
@@ -498,15 +641,23 @@
           "normal": "model.sponza.image36.normal",
           "roughness_map": "model.sponza.image38.roughness",
           "metallic_map": "model.sponza.image38.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         },
         {
           "name": "Material 14",
@@ -514,15 +665,23 @@
           "normal": "model.sponza.image39.normal",
           "roughness_map": "model.sponza.image41.roughness",
           "metallic_map": "model.sponza.image41.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         },
         {
           "name": "Material 15",
@@ -530,15 +689,23 @@
           "normal": "model.sponza.image42.normal",
           "roughness_map": "model.sponza.image41.roughness",
           "metallic_map": "model.sponza.image41.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         },
         {
           "name": "Material 16",
@@ -546,15 +713,23 @@
           "normal": "model.sponza.image44.normal",
           "roughness_map": "model.sponza.image41.roughness",
           "metallic_map": "model.sponza.image41.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         },
         {
           "name": "Material 17",
@@ -562,15 +737,23 @@
           "normal": "model.sponza.image46.normal",
           "roughness_map": "model.sponza.image48.roughness",
           "metallic_map": "model.sponza.image48.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         },
         {
           "name": "Material 18",
@@ -578,15 +761,23 @@
           "normal": "model.sponza.image49.normal",
           "roughness_map": "model.sponza.image48.roughness",
           "metallic_map": "model.sponza.image48.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         },
         {
           "name": "Material 19",
@@ -594,15 +785,23 @@
           "normal": "model.sponza.image51.normal",
           "roughness_map": "model.sponza.image48.roughness",
           "metallic_map": "model.sponza.image48.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         },
         {
           "name": "Material 20",
@@ -610,15 +809,23 @@
           "normal": "model.sponza.image53.normal",
           "roughness_map": "model.sponza.image55.roughness",
           "metallic_map": "model.sponza.image55.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": 0.50000000,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": true,
+          "double_sided": true
         },
         {
           "name": "Material 21",
@@ -626,15 +833,23 @@
           "normal": "model.sponza.image56.normal",
           "roughness_map": "model.sponza.image58.roughness",
           "metallic_map": "model.sponza.image58.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         },
         {
           "name": "Material 22",
@@ -642,15 +857,23 @@
           "normal": "model.sponza.image59.normal",
           "roughness_map": "model.sponza.image61.roughness",
           "metallic_map": "model.sponza.image61.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         },
         {
           "name": "Material 23",
@@ -658,15 +881,23 @@
           "normal": "model.sponza.image62.normal",
           "roughness_map": "model.sponza.image64.roughness",
           "metallic_map": "model.sponza.image64.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         },
         {
           "name": "Material 24",
@@ -674,15 +905,23 @@
           "normal": "model.sponza.image65.normal",
           "roughness_map": "model.sponza.image67.roughness",
           "metallic_map": "model.sponza.image67.metallic",
+          "emissive_map": "",
+          "occlusion_map": "",
           "roughness": 1.00000000,
           "metallic": 1.00000000,
           "normal_strength": 1.00000000,
           "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
           "tint": [
             0.58800000,
             0.58800000,
             0.58800000
-          ]
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "double_sided": false
         }
       ]
     }
@@ -789,186 +1028,6 @@
       ]
     },
     {
-      "id": "texture.albedo.cannon_01_diff_2k.1",
-      "name": "cannon_01_diff_2k",
-      "path": "textures/imported/texture.albedo.cannon_01_diff_2k.1.png",
-      "usage": "albedo",
-      "source": "file",
-      "import": {
-        "flip_green": false,
-        "channel": null
-      },
-      "width": 0,
-      "height": 0,
-      "tile_size": 0,
-      "color": [
-        0,
-        0,
-        0,
-        0
-      ]
-    },
-    {
-      "id": "texture.metallic.cannon_01_metal_2k.1",
-      "name": "cannon_01_metal_2k",
-      "path": "textures/imported/texture.metallic.cannon_01_metal_2k.1.png",
-      "usage": "metallic",
-      "source": "file",
-      "import": {
-        "flip_green": false,
-        "channel": null
-      },
-      "width": 0,
-      "height": 0,
-      "tile_size": 0,
-      "color": [
-        0,
-        0,
-        0,
-        0
-      ]
-    },
-    {
-      "id": "texture.normal.cannon_01_nor_dx_2k.1",
-      "name": "cannon_01_nor_dx_2k",
-      "path": "textures/imported/texture.normal.cannon_01_nor_dx_2k.1.png",
-      "usage": "normal",
-      "source": "file",
-      "import": {
-        "flip_green": false,
-        "channel": null
-      },
-      "width": 0,
-      "height": 0,
-      "tile_size": 0,
-      "color": [
-        0,
-        0,
-        0,
-        0
-      ]
-    },
-    {
-      "id": "texture.roughness.cannon_01_rough_2k.1",
-      "name": "cannon_01_rough_2k",
-      "path": "textures/imported/texture.roughness.cannon_01_rough_2k.1.png",
-      "usage": "roughness",
-      "source": "file",
-      "import": {
-        "flip_green": false,
-        "channel": null
-      },
-      "width": 0,
-      "height": 0,
-      "tile_size": 0,
-      "color": [
-        0,
-        0,
-        0,
-        0
-      ]
-    },
-    {
-      "id": "model.boxtextured.image0.albedo",
-      "name": "CesiumLogoFlat",
-      "path": "models/imported/model.boxtextured/CesiumLogoFlat.png",
-      "usage": "albedo",
-      "source": "file",
-      "import": {
-        "flip_green": false,
-        "channel": null
-      },
-      "width": 0,
-      "height": 0,
-      "tile_size": 0,
-      "color": [
-        0,
-        0,
-        0,
-        0
-      ]
-    },
-    {
-      "id": "model.damagedhelmet.image0.albedo",
-      "name": "image0",
-      "path": "models/imported/model.damagedhelmet/image0.jpg",
-      "usage": "albedo",
-      "source": "file",
-      "import": {
-        "flip_green": false,
-        "channel": null
-      },
-      "width": 0,
-      "height": 0,
-      "tile_size": 0,
-      "color": [
-        0,
-        0,
-        0,
-        0
-      ]
-    },
-    {
-      "id": "model.damagedhelmet.image4.normal",
-      "name": "image4",
-      "path": "models/imported/model.damagedhelmet/image4.jpg",
-      "usage": "normal",
-      "source": "file",
-      "import": {
-        "flip_green": false,
-        "channel": null
-      },
-      "width": 0,
-      "height": 0,
-      "tile_size": 0,
-      "color": [
-        0,
-        0,
-        0,
-        0
-      ]
-    },
-    {
-      "id": "model.damagedhelmet.image1.roughness",
-      "name": "image1",
-      "path": "models/imported/model.damagedhelmet/image1.jpg",
-      "usage": "roughness",
-      "source": "file",
-      "import": {
-        "flip_green": false,
-        "channel": 1
-      },
-      "width": 0,
-      "height": 0,
-      "tile_size": 0,
-      "color": [
-        0,
-        0,
-        0,
-        0
-      ]
-    },
-    {
-      "id": "model.damagedhelmet.image1.metallic",
-      "name": "image1",
-      "path": "models/imported/model.damagedhelmet/image1.jpg",
-      "usage": "metallic",
-      "source": "file",
-      "import": {
-        "flip_green": false,
-        "channel": 2
-      },
-      "width": 0,
-      "height": 0,
-      "tile_size": 0,
-      "color": [
-        0,
-        0,
-        0,
-        0
-      ]
-    },
-    {
       "id": "model.flighthelmet.image2.albedo",
       "name": "FlightHelmet_Materials_RubberWoodMat_BaseColor",
       "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_RubberWoodMat_BaseColor.png",
@@ -1037,6 +1096,26 @@
       "import": {
         "flip_green": false,
         "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image1.occlusion",
+      "name": "FlightHelmet_Materials_RubberWoodMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_RubberWoodMat_OcclusionRoughMetal.png",
+      "usage": "occlusion",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 0
       },
       "width": 0,
       "height": 0,
@@ -1129,6 +1208,26 @@
       ]
     },
     {
+      "id": "model.flighthelmet.image4.occlusion",
+      "name": "FlightHelmet_Materials_GlassPlasticMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_GlassPlasticMat_OcclusionRoughMetal.png",
+      "usage": "occlusion",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 0
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
       "id": "model.flighthelmet.image8.albedo",
       "name": "FlightHelmet_Materials_MetalPartsMat_BaseColor",
       "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_MetalPartsMat_BaseColor.png",
@@ -1197,6 +1296,26 @@
       "import": {
         "flip_green": false,
         "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image7.occlusion",
+      "name": "FlightHelmet_Materials_MetalPartsMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_MetalPartsMat_OcclusionRoughMetal.png",
+      "usage": "occlusion",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 0
       },
       "width": 0,
       "height": 0,
@@ -1289,6 +1408,26 @@
       ]
     },
     {
+      "id": "model.flighthelmet.image10.occlusion",
+      "name": "FlightHelmet_Materials_LeatherPartsMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_LeatherPartsMat_OcclusionRoughMetal.png",
+      "usage": "occlusion",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 0
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
       "id": "model.flighthelmet.image14.albedo",
       "name": "FlightHelmet_Materials_LensesMat_BaseColor",
       "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_LensesMat_BaseColor.png",
@@ -1357,6 +1496,146 @@
       "import": {
         "flip_green": false,
         "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image13.occlusion",
+      "name": "FlightHelmet_Materials_LensesMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_LensesMat_OcclusionRoughMetal.png",
+      "usage": "occlusion",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 0
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.damagedhelmet.image0.albedo",
+      "name": "image0",
+      "path": "models/imported/model.damagedhelmet/image0.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.damagedhelmet.image4.normal",
+      "name": "image4",
+      "path": "models/imported/model.damagedhelmet/image4.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.damagedhelmet.image1.roughness",
+      "name": "image1",
+      "path": "models/imported/model.damagedhelmet/image1.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.damagedhelmet.image1.metallic",
+      "name": "image1",
+      "path": "models/imported/model.damagedhelmet/image1.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.damagedhelmet.image2.emissive",
+      "name": "image2",
+      "path": "models/imported/model.damagedhelmet/image2.jpg",
+      "usage": "emissive",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.damagedhelmet.image3.occlusion",
+      "name": "image3",
+      "path": "models/imported/model.damagedhelmet/image3.jpg",
+      "usage": "occlusion",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 0
       },
       "width": 0,
       "height": 0,

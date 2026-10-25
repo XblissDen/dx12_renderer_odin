@@ -1,5 +1,5 @@
 {
-  "version": 7,
+  "version": 8,
   "entities": [
     {
       "name": "Cube (left)",
@@ -11,7 +11,7 @@
         ],
         "rotation": [
           0.00000000,
-          332.15444946,
+          114.49792480,
           0.00000000
         ],
         "rotation_speed": 0.60000002,
@@ -40,7 +40,21 @@
         "roughness_texture": "",
         "use_roughness_map": false,
         "metallic_texture": "",
-        "use_metallic_map": false
+        "use_metallic_map": false,
+        "emissive": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "emissive_strength": 0.00000000,
+        "emissive_texture": "",
+        "use_emissive_map": false,
+        "occlusion_texture": "",
+        "use_occlusion_map": false,
+        "occlusion_strength": 0.00000000,
+        "alpha_mask": false,
+        "alpha_cutoff": 0.00000000,
+        "double_sided": false
       },
       "extra_materials": [
 
@@ -59,7 +73,7 @@
         ],
         "rotation": [
           0.00000000,
-          332.15444946,
+          114.49792480,
           0.00000000
         ],
         "rotation_speed": 0.60000002,
@@ -88,7 +102,21 @@
         "roughness_texture": "",
         "use_roughness_map": false,
         "metallic_texture": "",
-        "use_metallic_map": false
+        "use_metallic_map": false,
+        "emissive": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "emissive_strength": 0.00000000,
+        "emissive_texture": "",
+        "use_emissive_map": false,
+        "occlusion_texture": "",
+        "use_occlusion_map": false,
+        "occlusion_strength": 0.00000000,
+        "alpha_mask": false,
+        "alpha_cutoff": 0.00000000,
+        "double_sided": false
       },
       "extra_materials": [
 
@@ -107,7 +135,7 @@
         ],
         "rotation": [
           0.00000000,
-          332.15444946,
+          114.49792480,
           0.00000000
         ],
         "rotation_speed": 0.60000002,
@@ -136,7 +164,21 @@
         "roughness_texture": "",
         "use_roughness_map": false,
         "metallic_texture": "",
-        "use_metallic_map": false
+        "use_metallic_map": false,
+        "emissive": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "emissive_strength": 0.00000000,
+        "emissive_texture": "",
+        "use_emissive_map": false,
+        "occlusion_texture": "",
+        "use_occlusion_map": false,
+        "occlusion_strength": 0.00000000,
+        "alpha_mask": false,
+        "alpha_cutoff": 0.00000000,
+        "double_sided": false
       },
       "extra_materials": [
 
@@ -184,7 +226,21 @@
         "roughness_texture": "stone.roughness",
         "use_roughness_map": true,
         "metallic_texture": "",
-        "use_metallic_map": false
+        "use_metallic_map": false,
+        "emissive": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "emissive_strength": 0.00000000,
+        "emissive_texture": "",
+        "use_emissive_map": false,
+        "occlusion_texture": "",
+        "use_occlusion_map": false,
+        "occlusion_strength": 0.00000000,
+        "alpha_mask": false,
+        "alpha_cutoff": 0.00000000,
+        "double_sided": false
       },
       "extra_materials": [
 
@@ -221,9 +277,9 @@
       "name": "Warm point light",
       "transform": {
         "position": [
-          1.31338477,
+          0.33877283,
           1.50000000,
-          -1.50831711
+          1.97109938
         ],
         "rotation": [
           0.00000000,
@@ -256,7 +312,21 @@
         "roughness_texture": "",
         "use_roughness_map": false,
         "metallic_texture": "",
-        "use_metallic_map": false
+        "use_metallic_map": false,
+        "emissive": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "emissive_strength": 0.00000000,
+        "emissive_texture": "",
+        "use_emissive_map": false,
+        "occlusion_texture": "",
+        "use_occlusion_map": false,
+        "occlusion_strength": 0.00000000,
+        "alpha_mask": false,
+        "alpha_cutoff": 0.00000000,
+        "double_sided": false
       },
       "extra_materials": [
 
@@ -269,7 +339,7 @@
         ],
         "intensity": 3.00000000,
         "orbit_radius": 2.00000000,
-        "orbit_angle": 332.15444946,
+        "orbit_angle": 114.49792480,
         "orbit_speed": 0.60000002,
         "orbit_enabled": true
       },
@@ -280,9 +350,9 @@
       "name": "Cool point light",
       "transform": {
         "position": [
-          -1.31390452,
+          -0.33872518,
           1.50000000,
-          1.50786436
+          -1.97110760
         ],
         "rotation": [
           0.00000000,
@@ -315,7 +385,21 @@
         "roughness_texture": "",
         "use_roughness_map": false,
         "metallic_texture": "",
-        "use_metallic_map": false
+        "use_metallic_map": false,
+        "emissive": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "emissive_strength": 0.00000000,
+        "emissive_texture": "",
+        "use_emissive_map": false,
+        "occlusion_texture": "",
+        "use_occlusion_map": false,
+        "occlusion_strength": 0.00000000,
+        "alpha_mask": false,
+        "alpha_cutoff": 0.00000000,
+        "double_sided": false
       },
       "extra_materials": [
 
@@ -328,7 +412,7 @@
         ],
         "intensity": 3.00000000,
         "orbit_radius": 2.00000000,
-        "orbit_angle": 335.29638672,
+        "orbit_angle": 117.63954163,
         "orbit_speed": 0.60000002,
         "orbit_enabled": true
       },
@@ -339,9 +423,9 @@
       "name": "",
       "transform": {
         "position": [
-          -2.83755994,
-          0.62584895,
-          -5.78848886
+          26.98663521,
+          -1.41349483,
+          3.83051610
         ],
         "rotation": [
           0.00000000,
@@ -363,20 +447,241 @@
       "point_light": null,
       "directional_light": null,
       "camera": {
-        "yaw": 32.54551315,
-        "pitch": -0.18261713,
+        "yaw": 9.48462963,
+        "pitch": 0.11699998,
         "speed": 3.00000000,
         "sensitivity": 0.00300000,
-        "far_clip": 100.00000000
+        "far_clip": 0.00000000
       }
+    },
+    {
+      "name": "FlightHelmet",
+      "transform": {
+        "position": [
+          -0.53422463,
+          -0.33540297,
+          -1.30659151
+        ],
+        "rotation": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation_speed": 0.00000000,
+        "scale": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ]
+      },
+      "mesh_renderer": {
+        "mesh": "model.flighthelmet"
+      },
+      "material": {
+        "tint": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ],
+        "texture": "model.flighthelmet.image2.albedo",
+        "unlit": false,
+        "roughness": 1.00000000,
+        "metallic": 1.00000000,
+        "normal_texture": "model.flighthelmet.image0.normal",
+        "normal_strength": 1.00000000,
+        "uv_scale": 1.00000000,
+        "roughness_texture": "model.flighthelmet.image1.roughness",
+        "use_roughness_map": true,
+        "metallic_texture": "model.flighthelmet.image1.metallic",
+        "use_metallic_map": true,
+        "emissive": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "emissive_strength": 0.00000000,
+        "emissive_texture": "",
+        "use_emissive_map": false,
+        "occlusion_texture": "model.flighthelmet.image1.occlusion",
+        "use_occlusion_map": true,
+        "occlusion_strength": 1.00000000,
+        "alpha_mask": false,
+        "alpha_cutoff": 0.50000000,
+        "double_sided": true
+      },
+      "extra_materials": [
+        {
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "texture": "model.flighthelmet.image2.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.flighthelmet.image0.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.flighthelmet.image1.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.flighthelmet.image1.metallic",
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "model.flighthelmet.image1.occlusion",
+          "use_occlusion_map": true,
+          "occlusion_strength": 1.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
+        },
+        {
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "texture": "model.flighthelmet.image5.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.flighthelmet.image3.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.flighthelmet.image4.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.flighthelmet.image4.metallic",
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "model.flighthelmet.image4.occlusion",
+          "use_occlusion_map": true,
+          "occlusion_strength": 1.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
+        },
+        {
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "texture": "model.flighthelmet.image8.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.flighthelmet.image6.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.flighthelmet.image7.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.flighthelmet.image7.metallic",
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "model.flighthelmet.image7.occlusion",
+          "use_occlusion_map": true,
+          "occlusion_strength": 1.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
+        },
+        {
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "texture": "model.flighthelmet.image11.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.flighthelmet.image9.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.flighthelmet.image10.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.flighthelmet.image10.metallic",
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "model.flighthelmet.image10.occlusion",
+          "use_occlusion_map": true,
+          "occlusion_strength": 1.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
+        },
+        {
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "texture": "model.flighthelmet.image14.albedo",
+          "unlit": false,
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_texture": "model.flighthelmet.image12.normal",
+          "normal_strength": 1.00000000,
+          "uv_scale": 1.00000000,
+          "roughness_texture": "model.flighthelmet.image13.roughness",
+          "use_roughness_map": true,
+          "metallic_texture": "model.flighthelmet.image13.metallic",
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "model.flighthelmet.image13.occlusion",
+          "use_occlusion_map": true,
+          "occlusion_strength": 1.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
+        }
+      ],
+      "point_light": null,
+      "directional_light": null,
+      "camera": null
     },
     {
       "name": "DamagedHelmet",
       "transform": {
         "position": [
-          -0.38162926,
-          0.58753896,
-          3.15990496
+          -0.47352940,
+          0.52892542,
+          3.11099982
         ],
         "rotation": [
           0.00000000,
@@ -409,7 +714,21 @@
         "roughness_texture": "model.damagedhelmet.image1.roughness",
         "use_roughness_map": true,
         "metallic_texture": "model.damagedhelmet.image1.metallic",
-        "use_metallic_map": true
+        "use_metallic_map": true,
+        "emissive": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ],
+        "emissive_strength": 1.00000000,
+        "emissive_texture": "model.damagedhelmet.image2.emissive",
+        "use_emissive_map": true,
+        "occlusion_texture": "model.damagedhelmet.image3.occlusion",
+        "use_occlusion_map": true,
+        "occlusion_strength": 1.00000000,
+        "alpha_mask": false,
+        "alpha_cutoff": 0.50000000,
+        "double_sided": false
       },
       "extra_materials": [
 
@@ -419,149 +738,12 @@
       "camera": null
     },
     {
-      "name": "FlightHelmet",
-      "transform": {
-        "position": [
-          -0.37212941,
-          -0.19353670,
-          -2.05555940
-        ],
-        "rotation": [
-          0.00000000,
-          59.03136826,
-          0.00000000
-        ],
-        "rotation_speed": 0.17453292,
-        "scale": [
-          1.00000000,
-          1.00000000,
-          1.00000000
-        ]
-      },
-      "mesh_renderer": {
-        "mesh": "model.flighthelmet"
-      },
-      "material": {
-        "tint": [
-          1.00000000,
-          1.00000000,
-          1.00000000
-        ],
-        "texture": "model.flighthelmet.image2.albedo",
-        "unlit": false,
-        "roughness": 1.00000000,
-        "metallic": 1.00000000,
-        "normal_texture": "model.flighthelmet.image0.normal",
-        "normal_strength": 1.00000000,
-        "uv_scale": 1.00000000,
-        "roughness_texture": "model.flighthelmet.image1.roughness",
-        "use_roughness_map": true,
-        "metallic_texture": "model.flighthelmet.image1.metallic",
-        "use_metallic_map": true
-      },
-      "extra_materials": [
-        {
-          "tint": [
-            1.00000000,
-            1.00000000,
-            1.00000000
-          ],
-          "texture": "model.flighthelmet.image2.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.flighthelmet.image0.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.flighthelmet.image1.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.flighthelmet.image1.metallic",
-          "use_metallic_map": true
-        },
-        {
-          "tint": [
-            1.00000000,
-            1.00000000,
-            1.00000000
-          ],
-          "texture": "model.flighthelmet.image5.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.flighthelmet.image3.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.flighthelmet.image4.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.flighthelmet.image4.metallic",
-          "use_metallic_map": true
-        },
-        {
-          "tint": [
-            1.00000000,
-            1.00000000,
-            1.00000000
-          ],
-          "texture": "model.flighthelmet.image8.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.flighthelmet.image6.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.flighthelmet.image7.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.flighthelmet.image7.metallic",
-          "use_metallic_map": true
-        },
-        {
-          "tint": [
-            1.00000000,
-            1.00000000,
-            1.00000000
-          ],
-          "texture": "model.flighthelmet.image11.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.flighthelmet.image9.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.flighthelmet.image10.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.flighthelmet.image10.metallic",
-          "use_metallic_map": true
-        },
-        {
-          "tint": [
-            1.00000000,
-            1.00000000,
-            1.00000000
-          ],
-          "texture": "model.flighthelmet.image14.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.flighthelmet.image12.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.flighthelmet.image13.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.flighthelmet.image13.metallic",
-          "use_metallic_map": true
-        }
-      ],
-      "point_light": null,
-      "directional_light": null,
-      "camera": null
-    },
-    {
       "name": "Sponza",
       "transform": {
         "position": [
-          30.25507736,
-          -4.78333759,
-          5.48147583
+          31.30469704,
+          -4.03039312,
+          4.09917593
         ],
         "rotation": [
           0.00000000,
@@ -594,7 +776,21 @@
         "roughness_texture": "model.sponza.image2.roughness",
         "use_roughness_map": true,
         "metallic_texture": "model.sponza.image2.metallic",
-        "use_metallic_map": true
+        "use_metallic_map": true,
+        "emissive": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "emissive_strength": 0.00000000,
+        "emissive_texture": "",
+        "use_emissive_map": false,
+        "occlusion_texture": "",
+        "use_occlusion_map": false,
+        "occlusion_strength": 0.00000000,
+        "alpha_mask": true,
+        "alpha_cutoff": 0.50000000,
+        "double_sided": true
       },
       "extra_materials": [
         {
@@ -613,7 +809,21 @@
           "roughness_texture": "model.sponza.image5.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image5.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": true,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": true
         },
         {
           "tint": [
@@ -631,7 +841,21 @@
           "roughness_texture": "model.sponza.image8.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image8.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
         },
         {
           "tint": [
@@ -649,7 +873,21 @@
           "roughness_texture": "model.sponza.image11.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image11.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
         },
         {
           "tint": [
@@ -667,7 +905,21 @@
           "roughness_texture": "model.sponza.image14.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image14.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
         },
         {
           "tint": [
@@ -685,7 +937,21 @@
           "roughness_texture": "model.sponza.image17.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image17.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
         },
         {
           "tint": [
@@ -703,7 +969,21 @@
           "roughness_texture": "model.sponza.image20.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image20.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
         },
         {
           "tint": [
@@ -721,7 +1001,21 @@
           "roughness_texture": "model.sponza.image23.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image23.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
         },
         {
           "tint": [
@@ -739,7 +1033,21 @@
           "roughness_texture": "model.sponza.image26.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image26.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
         },
         {
           "tint": [
@@ -757,7 +1065,21 @@
           "roughness_texture": "model.sponza.image29.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image29.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
         },
         {
           "tint": [
@@ -775,7 +1097,21 @@
           "roughness_texture": "model.sponza.image32.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image32.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
         },
         {
           "tint": [
@@ -793,7 +1129,21 @@
           "roughness_texture": "model.sponza.image35.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image35.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
         },
         {
           "tint": [
@@ -811,7 +1161,21 @@
           "roughness_texture": "",
           "use_roughness_map": false,
           "metallic_texture": "",
-          "use_metallic_map": false
+          "use_metallic_map": false,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
         },
         {
           "tint": [
@@ -829,7 +1193,21 @@
           "roughness_texture": "model.sponza.image38.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image38.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
         },
         {
           "tint": [
@@ -847,7 +1225,21 @@
           "roughness_texture": "model.sponza.image41.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image41.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
         },
         {
           "tint": [
@@ -865,7 +1257,21 @@
           "roughness_texture": "model.sponza.image41.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image41.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
         },
         {
           "tint": [
@@ -883,7 +1289,21 @@
           "roughness_texture": "model.sponza.image41.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image41.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
         },
         {
           "tint": [
@@ -901,7 +1321,21 @@
           "roughness_texture": "model.sponza.image48.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image48.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
         },
         {
           "tint": [
@@ -919,7 +1353,21 @@
           "roughness_texture": "model.sponza.image48.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image48.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
         },
         {
           "tint": [
@@ -937,7 +1385,21 @@
           "roughness_texture": "model.sponza.image48.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image48.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
         },
         {
           "tint": [
@@ -955,7 +1417,21 @@
           "roughness_texture": "model.sponza.image55.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image55.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": true,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": true
         },
         {
           "tint": [
@@ -973,7 +1449,21 @@
           "roughness_texture": "model.sponza.image58.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image58.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
         },
         {
           "tint": [
@@ -991,7 +1481,21 @@
           "roughness_texture": "model.sponza.image61.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image61.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
         },
         {
           "tint": [
@@ -1009,7 +1513,21 @@
           "roughness_texture": "model.sponza.image64.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image64.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
         },
         {
           "tint": [
@@ -1027,7 +1545,21 @@
           "roughness_texture": "model.sponza.image67.roughness",
           "use_roughness_map": true,
           "metallic_texture": "model.sponza.image67.metallic",
-          "use_metallic_map": true
+          "use_metallic_map": true,
+          "emissive": [
+            0.00000000,
+            0.00000000,
+            0.00000000
+          ],
+          "emissive_strength": 0.00000000,
+          "emissive_texture": "",
+          "use_emissive_map": false,
+          "occlusion_texture": "",
+          "use_occlusion_map": false,
+          "occlusion_strength": 0.00000000,
+          "alpha_mask": false,
+          "alpha_cutoff": 0.50000000,
+          "double_sided": false
         }
       ],
       "point_light": null,

@@ -22,9 +22,13 @@ Gltf_Material :: struct {
     name: string,
     base_color: [4]f32,
     metallic, roughness, normal_scale: f32,
+    emissive: [3]f32,
+    emissive_strength, occlusion_strength, alpha_cutoff: f32,
     // Indices into Gltf_Model.images, or -1.
     base_color_image, metallic_roughness_image, normal_image: int,
-    alpha_mode: string,
+    emissive_image, occlusion_image: int,
+    alpha_mode: string, // OPAQUE, MASK or BLEND
+    double_sided: bool,
 }
 
 Gltf_Image :: struct {
@@ -81,7 +85,8 @@ Doc_Buffer_View :: struct {
 Doc_Texture_Ref :: struct {
     index: int,
     tex_coord: int `json:"texCoord"`,
-    scale: Maybe(f32),
+    scale: Maybe(f32),    // Normal textures.
+    strength: Maybe(f32), // Occlusion textures.
 }
 
 @(private="file")
@@ -95,7 +100,18 @@ Doc_Material :: struct {
         metallic_roughness_texture: Maybe(Doc_Texture_Ref) `json:"metallicRoughnessTexture"`,
     } `json:"pbrMetallicRoughness"`,
     normal_texture: Maybe(Doc_Texture_Ref) `json:"normalTexture"`,
+    occlusion_texture: Maybe(Doc_Texture_Ref) `json:"occlusionTexture"`,
+    emissive_texture: Maybe(Doc_Texture_Ref) `json:"emissiveTexture"`,
+    emissive_factor: Maybe([3]f32) `json:"emissiveFactor"`,
     alpha_mode: string `json:"alphaMode"`,
+    alpha_cutoff: Maybe(f32) `json:"alphaCutoff"`,
+    double_sided: bool `json:"doubleSided"`,
+    extensions: struct {
+        // Scales emission past glTF's [0, 1] factor range.
+        emissive_strength: Maybe(struct {
+            value: Maybe(f32) `json:"emissiveStrength"`,
+        }) `json:"KHR_materials_emissive_strength"`,
+    },
 }
 
 @(private="file")
@@ -199,10 +215,10 @@ gltf_load :: proc(path: string, allocator := context.allocator) -> (model: Gltf_
     materials := make([]Gltf_Material, len(loader.slot_materials), context.temp_allocator)
     for material_index, slot in loader.slot_materials {
         materials[slot] = gltf_convert_material(&doc, material_index)
-        if materials[slot].alpha_mode == "MASK" || materials[slot].alpha_mode == "BLEND" {
+        if materials[slot].alpha_mode == "BLEND" {
             append(&loader.warnings, fmt.tprintf(
-                "Material \"%s\" uses alpha %s; it is drawn opaque.",
-                materials[slot].name, materials[slot].alpha_mode,
+                "Material \"%s\" uses alpha blending; it is drawn opaque.",
+                materials[slot].name,
             ))
         }
     }
@@ -635,6 +651,11 @@ gltf_convert_material :: proc(doc: ^Doc, index: int) -> Gltf_Material {
         base_color_image = -1,
         metallic_roughness_image = -1,
         normal_image = -1,
+        emissive_strength = 1,
+        occlusion_strength = 1,
+        alpha_cutoff = 0.5,
+        emissive_image = -1,
+        occlusion_image = -1,
         alpha_mode = "OPAQUE",
     }
     if index < 0 || index >= len(doc.materials) do return result
@@ -642,6 +663,12 @@ gltf_convert_material :: proc(doc: ^Doc, index: int) -> Gltf_Material {
     material := doc.materials[index]
     result.name = material.name if material.name != "" else fmt.tprintf("Material %d", index)
     if material.alpha_mode != "" do result.alpha_mode = material.alpha_mode
+    result.alpha_cutoff = material.alpha_cutoff.? or_else 0.5
+    result.double_sided = material.double_sided
+    result.emissive = material.emissive_factor.? or_else {}
+    if extension, ok := material.extensions.emissive_strength.?; ok {
+        result.emissive_strength = extension.value.? or_else 1
+    }
     result.base_color = material.pbr.base_color_factor.? or_else result.base_color
     result.metallic = material.pbr.metallic_factor.? or_else 1
     result.roughness = material.pbr.roughness_factor.? or_else 1
@@ -656,6 +683,11 @@ gltf_convert_material :: proc(doc: ^Doc, index: int) -> Gltf_Material {
     if ref, ok := material.normal_texture.?; ok {
         result.normal_image = image_of(doc, ref)
         result.normal_scale = ref.scale.? or_else 1
+    }
+    if ref, ok := material.emissive_texture.?; ok do result.emissive_image = image_of(doc, ref)
+    if ref, ok := material.occlusion_texture.?; ok {
+        result.occlusion_image = image_of(doc, ref)
+        result.occlusion_strength = ref.strength.? or_else 1
     }
     return result
 }
