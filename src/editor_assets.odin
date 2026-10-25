@@ -205,8 +205,6 @@ editor_draw_texture_controls :: proc(scene: ^Scene, index: int) {
 editor_add_model :: proc(scene: ^Scene, model: MeshHandle) {
     if !assets_mesh_valid(model) do return
     editor_finish_edit()
-    slot := editor_find_available_mesh_slot(scene)
-    if slot < 0 do return
     asset := &g_assets.meshes[model]
     name, ok := scene_store_owned_name(asset.desc.name if asset.desc.name != "" else asset.desc.id)
     if !ok do return
@@ -215,10 +213,6 @@ editor_add_model :: proc(scene: ^Scene, model: MeshHandle) {
     if camera >= 0 {
         transform.position = scene.transforms[camera].position + camera_forward(&scene.cameras[camera]) * 3 - (asset.bounds.minimum + asset.bounds.maximum) * 0.5
     }
-    source := g_editor_selected
     snapshot := EditorMeshSnapshot{name = name, transform = transform, mesh_renderer = {mesh = model}, material = asset.material, material_slots = asset.material_slots}
-    entity := Entity(slot)
-    if !editor_restore_created_mesh(scene, entity, snapshot) do return
-    editor_push_command({kind = .Create_Mesh, entity = entity, source_entity = source, mesh_snapshot = snapshot})
-    g_editor_selected = entity
+    editor_create_entity(scene, snapshot, g_editor_selected)
 }

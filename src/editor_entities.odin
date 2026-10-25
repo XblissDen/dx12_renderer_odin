@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:math"
 
 editor_find_available_mesh_slot :: proc(scene: ^Scene) -> int {
     for i in 0..<scene.entity_count {
@@ -24,9 +25,48 @@ editor_find_available_mesh_slot :: proc(scene: ^Scene) -> int {
     return -1
 }
 
+// Live point lights; the renderer takes at most MAX_LIGHTS.
+scene_point_light_count :: proc(scene: ^Scene) -> int {
+    count := 0
+    for i in 0..<scene.entity_count {
+        if scene.alive[i] && scene.has_point_light[i] do count += 1
+    }
+    return count
+}
+
+// Whether one more point light fits; if not, says so in the Scene panel.
+editor_point_light_fits :: proc(scene: ^Scene) -> bool {
+    if scene_point_light_count(scene) < MAX_LIGHTS do return true
+    // The status outlives this frame's temporary allocations.
+    @(static) message: [64]u8
+    g_editor_file_status = fmt.bprintf(message[:], "At most %d point lights are supported.", MAX_LIGHTS)
+    return false
+}
+
 editor_can_duplicate_mesh :: proc(scene: ^Scene, entity: Entity) -> bool {
     return editor_find_available_mesh_slot(scene) >= 0 &&
-           editor_can_delete_mesh(scene, entity)
+           editor_can_delete_mesh(scene, entity) &&
+           (!scene.has_point_light[int(entity)] || scene_point_light_count(scene) < MAX_LIGHTS)
+}
+
+editor_mesh_snapshot :: proc(scene: ^Scene, index: int) -> EditorMeshSnapshot {
+    snapshot := EditorMeshSnapshot{
+        name = scene.names[index],
+        transform = scene.transforms[index],
+        mesh_renderer = scene.mesh_renderers[index],
+        material = scene.materials[index],
+        material_slots = scene.material_slots[index],
+    }
+    if scene.has_point_light[index] do snapshot.point_light = scene.point_lights[index]
+    return snapshot
+}
+
+// Adds the snapshot's components to an entity slot that is (being made) alive.
+editor_add_snapshot_components :: proc(scene: ^Scene, entity: Entity, snapshot: EditorMeshSnapshot) {
+    scene_add_transform(scene, entity, snapshot.transform)
+    scene_add_mesh_renderer(scene, entity, snapshot.mesh_renderer)
+    scene_set_materials(scene, entity, snapshot.material, snapshot.material_slots)
+    if light, ok := snapshot.point_light.?; ok do scene_add_point_light(scene, entity, light)
 }
 
 editor_restore_created_mesh :: proc(
@@ -37,6 +77,9 @@ editor_restore_created_mesh :: proc(
     index := int(entity)
 
     if index < 0 || index >= MAX_ENTITIES {
+        return false
+    }
+    if snapshot.point_light != nil && !editor_point_light_fits(scene) {
         return false
     }
 
@@ -52,10 +95,7 @@ editor_restore_created_mesh :: proc(
         return false
     }
 
-    scene_add_transform(scene, entity, snapshot.transform)
-    scene_add_mesh_renderer(scene, entity, snapshot.mesh_renderer)
-    scene_set_materials(scene, entity, snapshot.material, snapshot.material_slots)
-
+    editor_add_snapshot_components(scene, entity, snapshot)
     return true
 }
 
@@ -70,14 +110,32 @@ editor_remove_created_mesh :: proc(scene: ^Scene, entity: Entity) -> bool {
     return true
 }
 
+// Creates an entity from a snapshot as one undoable step and selects it.
+editor_create_entity :: proc(scene: ^Scene, snapshot: EditorMeshSnapshot, source: Entity) -> bool {
+    slot := editor_find_available_mesh_slot(scene)
+    if slot < 0 {
+        g_editor_file_status = "No reusable entity slots are available."
+        return false
+    }
+    created := Entity(slot)
+    if !editor_restore_created_mesh(scene, created, snapshot) {
+        return false
+    }
+    editor_push_command(EditorCommand{
+        kind = .Create_Mesh,
+        entity = created,
+        mesh_snapshot = snapshot,
+        source_entity = source,
+    })
+    g_editor_selected = created
+    return true
+}
+
 editor_duplicate_selected :: proc(scene: ^Scene) {
     editor_finish_edit()
 
     source := g_editor_selected
-    slot := editor_find_available_mesh_slot(scene)
-
-    if slot < 0 || !editor_can_delete_mesh(scene, source) {
-        g_editor_file_status = "No reusable entity slots are available."
+    if !editor_can_delete_mesh(scene, source) {
         return
     }
 
@@ -96,32 +154,62 @@ editor_duplicate_selected :: proc(scene: ^Scene) {
         return
     }
 
-    snapshot := EditorMeshSnapshot{
-        name = owned_name,
-        transform = scene.transforms[index],
-        mesh_renderer = scene.mesh_renderers[index],
-        material = scene.materials[index],
-        material_slots = scene.material_slots[index],
+    snapshot := editor_mesh_snapshot(scene, index)
+    snapshot.name = owned_name
+
+    // Make the copy easier to distinguish from its source. An orbiting
+    // light's position follows its orbit, so start it further along instead.
+    snapshot.transform.position.x += 1.5
+    if light, ok := &snapshot.point_light.?; ok && light.orbit_enabled {
+        light.orbit_angle += math.PI / 4
     }
 
-    // Make the copy easier to distinguish from its source.
-    snapshot.transform.position.x += 1.5
+    editor_create_entity(scene, snapshot, source)
+}
 
-    created := Entity(slot)
-    if !editor_restore_created_mesh(scene, created, snapshot) {
+// A white point light with an unlit marker cube, three units in front of the
+// camera.
+editor_add_point_light :: proc(scene: ^Scene) {
+    editor_finish_edit()
+    marker := assets_mesh("cube")
+    if !assets_mesh_valid(marker) {
+        g_editor_file_status = "The light marker needs the \"cube\" model in the catalog."
+        return
+    }
+    if !editor_point_light_fits(scene) do return
+    name, name_ok := scene_store_owned_name("Point light")
+    if !name_ok {
+        g_editor_file_status = "Could not allocate the light's name."
         return
     }
 
-    editor_push_command(EditorCommand{
-        kind = .Create_Mesh,
-        entity = created,
-        mesh_snapshot = snapshot,
-        source_entity = source,
-    })
+    light := PointLight{color = {1, 1, 1}, intensity = 3, orbit_radius = 2, orbit_speed = 0.6}
+    transform := Transform{scale = {0.2, 0.2, 0.2}}
+    camera := camera_find_active(scene)
+    if camera >= 0 {
+        transform.position = scene.transforms[camera].position + camera_forward(&scene.cameras[camera]) * 3
+    }
+    // The same marker material as the scene's starting lights; scene_update
+    // keeps its tint at the light's color.
+    marker_material := Material{
+        tint = light.color,
+        texture = assets_texture("checkerboard"),
+        unlit = true,
+        uv_scale = 1,
+    }
+    if !assets_texture_valid(marker_material.texture) do marker_material.texture = g_assets.white
 
-    g_editor_selected = created
+    editor_create_entity(scene, EditorMeshSnapshot{
+        name = name,
+        transform = transform,
+        mesh_renderer = {mesh = marker},
+        material = marker_material,
+        point_light = light,
+    }, g_editor_selected)
 }
 
+// Models and point lights. The sun (the renderer needs exactly one) and the
+// camera stay.
 editor_can_delete_mesh :: proc(scene: ^Scene, entity: Entity) -> bool {
     if !scene_entity_is_alive(scene, entity) {
         return false
@@ -132,7 +220,6 @@ editor_can_delete_mesh :: proc(scene: ^Scene, entity: Entity) -> bool {
     return scene.has_transform[index] &&
            scene.has_mesh_renderer[index] &&
            scene.has_material[index] &&
-           !scene.has_point_light[index] &&
            !scene.has_directional_light[index] &&
            !scene.has_camera[index]
 }
@@ -157,13 +244,14 @@ editor_restore_deleted_mesh :: proc(
        scene.alive[index] {
         return false
     }
+    if snapshot.point_light != nil && !editor_point_light_fits(scene) {
+        return false
+    }
 
     scene_clear_entity_slot(scene, index)
     scene.names[index] = snapshot.name
 
-    scene_add_transform(scene, entity, snapshot.transform)
-    scene_add_mesh_renderer(scene, entity, snapshot.mesh_renderer)
-    scene_set_materials(scene, entity, snapshot.material, snapshot.material_slots)
+    editor_add_snapshot_components(scene, entity, snapshot)
 
     scene.alive[index] = true
     return true
@@ -177,14 +265,7 @@ editor_delete_selected :: proc(scene: ^Scene) {
         return
     }
 
-    index := int(entity)
-    snapshot := EditorMeshSnapshot{
-        name = scene.names[index],
-        transform = scene.transforms[index],
-        mesh_renderer = scene.mesh_renderers[index],
-        material = scene.materials[index],
-        material_slots = scene.material_slots[index],
-    }
+    snapshot := editor_mesh_snapshot(scene, int(entity))
 
     if !editor_delete_mesh(scene, entity) {
         return

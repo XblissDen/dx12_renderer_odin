@@ -17,6 +17,13 @@ editor_draw_scene :: proc(scene: ^Scene){
         ui_begin_disabled(!assets_mesh_valid(g_editor_model_to_add) || editor_find_available_mesh_slot(scene) < 0)
         if ui_button("Add Model") do editor_add_model(scene, g_editor_model_to_add)
         ui_end_disabled()
+        ui_begin_disabled(editor_find_available_mesh_slot(scene) < 0 || scene_point_light_count(scene) >= MAX_LIGHTS)
+        if ui_button("Add Point Light") do editor_add_point_light(scene)
+        ui_end_disabled()
+        if scene_point_light_count(scene) >= MAX_LIGHTS {
+            ui_same_line()
+            debug_ui_text("(limit reached)")
+        }
         ui_separator()
         // Undo/Redo
         ui_begin_disabled(

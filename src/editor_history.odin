@@ -60,12 +60,15 @@ EditorAssetValue :: struct {
     enabled: bool,
 }
 
+// An entity the editor creates or deletes: a model, or a point light with its
+// marker mesh.
 EditorMeshSnapshot :: struct {
     name: string,
     transform: Transform,
     mesh_renderer: MeshRenderer,
     material: Material,
     material_slots: MaterialSlots,
+    point_light: Maybe(PointLight),
 }
 
 // The Inspector edits one material slot at a time; each undo step records

@@ -141,6 +141,12 @@ the same frame. The final GPU timing includes tone mapping and the UI draw.
   **Ctrl** during a drag flips it. Right-click during a drag cancels it; each
   drag is one undo step. The modes, space, snapping and step sizes are in the
   Inspector. Orbiting point lights cannot be moved.
+- **Lights**: **Add Point Light** (Scene panel) places a white light, shown by a
+  small unlit cube, three units in front of the camera. Point lights can be
+  duplicated and deleted like models, with undo; a duplicated orbiting light
+  starts 45° further along its orbit. The shader takes at most 16 point lights,
+  and adding, duplicating or undoing past that is refused with a note. The sun
+  cannot be deleted: the renderer always uses exactly one directional light.
 - **L**: release/capture the mouse. Release it to interact with the panel;
   capture it for the existing WASD/mouse camera controls.
 - **F1**: hide/show the panel.
