@@ -21,7 +21,8 @@ EditorField :: enum {
     Material_Emissive,
     Material_Emissive_Strength,
     Material_Occlusion_Strength,
-    Material_Alpha_Mask,
+    Material_Alpha_Mode, // 0 opaque, 1 cutout, 2 blend
+    Material_Opacity,    // Shown as 1 - transparency.
     Material_Alpha_Cutoff,
     Material_Double_Sided,
 
@@ -134,7 +135,8 @@ editor_field_exists :: proc(
              .Material_Emissive,
              .Material_Emissive_Strength,
              .Material_Occlusion_Strength,
-             .Material_Alpha_Mask,
+             .Material_Alpha_Mode,
+             .Material_Opacity,
              .Material_Alpha_Cutoff,
              .Material_Double_Sided,
              .Material_Albedo_Texture,
@@ -203,8 +205,11 @@ editor_value :: proc(
             return {editor_material(scene, index).emissive_strength, 0, 0}
         case .Material_Occlusion_Strength:
             return {editor_material(scene, index).occlusion_strength, 0, 0}
-        case .Material_Alpha_Mask:
-            return editor_bool_value(editor_material(scene, index).alpha_mask)
+        case .Material_Alpha_Mode:
+            material := editor_material(scene, index)
+            return {2 if material.alpha_blend else 1 if material.alpha_mask else 0, 0, 0}
+        case .Material_Opacity:
+            return {1 - editor_material(scene, index).transparency, 0, 0}
         case .Material_Alpha_Cutoff:
             return {editor_material(scene, index).alpha_cutoff, 0, 0}
         case .Material_Double_Sided:
@@ -281,8 +286,11 @@ editor_apply_value :: proc(
             editor_material(scene, index).emissive_strength = max(value[0], 0)
         case .Material_Occlusion_Strength:
             editor_material(scene, index).occlusion_strength = clamp(value[0], 0, 1)
-        case .Material_Alpha_Mask:
-            editor_material(scene, index).alpha_mask = value[0] != 0
+        case .Material_Alpha_Mode:
+            editor_material(scene, index).alpha_mask = value[0] == 1
+            editor_material(scene, index).alpha_blend = value[0] == 2
+        case .Material_Opacity:
+            editor_material(scene, index).transparency = 1 - clamp(value[0], 0, 1)
         case .Material_Alpha_Cutoff:
             editor_material(scene, index).alpha_cutoff = clamp(value[0], 0, 1)
         case .Material_Double_Sided:

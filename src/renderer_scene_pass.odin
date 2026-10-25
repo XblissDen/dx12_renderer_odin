@@ -2,7 +2,7 @@ package main
 
 import d3d12 "vendor:directx/d3d12"
 
-renderer_render_scene_pass :: proc(draws: []Draw, draw_indices: []u32) {
+renderer_render_scene_pass :: proc(draws: []Draw, draw_indices, transparent_indices: []u32) {
     r := &g_renderer
 
     renderer_begin_gpu_pass(.Scene)
@@ -58,6 +58,18 @@ renderer_render_scene_pass :: proc(draws: []Draw, draw_indices: []u32) {
     renderer_bind_cbv(.Frame_Constants, renderer_frame_cb_address())
 
     renderer_draw_list(draws, draw_indices, r.hdr_pipeline_states)
+
+    // Blended surfaces over the result, farthest first.
+    for draw_index in transparent_indices {
+        draw := &draws[draw_index]
+        r.command_list->SetGraphicsRootDescriptorTable(u32(Root_Slot.Material), draw.material_table)
+        if draw.variant == .Double_Sided || draw.variant == .Masked_Double_Sided {
+            r.command_list->SetPipelineState(r.transparent_back_pipeline_state)
+            renderer_draw(draws, draw_index)
+        }
+        r.command_list->SetPipelineState(r.transparent_front_pipeline_state)
+        renderer_draw(draws, draw_index)
+    }
 
     // Scene render target becomes a shader input.
     hdr_barrier.Transition.StateBefore = {.RENDER_TARGET}

@@ -1,6 +1,7 @@
 package main
 
 import "core:math"
+import "core:slice"
 import alg "core:math/linalg"
 import d3d12 "vendor:directx/d3d12"
 
@@ -17,7 +18,8 @@ MAX_DRAWS :: 4096
 
 // How a draw's material changes its pipelines (one per variant in each mesh
 // pass): cutouts discard pixels in the depth-only passes, and double-sided
-// materials draw without back-face culling.
+// materials draw without back-face culling. Blended draws use the cutout
+// variants in the shadow pass.
 Draw_Variant :: enum u8 {Opaque, Masked, Double_Sided, Masked_Double_Sided}
 
 // One submesh of one entity, with the material of its slot.
@@ -27,6 +29,9 @@ Draw :: struct {
     // Albedo, normal, roughness, metallic, emissive and occlusion textures.
     material_table: d3d12.GPU_DESCRIPTOR_HANDLE,
     variant: Draw_Variant,
+    // Alpha-blended: drawn in the transparent pass instead of the prepass and
+    // lit pass.
+    blended: bool,
     bounds: WorldBounds,
     casts_shadow: bool,
 }
@@ -36,8 +41,13 @@ FrameDraws :: struct {
     draws: [MAX_DRAWS]Draw,
     draw_count: int,
 
+    // Visible opaque and cutout draws.
     scene_indices: [MAX_DRAWS]u32,
     scene_draw_count: int,
+
+    // Visible blended draws, farthest first.
+    transparent_indices: [MAX_DRAWS]u32,
+    transparent_draw_count: int,
 
     shadow_indices: [SHADOW_CASCADE_COUNT][MAX_DRAWS]u32,
     shadow_draw_count: [SHADOW_CASCADE_COUNT]int,
@@ -52,6 +62,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     data := &r.frame_draws
     data.draw_count = 0
     data.scene_draw_count = 0
+    data.transparent_draw_count = 0
     data.shadow_draw_count = {}
     data.caster_count = 0
 
@@ -195,13 +206,24 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
             if material.use_emissive_map do textures[4] = material.emissive_texture
             if material.use_occlusion_map do textures[5] = material.occlusion_texture
 
+            // Blended surfaces cast shadows where they are mostly opaque.
+            cutout := material.alpha_mask || material.alpha_blend
+            opacity := 1 - material.transparency
+            alpha_cutoff := material.alpha_cutoff
+            if material.alpha_blend {
+                // Coverage is texture alpha times opacity; test texture alpha
+                // against 0.5 / opacity for coverage 0.5.
+                alpha_cutoff = clamp(0.5 / opacity, 0, 1) if opacity > 0 else 1
+            }
+
             draw^ = Draw{
                 mesh = mesh,
                 first_index = submesh.first_index,
                 index_count = submesh.index_count,
                 // The depth-only passes bind it too, for cutouts.
                 material_table = renderer_material_table(data.draw_count, textures),
-                variant = Draw_Variant(int(material.alpha_mask) + 2 * int(material.double_sided)),
+                variant = Draw_Variant(int(cutout) + 2 * int(material.double_sided)),
+                blended = material.alpha_blend,
                 bounds = bounds_to_world(submesh.bounds, model),
                 // Unlit marker meshes do not cast shadows.
                 casts_shadow = !material.unlit,
@@ -228,7 +250,8 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
                 use_occlusion_map = u32(material.use_occlusion_map),
                 occlusion_strength = material.occlusion_strength,
                 emissive = material.emissive * material.emissive_strength,
-                alpha_cutoff = material.alpha_cutoff,
+                alpha_cutoff = alpha_cutoff,
+                opacity = opacity,
             }
             data.draw_count += 1
         }
@@ -286,13 +309,21 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         lights = gpu_lights,
     }
 
+    // Blended draws with their distance from the camera, for sorting.
+    Transparent_Draw :: struct {index: u32, distance: f32}
+    transparent := make([dynamic]Transparent_Draw, context.temp_allocator)
+
     for draw_index in 0..<data.draw_count {
         bounds := data.draws[draw_index].bounds
 
         if !r.frustum_culling_enabled ||
            frustum_intersects_bounds(camera_frustum, bounds) {
-            data.scene_indices[data.scene_draw_count] = u32(draw_index)
-            data.scene_draw_count += 1
+            if data.draws[draw_index].blended {
+                append(&transparent, Transparent_Draw{u32(draw_index), alg.length(bounds.center - camera_position)})
+            } else {
+                data.scene_indices[data.scene_draw_count] = u32(draw_index)
+                data.scene_draw_count += 1
+            }
         }
 
         if data.draws[draw_index].casts_shadow {
@@ -309,10 +340,17 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         }
     }
 
+    // Back to front, so nearer surfaces blend over farther ones. Sorting by
+    // submesh center is approximate: interpenetrating or large surfaces can
+    // still blend in the wrong order.
+    slice.sort_by(transparent[:], proc(a, b: Transparent_Draw) -> bool {return a.distance > b.distance})
+    for draw, i in transparent do data.transparent_indices[i] = draw.index
+    data.transparent_draw_count = len(transparent)
+
     r.previous_view_projection = view_projection
 
     r.culling_stats.scene_total = data.draw_count
-    r.culling_stats.scene_visible = data.scene_draw_count
+    r.culling_stats.scene_visible = data.scene_draw_count + data.transparent_draw_count
     for count in data.shadow_draw_count {
         r.culling_stats.shadow_visible += count
     }

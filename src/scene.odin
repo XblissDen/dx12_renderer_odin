@@ -74,18 +74,25 @@ Material :: struct{
     // Cutout: pixels whose albedo alpha is below alpha_cutoff are not drawn.
     alpha_mask: bool,
     alpha_cutoff: f32,
+    // Blended (glass, thin cloth): drawn after opaque surfaces, back to front,
+    // covering them by albedo alpha times (1 - transparency). Takes precedence
+    // over alpha_mask. Stored as transparency so that zero is opaque.
+    alpha_blend: bool,
+    transparency: f32,
     // Drawn without back-face culling; back faces are lit from their side.
     double_sided: bool,
 }
 
-// Ranges of the emission, occlusion and cutout values. NaN fails every test.
+// Ranges of the emission, occlusion, cutout and blending values. NaN fails
+// every test.
 material_effects_valid :: proc(material: Material) -> bool {
     for channel in material.emissive {
         if !(channel >= 0) do return false
     }
     return material.emissive_strength >= 0 &&
            material.occlusion_strength >= 0 && material.occlusion_strength <= 1 &&
-           material.alpha_cutoff >= 0 && material.alpha_cutoff <= 1
+           material.alpha_cutoff >= 0 && material.alpha_cutoff <= 1 &&
+           material.transparency >= 0 && material.transparency <= 1
 }
 
 MeshRenderer :: struct {

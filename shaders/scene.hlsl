@@ -35,7 +35,9 @@ cbuffer ObjectConstants : register(b0)
     float occlusion_strength;
 
     float3 emissive; // Color times strength; zero for none.
-    float  alpha_cutoff; // Used by the cutout (alpha-mask) pipelines only.
+    float  alpha_cutoff; // Used by the cutout pipelines only.
+
+    float opacity; // Blended materials: multiplies albedo alpha.
 };
 
 // Shared by every draw in a frame.
@@ -389,7 +391,8 @@ float FilterSpecularRoughness(float material_roughness, float3 N)
     return pow(saturate(alpha * alpha + kernel), 0.25f);
 }
 
-float4 PSMain(PSInput input, bool is_front_face : SV_IsFrontFace) : SV_TARGET
+// Lit surface color; `transparent` adds coverage in alpha for blending.
+float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
 {
     if (unlit != 0)
     {
@@ -399,9 +402,10 @@ float4 PSMain(PSInput input, bool is_front_face : SV_IsFrontFace) : SV_TARGET
     // Albedo SRVs are _SRGB, so the sampler returns filtered linear values.
     float2 material_uv = input.texcoord * uv_scale;
 
-    float3 albedo = g_texture.Sample(
+    float4 albedo_sample = g_texture.Sample(
         g_material_sampler, material_uv
-    ).rgb * material_tint;
+    );
+    float3 albedo = albedo_sample.rgb * material_tint;
 
     float roughness_value = roughness;
 
@@ -493,7 +497,9 @@ float4 PSMain(PSInput input, bool is_front_face : SV_IsFrontFace) : SV_TARGET
     // Occlusion applies to ambient (sky) light only: the sun and point lights
     // have their own shadows or none.
     float ambient_occlusion = 1.0f;
-    if (ao_enabled != 0u)
+    // SSAO comes from the prepass depth, which holds what is behind a
+    // blended surface, not the surface itself.
+    if (ao_enabled != 0u && !transparent)
     {
         ambient_occlusion = g_ao.Load(int3(input.position.xy, 0));
     }
@@ -618,7 +624,18 @@ float4 PSMain(PSInput input, bool is_front_face : SV_IsFrontFace) : SV_TARGET
         result = ambient_occlusion;
     }
 
-    return float4(result, 1.0f);
+    return float4(result, transparent ? saturate(albedo_sample.a * opacity) : 1.0f);
+}
+
+float4 PSMain(PSInput input, bool is_front_face : SV_IsFrontFace) : SV_TARGET
+{
+    return ShadeSurface(input, is_front_face, false);
+}
+
+// Blended materials, drawn over the opaque image (alpha blending).
+float4 PSTransparent(PSInput input, bool is_front_face : SV_IsFrontFace) : SV_TARGET
+{
+    return ShadeSurface(input, is_front_face, true);
 }
 
 // ---------------------------------------------------------------------------

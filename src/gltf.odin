@@ -215,12 +215,6 @@ gltf_load :: proc(path: string, allocator := context.allocator) -> (model: Gltf_
     materials := make([]Gltf_Material, len(loader.slot_materials), context.temp_allocator)
     for material_index, slot in loader.slot_materials {
         materials[slot] = gltf_convert_material(&doc, material_index)
-        if materials[slot].alpha_mode == "BLEND" {
-            append(&loader.warnings, fmt.tprintf(
-                "Material \"%s\" uses alpha blending; it is drawn opaque.",
-                materials[slot].name,
-            ))
-        }
     }
     model.materials = materials
     model.warnings = loader.warnings[:]

@@ -182,11 +182,16 @@ ObjectConstants :: struct #align(256) {
 
     // Emission color times strength; the shader multiplies in the map.
     emissive: [3]f32,
-    // Albedo alpha below this is cut out (alpha-mask materials only).
+    // Albedo alpha below this is cut out by the cutout pipelines: alpha-mask
+    // materials, and blended ones in the shadow pass.
     alpha_cutoff: f32,
+
+    // Blended materials: albedo alpha is multiplied by this.
+    opacity: f32,
 }
 
-#assert(size_of(ObjectConstants) == 256)
+// Constant-buffer views start on 256-byte boundaries.
+#assert(size_of(ObjectConstants) == 512)
 
 // Missing from older scene files, which therefore keep Reinhard.
 ToneMapper :: enum u32 {Reinhard, ACES, AgX}
@@ -285,6 +290,8 @@ Renderer :: struct {
     hdr_rtv_heap: ^d3d12.IDescriptorHeap,
 
     hdr_pipeline_states: [Draw_Variant]^d3d12.IPipelineState,
+    // Blended surfaces: front faces, and back faces of double-sided ones.
+    transparent_front_pipeline_state, transparent_back_pipeline_state: ^d3d12.IPipelineState,
     post_pipeline_state: ^d3d12.IPipelineState,
 
     bloom_targets: [BLOOM_TARGET_COUNT]^d3d12.IResource,
@@ -817,6 +824,8 @@ renderer_create_pipelines :: proc() {
     defer scene_vs->Release()
     scene_ps := renderer_compile_shader("shaders/scene.hlsl", "PSMain", "ps_5_1")
     defer scene_ps->Release()
+    transparent_ps := renderer_compile_shader("shaders/scene.hlsl", "PSTransparent", "ps_5_1")
+    defer transparent_ps->Release()
     shadow_vs := renderer_compile_shader("shaders/scene.hlsl", "VSShadow", "vs_5_1")
     defer shadow_vs->Release()
     depth_vs := renderer_compile_shader("shaders/scene.hlsl", "VSDepth", "vs_5_1")
@@ -900,6 +909,28 @@ renderer_create_pipelines :: proc() {
         lit_desc.DepthStencilState.DepthWriteMask = .ZERO
         renderer_create_pso(&lit_desc, &r.hdr_pipeline_states[variant])
     }
+
+    // Blended surfaces: over the lit image by their alpha, depth-tested
+    // against the prepass without writing. Double-sided ones draw twice, back
+    // faces (front culled) and then front faces.
+    transparent_desc := mesh_desc
+    transparent_desc.PS = shader_bytecode(transparent_ps)
+    transparent_desc.BlendState.RenderTarget[0] = {
+        BlendEnable = true,
+        SrcBlend = .SRC_ALPHA,
+        DestBlend = .INV_SRC_ALPHA,
+        BlendOp = .ADD,
+        SrcBlendAlpha = .ONE,
+        DestBlendAlpha = .INV_SRC_ALPHA,
+        BlendOpAlpha = .ADD,
+        LogicOp = .NOOP,
+        RenderTargetWriteMask = u8(d3d12.COLOR_WRITE_ENABLE_ALL),
+    }
+    transparent_desc.DepthStencilState.DepthFunc = .LESS_EQUAL
+    transparent_desc.DepthStencilState.DepthWriteMask = .ZERO
+    renderer_create_pso(&transparent_desc, &r.transparent_front_pipeline_state)
+    transparent_desc.RasterizerState.CullMode = .FRONT
+    renderer_create_pso(&transparent_desc, &r.transparent_back_pipeline_state)
 
     // Full-screen triangle: no input layout, culling, or depth.
     fullscreen := mesh_desc
@@ -1446,7 +1477,8 @@ renderer_render_frame :: proc(scene: ^Scene) {
     visible := frame.scene_indices[:frame.scene_draw_count]
     renderer_render_depth_prepass(draws, visible)
     renderer_render_ssao()
-    renderer_render_scene_pass(draws, visible)
+    transparent := frame.transparent_indices[:frame.transparent_draw_count]
+    renderer_render_scene_pass(draws, visible, transparent)
 
     // TAA resolves in HDR, so bloom and tone mapping see the stable image.
     renderer_render_taa()
@@ -1574,6 +1606,8 @@ renderer_destroy :: proc(){
     r.velocity_rtv_heap->Release()
     r.taa_resolve_pipeline_state->Release()
     for pso in r.hdr_pipeline_states do pso->Release()
+    r.transparent_front_pipeline_state->Release()
+    r.transparent_back_pipeline_state->Release()
     r.post_pipeline_state->Release()
     r.selection_pipeline_state->Release()
     r.selection_root_signature->Release()

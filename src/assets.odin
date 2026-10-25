@@ -31,9 +31,9 @@ AssetMaterial :: struct {
     albedo, normal, roughness_map, metallic_map, emissive_map, occlusion_map: string,
     // Optional factors: omitted values get defaults; an explicit zero stays zero.
     roughness, metallic, normal_strength, uv_scale: Maybe(f32),
-    emissive_strength, occlusion_strength, alpha_cutoff: Maybe(f32),
+    emissive_strength, occlusion_strength, alpha_cutoff, transparency: Maybe(f32),
     tint, emissive: Maybe([3]f32),
-    alpha_mask, double_sided: bool,
+    alpha_mask, alpha_blend, double_sided: bool,
 }
 MeshDesc :: struct {
     id, name, path: string,
@@ -385,6 +385,7 @@ assets_import_gltf :: proc(request: AssetImportRequest) -> (model: MeshHandle, m
             occlusion_map = texture_id(source.occlusion_image, .occlusion, id, image_paths, &texture_ids, &texture_descs),
             occlusion_strength = clamp(source.occlusion_strength, 0, 1),
             alpha_mask = source.alpha_mode == "MASK",
+            alpha_blend = source.alpha_mode == "BLEND",
             double_sided = source.double_sided,
         }
         if source.emissive != {} {
@@ -399,6 +400,9 @@ assets_import_gltf :: proc(request: AssetImportRequest) -> (model: MeshHandle, m
             // by the factor gives the same test on texture alpha alone.
             factor := source.base_color.a
             materials[slot].alpha_cutoff = clamp(source.alpha_cutoff / factor, 0, 1) if factor > 0 else 1
+        }
+        if materials[slot].alpha_blend {
+            materials[slot].transparency = 1 - clamp(source.base_color.a, 0, 1)
         }
     }
     if g_renderer.srv_next + u32(len(texture_descs)) > SRV_HEAP_CAPACITY {
@@ -612,6 +616,8 @@ assets_material :: proc(desc: AssetMaterial) -> (material: Material, ok: bool) {
         material.occlusion_strength = desc.occlusion_strength.? or_else 1
     }
     material.alpha_mask = desc.alpha_mask
+    material.alpha_blend = desc.alpha_blend
+    material.transparency = desc.transparency.? or_else 0
     material.alpha_cutoff = desc.alpha_cutoff.? or_else 0.5
     material.double_sided = desc.double_sided
     if !(material.roughness >= 0 && material.roughness <= 1) ||

@@ -215,8 +215,20 @@ editor_draw_material_controls :: proc(scene: ^Scene, index: int) {
         )
     }
 
-    editor_checkbox(scene, index, .Material_Alpha_Mask, "Alpha cutout")
-    if material.alpha_mask {
+    // How albedo alpha is used: ignored, cut out below a cutoff, or blended.
+    alpha_modes := [3]cstring{"Opaque", "Cutout", "Blend"}
+    alpha_mode := int(editor_value(scene, index, .Material_Alpha_Mode)[0])
+    if ui_begin_combo("Alpha", alpha_modes[alpha_mode]) {
+        for name, mode in alpha_modes {
+            if ui_selectable(name, mode == alpha_mode) {
+                editor_commit_value(scene, index, .Material_Alpha_Mode, {f32(mode), 0, 0})
+            }
+        }
+        ui_end_combo()
+    }
+    if material.alpha_blend {
+        editor_slider(scene, index, .Material_Opacity, "Opacity", 0.0, 1.0)
+    } else if material.alpha_mask {
         editor_slider(scene, index, .Material_Alpha_Cutoff, "Alpha cutoff", 0.0, 1.0)
     }
     editor_checkbox(scene, index, .Material_Double_Sided, "Double-sided")

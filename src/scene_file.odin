@@ -7,7 +7,7 @@ import "core:strings"
 import alg "core:math/linalg"
 
 SCENE_FILE_PATH :: "scene.json"
-SCENE_FILE_VERSION :: 8 // 7: extra material slots per entity. 8: emission, occlusion, cutouts.
+SCENE_FILE_VERSION :: 9 // 7: extra material slots per entity. 8: emission, occlusion, cutouts. 9: blending.
 
 ScenePostSettings :: struct{
     exposure: f32,
@@ -127,7 +127,7 @@ scene_file_validate_material :: proc(material: Material) -> string {
         return "Invalid occlusion map assignment."
     }
     if !material_effects_valid(material) {
-        return "Invalid emission, occlusion or cutoff value."
+        return "Invalid emission, occlusion, cutoff or transparency value."
     }
     if !texture_asset_is_albedo(material.texture) {
         return "Albedo needs a color texture."

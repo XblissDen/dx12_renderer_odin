@@ -121,7 +121,7 @@ editor_process_asset_import :: proc() {
         flip_green = state.flip_green,
         material = material,
     })
-    // A successful glTF import can still carry a note (e.g. alpha drawn opaque).
+    // A successful glTF import can still carry a note (e.g. skipped primitives).
     state.status = error
     if model != 0 {
         g_editor_model_to_add = model
