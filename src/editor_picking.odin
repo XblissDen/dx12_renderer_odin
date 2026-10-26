@@ -75,38 +75,57 @@ editor_ray_to_local :: proc(ray: EditorRay, transform: Transform) -> EditorRay {
     return result
 }
 
-// Moller-Trumbore: find t and the triangle's barycentric coordinates.
+// Moller-Trumbore: find t and the triangle's barycentric coordinates (the
+// hit is a + u (b - a) + v (c - a)).
 editor_ray_triangle :: proc(
     ray: EditorRay,
     a, b, c: alg.Vector3f32,
-) -> (distance: f32, hit: bool) {
+    two_sided: bool,
+) -> (distance, u, v: f32, hit: bool) {
     edge1 := b - a
     edge2 := c - a
     p := alg.cross(ray.direction, edge2)
     determinant := alg.dot(edge1, p)
 
-    // Reject backfaces and nearly parallel/degenerate triangles.
-    // This matches the current backface-culled mesh pipeline.
-    if determinant <= 0.0000001 {
-        return 0, false
+    // Reject nearly parallel/degenerate triangles, and back faces unless the
+    // material is double-sided, as the renderer culls them.
+    if (two_sided ? math.abs(determinant) : determinant) <= 0.0000001 {
+        return 0, 0, 0, false
     }
 
     inverse_determinant := 1 / determinant
     offset := ray.origin - a
 
-    u := alg.dot(offset, p) * inverse_determinant
+    u = alg.dot(offset, p) * inverse_determinant
     if u < 0 || u > 1 {
-        return 0, false
+        return 0, 0, 0, false
     }
 
     q := alg.cross(offset, edge1)
-    v := alg.dot(ray.direction, q) * inverse_determinant
+    v = alg.dot(ray.direction, q) * inverse_determinant
     if v < 0 || u + v > 1 {
-        return 0, false
+        return 0, 0, 0, false
     }
 
     distance = alg.dot(edge2, q) * inverse_determinant
-    return distance, distance >= ray.near_t && distance <= ray.far_t
+    return distance, u, v, distance >= ray.near_t && distance <= ray.far_t
+}
+
+// Whether a cutout material is solid at a texture coordinate: the nearest
+// full-size albedo texel's alpha against the cutoff, wrapping like the
+// material sampler. The shader's test is filtered and mip-adjusted, so edges
+// can differ by a texel. Blended surfaces (glass) stay pickable everywhere.
+editor_cutout_solid :: proc(material: ^Material, texcoord: [2]f32) -> bool {
+    if !material.alpha_mask || material.alpha_blend || !assets_texture_valid(material.texture) {
+        return true
+    }
+    alpha := g_assets.textures[material.texture].alpha
+    if alpha.values == nil do return true // Fully opaque image.
+    uv := texcoord * material.uv_scale
+    uv -= {math.floor(uv.x), math.floor(uv.y)}
+    x := min(int(uv.x * f32(alpha.width)), int(alpha.width) - 1)
+    y := min(int(uv.y * f32(alpha.height)), int(alpha.height) - 1)
+    return f32(alpha.values[y * int(alpha.width) + x]) / 255 >= material.alpha_cutoff
 }
 
 editor_pick_mesh :: proc(scene: ^Scene, ray: EditorRay) -> Entity{
@@ -129,15 +148,24 @@ editor_pick_mesh :: proc(scene: ^Scene, ray: EditorRay) -> Entity{
         asset := scene.mesh_renderers[i].mesh
         mesh := g_assets.meshes[asset].data
 
-        for triangle in 0..<len(mesh.indices) / 3 {
-            offset := triangle * 3
+        // Per submesh: each has its own material's sidedness and cutout.
+        for submesh in mesh.submeshes {
+            material := scene_material(scene, i, int(submesh.material_slot))
+            first := int(submesh.first_index)
+            for offset := first; offset < first + int(submesh.index_count); offset += 3 {
+                va := mesh.vertices[mesh.indices[offset + 0]]
+                vb := mesh.vertices[mesh.indices[offset + 1]]
+                vc := mesh.vertices[mesh.indices[offset + 2]]
 
-            a := alg.Vector3f32(mesh.vertices[mesh.indices[offset + 0]].position)
-            b := alg.Vector3f32(mesh.vertices[mesh.indices[offset + 1]].position)
-            c := alg.Vector3f32(mesh.vertices[mesh.indices[offset + 2]].position)
+                distance, u, v, hit := editor_ray_triangle(
+                    local_ray, va.position, vb.position, vc.position, material.double_sided,
+                )
+                if !hit || (selected != Entity(-1) && distance >= nearest_distance) {
+                    continue
+                }
+                texcoord := va.texcoord * (1 - u - v) + vb.texcoord * u + vc.texcoord * v
+                if !editor_cutout_solid(material, texcoord) do continue
 
-            distance, hit := editor_ray_triangle(local_ray, a, b, c)
-            if hit && (selected == Entity(-1) || distance < nearest_distance) {
                 nearest_distance = distance
                 selected = Entity(i)
             }

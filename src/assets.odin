@@ -75,7 +75,39 @@ MeshAsset :: struct {
     removed: bool,
 }
 // `removed`: as for MeshAsset.
-TextureAsset :: struct {desc: TextureDesc, label: cstring, hidden, removed: bool}
+TextureAsset :: struct {
+    desc: TextureDesc,
+    label: cstring,
+    hidden, removed: bool,
+    alpha: TextureAlpha,
+}
+
+// An albedo texture's alpha at full size, kept on the CPU so picking can see
+// through cutout holes. Empty for other usages and for fully opaque images.
+TextureAlpha :: struct {
+    values: []u8, // From runtime.heap_allocator().
+    width, height: u32,
+}
+
+assets_texture_alpha :: proc(desc: TextureDesc, pixels: []u8, width, height: u32) -> TextureAlpha {
+    if desc.usage != .albedo do return {}
+    opaque := true
+    for i := 3; i < len(pixels); i += 4 {
+        if pixels[i] != 255 {
+            opaque = false
+            break
+        }
+    }
+    if opaque do return {}
+    values := make([]u8, int(width) * int(height), runtime.heap_allocator())
+    for &value, i in values do value = pixels[i * 4 + 3]
+    return {values, width, height}
+}
+
+assets_free_texture_alpha :: proc(alpha: ^TextureAlpha) {
+    delete(alpha.values, runtime.heap_allocator())
+    alpha^ = {}
+}
 AssetRegistry :: struct {
     arena: mem.Dynamic_Arena,
     active: bool,
@@ -286,7 +318,10 @@ assets_import :: proc(request: AssetImportRequest) -> (model: MeshHandle, textur
         g_renderer.meshes = meshes
     } else {
         texture = TextureHandle(len(g_assets.textures))
-        append(&g_assets.textures, TextureAsset{desc = texture_desc, label = label})
+        append(&g_assets.textures, TextureAsset{
+            desc = texture_desc, label = label,
+            alpha = assets_texture_alpha(texture_desc, pixels, width, height),
+        })
         g_assets.texture_ids[texture_desc.id] = texture
         delete(g_renderer.textures)
         g_renderer.textures = textures
@@ -435,6 +470,8 @@ assets_import_gltf :: proc(request: AssetImportRequest) -> (model: MeshHandle, m
         for texture in gpu_textures do if texture.resource != nil do texture.resource->Release()
     }
     if renderer_upload_mesh(&gpu_mesh, mesh_data) < 0 do return 0, "GPU model upload failed."
+    alphas := make([]TextureAlpha, len(texture_descs), context.temp_allocator)
+    defer if !committed do for &alpha in alphas do assets_free_texture_alpha(&alpha)
     batch := assets_decode_batch_size()
     for first := 0; first < len(texture_descs); first += batch {
         descs := texture_descs[first:min(first + batch, len(texture_descs))]
@@ -446,6 +483,7 @@ assets_import_gltf :: proc(request: AssetImportRequest) -> (model: MeshHandle, m
             gpu := GpuTexture{srv_index = g_renderer.srv_next + u32(first + i)}
             if renderer_upload_texture(&gpu, descs[i], texture.pixels, texture.width, texture.height) < 0 do return 0, "GPU texture upload failed."
             append(&gpu_textures, gpu)
+            alphas[first + i] = assets_texture_alpha(descs[i], texture.pixels, texture.width, texture.height)
         }
     }
 
@@ -457,8 +495,9 @@ assets_import_gltf :: proc(request: AssetImportRequest) -> (model: MeshHandle, m
 
     // Committed on disk: register textures first, so the materials resolve.
     committed = true
-    for desc in texture_descs {
-        assets_register_texture(desc)
+    for desc, i in texture_descs {
+        handle := assets_register_texture(desc)
+        g_assets.textures[handle].alpha = alphas[i]
     }
     textures := make([]GpuTexture, len(g_renderer.textures) + len(gpu_textures))
     copy(textures, g_renderer.textures)
@@ -638,6 +677,7 @@ assets_material :: proc(desc: AssetMaterial) -> (material: Material, ok: bool) {
 
 assets_destroy :: proc() {
     for asset in g_assets.meshes do mesh_destroy(asset.data)
+    for &asset in g_assets.textures do assets_free_texture_alpha(&asset.alpha)
     delete(g_assets.meshes)
     delete(g_assets.textures)
     delete(g_assets.environments)
@@ -1094,6 +1134,7 @@ assets_remove :: proc(scene: ^Scene, mesh: MeshHandle, texture: TextureHandle) -
     for handle in textures {
         asset := &g_assets.textures[handle]
         delete_key(&g_assets.texture_ids, asset.desc.id)
+        assets_free_texture_alpha(&asset.alpha)
         renderer_release_texture(handle)
         assets_delete_imported(asset.desc.path, false)
     }

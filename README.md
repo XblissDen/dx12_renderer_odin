@@ -73,8 +73,14 @@ in `assets.json`, and is undone completely if any step fails:
 - Geometry is converted from glTF's right-handed space to the renderer's
   left-handed one. Missing normals and tangents are generated.
 - Not supported yet: animation and skinning (the static pose loads), and
-  compressed meshes (Draco, meshopt), which are rejected. Clicking selects
-  through cutout holes and transparent surfaces.
+  compressed meshes (Draco, meshopt), which are rejected.
+- **Picking** (clicking an object) matches what is drawn: it sees through
+  cutout holes (the albedo alpha at the hit point against the cutoff), hits
+  both sides of double-sided materials, and selects blended surfaces such as
+  glass like any other. For this, albedo textures that contain transparency
+  keep a full-size copy of their alpha channel on the CPU (fully opaque ones
+  keep nothing). The pick tests the full-size texel, while the shader filters
+  and adjusts alpha per mip level, so edges can differ by a texel.
 - Models imported before a material feature existed keep the materials stored
   in `assets.json`; import them again to pick it up.
 

@@ -1307,6 +1307,7 @@ renderer_load_textures :: proc(){
             dx_check(renderer_upload_texture(
                 &r.textures[first + i], descs[i], texture.pixels, texture.width, texture.height,
             ))
+            g_assets.textures[first + i].alpha = assets_texture_alpha(descs[i], texture.pixels, texture.width, texture.height)
             delete(texture.pixels, runtime.heap_allocator())
         }
     }
