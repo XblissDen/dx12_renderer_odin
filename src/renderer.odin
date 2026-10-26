@@ -2,6 +2,7 @@ package main
 
 import "base:runtime"
 import "core:fmt"
+import "core:time"
 import win32 "core:sys/windows"
 import d3d12 "vendor:directx/d3d12"
 import dxgi "vendor:directx/dxgi"
@@ -27,7 +28,7 @@ PREFILTER_WIDTH :: 1024
 PREFILTER_HEIGHT :: 512
 PREFILTER_MIP_COUNT :: 5
 
-GPU_PASS_COUNT :: 10
+GPU_PASS_COUNT :: len(GPU_Pass)
 GPU_TIMESTAMP_COUNT :: GPU_PASS_COUNT * 2
 
 GPU_Pass :: enum u32{
@@ -41,6 +42,7 @@ GPU_Pass :: enum u32{
     SSAO,
     FXAA,
     TAA,
+    Auto_Exposure,
 }
 
 Vertex :: struct {
@@ -210,6 +212,8 @@ PostConstants :: struct #align(256) {
     taa_history_valid: u32,
     // Share of the new frame in each TAA blend.
     taa_blend: f32,
+    // Nonzero: exposure multiplies the automatic exposure (auto_exposure.hlsl).
+    auto_exposure: u32,
 }
 
 SkyConstants :: struct #align(256) {
@@ -309,6 +313,20 @@ Renderer :: struct {
     post_tone_mapper: ToneMapper,
     post_anti_aliasing: AntiAliasing,
 
+    // Auto-exposure (renderer_post.odin, auto_exposure.hlsl). With it on,
+    // post_exposure is unused and the compensation scales the result.
+    auto_exposure: AutoExposureSettings,
+    // Jump to the measured exposure next frame instead of adapting.
+    auto_exposure_reset: bool,
+    // The automatic exposure in EV, read back a few frames late (display only).
+    auto_exposure_ev: f32,
+    auto_exposure_tick: time.Tick,
+    exposure_root_signature: ^d3d12.IRootSignature,
+    exposure_histogram_pipeline, exposure_adapt_pipeline: ^d3d12.IPipelineState,
+    // Histogram bins (kept zeroed between frames), the exposure itself, and
+    // per-frame-slot copies of it for the CPU.
+    exposure_histogram, exposure_buffer, exposure_readback: ^d3d12.IResource,
+
     // Tone-mapped (display-encoded) frame that FXAA reads.
     ldr_texture: ^d3d12.IResource,
     ldr_rtv_heap: ^d3d12.IDescriptorHeap,
@@ -328,6 +346,7 @@ Renderer :: struct {
     velocity_srv_index: u32,
     // The HDR image bloom and tone mapping read: the scene, or TAA's output.
     scene_color_srv_index: u32,
+    scene_color: ^d3d12.IResource,
 
     // Last frame's unjittered camera and model matrices, for motion vectors.
     // A model is only reused if it was recorded on the previous frame.
@@ -476,6 +495,7 @@ renderer_init :: proc() {
     r.height = WINDOW_HEIGHT
 
     r.post_exposure = 1.0
+    r.auto_exposure = DEFAULT_AUTO_EXPOSURE
     r.post_threshold = 1.0
     r.post_strength = 0.6
     r.post_tone_mapper = .ACES
@@ -631,9 +651,11 @@ Root_Slot :: enum u32 {
     Texture_T8,          // t8: ambient occlusion, or TAA motion vectors
     Depth,               // t9: scene depth
     Mip_Constants,       // b6: root constant, texture mip builder flags
+    Exposure_Buffer,     // t16: root SRV, the automatic exposure (auto_exposure.hlsl)
 }
 
-Root_Param_Kind :: enum {CBV, Table, Constants}
+// SRV: a root shader-resource view of a buffer, bound by GPU address.
+Root_Param_Kind :: enum {CBV, Table, Constants, SRV}
 
 Root_Param :: struct {
     kind: Root_Param_Kind,
@@ -660,6 +682,7 @@ ROOT_LAYOUT := [Root_Slot]Root_Param{
     .Texture_T8          = {.Table, 8, 1, .PIXEL},
     .Depth               = {.Table, 9, 1, .PIXEL},
     .Mip_Constants       = {.Constants, 6, 1, .PIXEL},
+    .Exposure_Buffer     = {.SRV, 16, 0, .PIXEL},
 }
 
 // Binds a draw's object constants and geometry and draws its submesh range.
@@ -698,6 +721,11 @@ renderer_bind_cbv :: proc(slot: Root_Slot, address: u64) {
     g_renderer.command_list->SetGraphicsRootConstantBufferView(u32(slot), address)
 }
 
+renderer_bind_buffer_srv :: proc(slot: Root_Slot, address: u64) {
+    assert(ROOT_LAYOUT[slot].kind == .SRV)
+    g_renderer.command_list->SetGraphicsRootShaderResourceView(u32(slot), address)
+}
+
 // Binds the table at `slot` starting at descriptor `srv_index` of the SRV heap.
 renderer_bind_srv :: proc(slot: Root_Slot, srv_index: u32) {
     assert(ROOT_LAYOUT[slot].kind == .Table)
@@ -713,6 +741,9 @@ renderer_create_root_signature :: proc() {
         param := &params[slot]
         param.ShaderVisibility = layout.visibility
         switch layout.kind {
+            case .SRV:
+                param.ParameterType = .SRV
+                param.Descriptor = {ShaderRegister = layout.register}
             case .CBV:
                 param.ParameterType = .CBV
                 param.Descriptor = {ShaderRegister = layout.register}
@@ -1498,6 +1529,7 @@ renderer_render_frame :: proc(scene: ^Scene) {
 
     // TAA resolves in HDR, so bloom and tone mapping see the stable image.
     renderer_render_taa()
+    renderer_render_auto_exposure()
     renderer_render_bloom()
     renderer_render_post_process(scene)
 
@@ -1639,6 +1671,7 @@ renderer_destroy :: proc(){
     r.ssao_pipeline_state->Release()
     r.ssao_blur_pipeline_state->Release()
     r.mip_pipeline->Release()
+    renderer_release_auto_exposure()
     r.mip_rtv_heap->Release()
 
     for pso in r.bloom_pipeline_states {

@@ -117,6 +117,7 @@ renderer_render_post_process :: proc(scene: ^Scene) {
 
     r.command_list->SetGraphicsRootSignature(r.root_signature)
     renderer_bind_cbv(.Post_Constants, renderer_post_cb_address())
+    renderer_bind_buffer_srv(.Exposure_Buffer, r.exposure_buffer->GetGPUVirtualAddress())
     r.command_list->SetPipelineState(r.post_pipeline_state)
     renderer_bind_srv(.Texture_T0, r.scene_color_srv_index)
     renderer_bind_srv(.Texture_T1, r.bloom_srv_start)

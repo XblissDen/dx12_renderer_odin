@@ -114,9 +114,23 @@ confirmation step):
 ## Debug UI
 
 The **Renderer controls** panel has exposure/bloom sliders, FPS, wall-clock frame
-time, and all six GPU-pass timings. Changes reach the post-process constants in
-the same frame. The final GPU timing includes tone mapping and the UI draw.
+time, and the GPU timing of each pass. Changes reach the post-process constants
+in the same frame. The "Post + UI" timing includes tone mapping and the UI draw.
 
+- **Auto exposure** (on in the default scene): each frame, two compute passes
+  (`shaders/auto_exposure.hlsl`) bin the HDR image's luminance, after TAA, into
+  a 256-bin log histogram, average the pixels between the 50th and 95th
+  percentile (so dark corners and the sun do not steer it), and expose that
+  average to 0.36. The exposure eases toward its target, faster toward a
+  darker image (**Adapt to bright**, 3/s) than a brighter one (**Adapt to
+  dark**, 1/s), within **Min/Max EV**. **Compensation** (EV, +1 doubles the
+  brightness; keys 1/2 step it by ¼ EV) adjusts the result, and the panel shows
+  the current exposure. The value stays on the GPU for bloom and tone mapping.
+  Scenes saved before version 10 load with it off, keeping their manual
+  **Exposure**.
+- **Bloom threshold** applies to the exposed image, so what blooms does not
+  change as exposure adapts. With manual exposure 1.0 this matches the old
+  behaviour; at other exposures, saved thresholds may need retuning.
 - **Tone mapping**: ACES (fitted, the default), AgX, or Reinhard. Scenes saved
   before this option existed load with Reinhard, their original look.
 - **Shadow distance**: how far from the camera sun shadows reach (default 40). The
@@ -176,7 +190,8 @@ the same frame. The final GPU timing includes tone mapping and the UI draw.
 - **L**: release/capture the mouse. Release it to interact with the panel;
   capture it for the existing WASD/mouse camera controls.
 - **F1**: hide/show the panel.
-- **1–6**: existing exposure, bloom-threshold, and bloom-strength shortcuts.
+- **1–6**: exposure (or auto-exposure compensation), bloom-threshold, and
+  bloom-strength shortcuts.
 - **Esc**: exit.
 - **Show ImGui demo**: explore the included widgets and docking features.
 

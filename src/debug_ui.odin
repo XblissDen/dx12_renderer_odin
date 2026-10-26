@@ -153,7 +153,7 @@ debug_ui_update :: proc() {
         ui_separator()
 
         // Do not short-circuit these calls: every widget must run each frame.
-        if ui_slider_float("Exposure", &r.post_exposure, 0.1, 5.0) do changed = true
+        if debug_ui_exposure_controls() do changed = true
         if ui_slider_float("Bloom threshold", &r.post_threshold, 0.1, 5.0) do changed = true
         if ui_slider_float("Bloom strength", &r.post_strength, 0.0, 2.0) do changed = true
         tone_mapper_labels := [len(ToneMapper)]cstring{"Reinhard", "ACES (fitted)", "AgX"}
@@ -194,6 +194,7 @@ debug_ui_update :: proc() {
         pass_names := [GPU_PASS_COUNT]string{
             "Shadow", "Scene", "Bloom extract", "Bloom horizontal",
             "Bloom vertical", "Post + UI", "Depth prepass", "SSAO + blur", "FXAA", "TAA resolve",
+            "Auto exposure",
         }
         if ui_begin_table("GPU timings") {
             ui_table_column("GPU pass")
@@ -231,6 +232,31 @@ debug_ui_render :: proc() {
     if g_debug_ui_ready {
         ui_render(rawptr(g_renderer.command_list))
     }
+}
+
+// Manual exposure, or auto-exposure and its settings. True when the title's
+// exposure value changed.
+debug_ui_exposure_controls :: proc() -> (changed: bool) {
+    r := &g_renderer
+    s := &r.auto_exposure
+    // Turning it on starts from the measured exposure instead of adapting.
+    if ui_checkbox("Auto exposure", &s.enabled) {
+        r.auto_exposure_reset = true
+        changed = true
+    }
+    if !s.enabled {
+        return ui_slider_float("Exposure", &r.post_exposure, 0.1, 5.0) || changed
+    }
+    text_buffer: [64]u8
+    debug_ui_text(fmt.bprintf(text_buffer[:], "Current: %+.2f EV (x%.3f)", r.auto_exposure_ev + s.compensation,
+        math.pow(f32(2), r.auto_exposure_ev + s.compensation)))
+    if ui_slider_float("Compensation (EV)", &s.compensation, -5, 5) do changed = true
+    // Keep the limits ordered while dragging either one.
+    if ui_slider_float("Min EV", &s.min_ev, -16, 16) do s.max_ev = max(s.max_ev, s.min_ev)
+    if ui_slider_float("Max EV", &s.max_ev, -16, 16) do s.min_ev = min(s.min_ev, s.max_ev)
+    ui_slider_float("Adapt to dark (/s)", &s.adapt_dark, 0.1, 10)
+    ui_slider_float("Adapt to bright (/s)", &s.adapt_bright, 0.1, 10)
+    return
 }
 
 debug_ui_shadow_controls :: proc() {

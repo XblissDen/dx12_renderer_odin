@@ -4,6 +4,8 @@ SamplerState g_sampler : register(s0);
 
 cbuffer PostConstants : register(b1)
 {
+    // The manual exposure, or with auto_exposure the compensation (2^EV)
+    // multiplied into the automatic one.
     float exposure;
     float bloom_threshold;
     float bloom_strength;
@@ -11,7 +13,16 @@ cbuffer PostConstants : register(b1)
     float2 texel_size; // One pixel in UV units.
     uint  taa_history_valid;
     float taa_blend;   // Share of the new frame in each TAA blend.
+    uint  auto_exposure;
 };
+
+// Written by auto_exposure.hlsl: the automatic exposure at byte 0.
+ByteAddressBuffer g_auto_exposure : register(t16);
+
+float Exposure()
+{
+    return auto_exposure != 0u ? asfloat(g_auto_exposure.Load(0u)) * exposure : exposure;
+}
 
 // TAA inputs; the history is bound in the bloom slot (t1).
 Texture2D<float2> g_velocity : register(t8);
@@ -28,7 +39,10 @@ struct VSOutput
 float4 PSExtract(VSOutput input) : SV_TARGET
 {
     float3 color = g_hdr_texture.Sample(g_sampler, input.uv).rgb;
-    float luminance = dot(color, float3(0.2126f, 0.7152f, 0.0722f));
+    // The threshold applies to the exposed image, so what blooms stays the
+    // same as exposure changes. The output stays unexposed: PSMain adds it to
+    // the scene before exposing both.
+    float luminance = dot(color * Exposure(), float3(0.2126f, 0.7152f, 0.0722f));
 
     // Retain only the energy above a brightness threshold
     float weight = max(luminance - bloom_threshold, 0.0f) /
@@ -172,7 +186,7 @@ float4 PSMain(VSOutput input) : SV_TARGET
 
     hdr_color += bloom_color * bloom_strength;
 
-    float3 exposed_color = max(hdr_color * exposure, 0.0f);
+    float3 exposed_color = max(hdr_color * Exposure(), 0.0f);
     float3 mapped;
     [branch]
     if (tone_mapper == 1u)

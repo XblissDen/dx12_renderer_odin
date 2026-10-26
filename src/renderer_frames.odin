@@ -127,6 +127,7 @@ renderer_begin_frame :: proc() {
 
     if completed_frame != 0 {
         renderer_read_gpu_timings(r.frame_slot)
+        renderer_read_auto_exposure(r.frame_slot)
     }
 
     allocator := r.command_allocators[r.frame_slot]

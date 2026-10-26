@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:time"
 import win32 "core:sys/windows"
 import d3d12 "vendor:directx/d3d12"
 
@@ -183,6 +184,7 @@ renderer_bloom_pass :: proc(
     r.command_list->OMSetRenderTargets(1, &rtv, false, nil)
     r.command_list->SetGraphicsRootSignature(r.root_signature)
     renderer_bind_cbv(.Post_Constants, renderer_post_cb_address())
+    renderer_bind_buffer_srv(.Exposure_Buffer, r.exposure_buffer->GetGPUVirtualAddress())
     r.command_list->SetPipelineState(pso)
     renderer_bind_srv(.Texture_T0, u32(source_srv_index))
 
@@ -204,14 +206,15 @@ renderer_update_post_title :: proc() {
                 r.gpu_pass_ms[4]
 
     title := fmt.tprintf(
-        "DX12 | FPS %.0f Frame %.1f ms | GPU shadow %.2f scene %.2f bloom %.2f post %.2f ms | E %.1f T %.1f B %.1f [1-6]",
+        "DX12 | FPS %.0f Frame %.1f ms | GPU shadow %.2f scene %.2f bloom %.2f post %.2f ms | E %s T %.1f B %.1f [1-6]",
         r.fps,
         r.frame_ms,
         r.gpu_pass_ms[0],
         r.gpu_pass_ms[1],
         bloom_ms,
         r.gpu_pass_ms[5],
-        r.post_exposure,
+        // Auto: the compensation, which keys 1/2 adjust.
+        fmt.tprintf("auto%+.2f", r.auto_exposure.compensation) if r.auto_exposure.enabled else fmt.tprintf("%.1f", r.post_exposure),
         r.post_threshold,
         r.post_strength,
     )
@@ -226,7 +229,12 @@ renderer_apply_post_steps :: proc(
     }
 
     r := &g_renderer
-    r.post_exposure = clamp(r.post_exposure + f32(exposure_steps) * 0.1, 0.1, 5.0)
+    // With auto-exposure, keys 1/2 adjust its compensation in quarter stops.
+    if r.auto_exposure.enabled {
+        r.auto_exposure.compensation = clamp(r.auto_exposure.compensation + f32(exposure_steps) * 0.25, -5, 5)
+    } else {
+        r.post_exposure = clamp(r.post_exposure + f32(exposure_steps) * 0.1, 0.1, 5.0)
+    }
     r.post_threshold = clamp(r.post_threshold + f32(threshold_steps) * 0.1, 0.1, 5.0)
     r.post_strength = clamp(r.post_strength + f32(bloom_steps) * 0.1, 0.0, 2.0)
 
@@ -256,4 +264,225 @@ renderer_render_bloom :: proc() {
         0, int(r.bloom_srv_start) + 1, r.bloom_pipeline_states[2],
     )
     renderer_end_gpu_pass(.Bloom_Vertical)
+}
+
+// Auto-exposure settings, saved with the scene. Exposure is 2^EV: +1 EV
+// doubles the brightness.
+AutoExposureSettings :: struct {
+    enabled: bool,
+    // Added to the automatic exposure, in EV.
+    compensation: f32,
+    // Limits of the automatic exposure, in EV.
+    min_ev, max_ev: f32,
+    // Adaptation rates per second: toward more exposure (a darker view) and
+    // toward less (a brighter one). Eyes adapt to light faster than to dark.
+    adapt_dark, adapt_bright: f32,
+}
+
+DEFAULT_AUTO_EXPOSURE :: AutoExposureSettings{
+    enabled = true,
+    min_ev = -6,
+    max_ev = 6,
+    adapt_dark = 1,
+    adapt_bright = 3,
+}
+
+auto_exposure_settings_valid :: proc(s: AutoExposureSettings) -> bool {
+    return s.compensation >= -10 && s.compensation <= 10 &&
+           s.min_ev >= -16 && s.max_ev <= 16 && s.min_ev <= s.max_ev &&
+           s.adapt_dark > 0 && s.adapt_dark <= 50 &&
+           s.adapt_bright > 0 && s.adapt_bright <= 50
+}
+
+// Root constants of auto_exposure.hlsl (b0); the same layout.
+ExposureConstants :: struct {
+    image_size: [2]u32,
+    min_log2_luminance, log2_luminance_range: f32,
+    low_percentile, high_percentile: f32,
+    delta_time: f32,
+    adapt_dark, adapt_bright: f32,
+    min_ev, max_ev: f32,
+    reset: u32,
+}
+
+// Histogram range in log2 luminance: from deep shadow (2^-12) to well past
+// a sunlit sky (2^14), about a tenth of a stop per bin.
+EXPOSURE_MIN_LOG2_LUMINANCE :: -12
+EXPOSURE_LOG2_LUMINANCE_RANGE :: 26
+// The pixels the average uses: the darkest half and the brightest 5% are left
+// out, so dark corners and small highlights (the sun) do not steer exposure.
+EXPOSURE_LOW_PERCENTILE :: 0.5
+EXPOSURE_HIGH_PERCENTILE :: 0.95
+EXPOSURE_BIN_COUNT :: 256
+
+Exposure_Root_Slot :: enum u32 {Constants, Scene, Histogram, Exposure}
+
+renderer_create_auto_exposure :: proc() {
+    r := &g_renderer
+
+    // Compute root signature: constants (b0), the scene color (t0), and the
+    // two buffers as root UAVs (u0, u1).
+    scene_range := d3d12.DESCRIPTOR_RANGE{RangeType = .SRV, NumDescriptors = 1}
+    params: [Exposure_Root_Slot]d3d12.ROOT_PARAMETER
+    params[.Constants].ParameterType = ._32BIT_CONSTANTS
+    params[.Constants].Constants = {Num32BitValues = size_of(ExposureConstants) / 4}
+    params[.Scene].ParameterType = .DESCRIPTOR_TABLE
+    params[.Scene].DescriptorTable = {NumDescriptorRanges = 1, pDescriptorRanges = &scene_range}
+    params[.Histogram].ParameterType = .UAV
+    params[.Histogram].Descriptor = {ShaderRegister = 0}
+    params[.Exposure].ParameterType = .UAV
+    params[.Exposure].Descriptor = {ShaderRegister = 1}
+    rs_desc := d3d12.ROOT_SIGNATURE_DESC{NumParameters = len(params), pParameters = &params[Exposure_Root_Slot(0)]}
+    signature, errors: ^d3d12.IBlob
+    hr := d3d12.SerializeRootSignature(&rs_desc, ._1, &signature, &errors)
+    if errors != nil {
+        fmt.println("Exposure root signature:", cstring(errors->GetBufferPointer()))
+        errors->Release()
+    }
+    dx_check(hr)
+    defer signature->Release()
+    dx_check(r.device->CreateRootSignature(
+        0, signature->GetBufferPointer(), signature->GetBufferSize(),
+        d3d12.IRootSignature_UUID, (^rawptr)(&r.exposure_root_signature),
+    ))
+
+    entries := [2]cstring{"CSHistogram", "CSAdapt"}
+    pipelines := [2]^^d3d12.IPipelineState{&r.exposure_histogram_pipeline, &r.exposure_adapt_pipeline}
+    for entry, i in entries {
+        cs := renderer_compile_shader("shaders/auto_exposure.hlsl", entry, "cs_5_1")
+        defer cs->Release()
+        desc := d3d12.COMPUTE_PIPELINE_STATE_DESC{pRootSignature = r.exposure_root_signature, CS = shader_bytecode(cs)}
+        dx_check(r.device->CreateComputePipelineState(&desc, d3d12.IPipelineState_UUID, (^rawptr)(pipelines[i])))
+    }
+
+    buffer :: proc(size: u64, heap_type: d3d12.HEAP_TYPE, flags: d3d12.RESOURCE_FLAGS, state: d3d12.RESOURCE_STATES) -> (resource: ^d3d12.IResource) {
+        heap := d3d12.HEAP_PROPERTIES{Type = heap_type}
+        desc := d3d12.RESOURCE_DESC{
+            Dimension = .BUFFER, Width = size, Height = 1, DepthOrArraySize = 1,
+            MipLevels = 1, SampleDesc = {Count = 1}, Layout = .ROW_MAJOR, Flags = flags,
+        }
+        dx_check(g_renderer.device->CreateCommittedResource(&heap, {}, &desc, state, nil, d3d12.IResource_UUID, (^rawptr)(&resource)))
+        return
+    }
+    // Committed buffers start zeroed: an empty histogram, and EV 0.
+    r.exposure_histogram = buffer(EXPOSURE_BIN_COUNT * 4, .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON)
+    r.exposure_buffer = buffer(8, .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON)
+    r.exposure_readback = buffer(FRAME_COUNT * 8, .READBACK, {}, {.COPY_DEST})
+
+    // Between frames the histogram stays a UAV and the exposure a pixel-shader
+    // resource (bloom and tone mapping read it).
+    dx_check(r.command_allocators[0]->Reset())
+    dx_check(r.command_list->Reset(r.command_allocators[0], nil))
+    barriers := [2]d3d12.RESOURCE_BARRIER{{Type = .TRANSITION}, {Type = .TRANSITION}}
+    barriers[0].Transition = {
+        pResource = r.exposure_histogram, StateBefore = d3d12.RESOURCE_STATE_COMMON,
+        StateAfter = {.UNORDERED_ACCESS}, Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+    }
+    barriers[1].Transition = {
+        pResource = r.exposure_buffer, StateBefore = d3d12.RESOURCE_STATE_COMMON,
+        StateAfter = {.PIXEL_SHADER_RESOURCE}, Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+    }
+    r.command_list->ResourceBarrier(len(barriers), &barriers[0])
+    dx_check(r.command_list->Close())
+    lists := []^d3d12.ICommandList{r.command_list}
+    r.command_queue->ExecuteCommandLists(1, raw_data(lists))
+    renderer_wait_for_gpu()
+
+    r.auto_exposure_reset = true
+}
+
+renderer_release_auto_exposure :: proc() {
+    r := &g_renderer
+    r.exposure_histogram_pipeline->Release()
+    r.exposure_adapt_pipeline->Release()
+    r.exposure_root_signature->Release()
+    r.exposure_histogram->Release()
+    r.exposure_buffer->Release()
+    r.exposure_readback->Release()
+}
+
+// Measures the scene color and updates the exposure bloom and tone mapping
+// read. Runs after TAA, before bloom.
+renderer_render_auto_exposure :: proc() {
+    r := &g_renderer
+    now := time.tick_now()
+    // Long pauses (a breakpoint, a dragged window) adapt as if a moment passed.
+    delta_time := min(f32(time.duration_seconds(time.tick_diff(r.auto_exposure_tick, now))), 0.25)
+    r.auto_exposure_tick = now
+
+    renderer_begin_gpu_pass(.Auto_Exposure)
+    defer renderer_end_gpu_pass(.Auto_Exposure)
+    if !r.auto_exposure.enabled {
+        // Turning it back on starts from the measured exposure.
+        r.auto_exposure_reset = true
+        return
+    }
+
+    barriers := [2]d3d12.RESOURCE_BARRIER{{Type = .TRANSITION}, {Type = .TRANSITION}}
+    barriers[0].Transition = {
+        pResource = r.scene_color, StateBefore = {.PIXEL_SHADER_RESOURCE},
+        StateAfter = {.PIXEL_SHADER_RESOURCE, .NON_PIXEL_SHADER_RESOURCE},
+        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+    }
+    barriers[1].Transition = {
+        pResource = r.exposure_buffer, StateBefore = {.PIXEL_SHADER_RESOURCE},
+        StateAfter = {.UNORDERED_ACCESS}, Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+    }
+    r.command_list->ResourceBarrier(len(barriers), &barriers[0])
+
+    settings := r.auto_exposure
+    constants := ExposureConstants{
+        image_size = {r.width, r.height},
+        min_log2_luminance = EXPOSURE_MIN_LOG2_LUMINANCE,
+        log2_luminance_range = EXPOSURE_LOG2_LUMINANCE_RANGE,
+        low_percentile = EXPOSURE_LOW_PERCENTILE,
+        high_percentile = EXPOSURE_HIGH_PERCENTILE,
+        delta_time = delta_time,
+        adapt_dark = settings.adapt_dark,
+        adapt_bright = settings.adapt_bright,
+        min_ev = settings.min_ev,
+        max_ev = settings.max_ev,
+        reset = u32(r.auto_exposure_reset),
+    }
+    heaps := []^d3d12.IDescriptorHeap{r.srv_heap}
+    r.command_list->SetDescriptorHeaps(1, raw_data(heaps))
+    r.command_list->SetComputeRootSignature(r.exposure_root_signature)
+    r.command_list->SetComputeRoot32BitConstants(u32(Exposure_Root_Slot.Constants), size_of(constants) / 4, &constants, 0)
+    r.command_list->SetComputeRootDescriptorTable(u32(Exposure_Root_Slot.Scene), renderer_srv_gpu(r.scene_color_srv_index))
+    r.command_list->SetComputeRootUnorderedAccessView(u32(Exposure_Root_Slot.Histogram), r.exposure_histogram->GetGPUVirtualAddress())
+    r.command_list->SetComputeRootUnorderedAccessView(u32(Exposure_Root_Slot.Exposure), r.exposure_buffer->GetGPUVirtualAddress())
+
+    r.command_list->SetPipelineState(r.exposure_histogram_pipeline)
+    r.command_list->Dispatch((r.width + 15) / 16, (r.height + 15) / 16, 1)
+    histogram_done := d3d12.RESOURCE_BARRIER{Type = .UAV}
+    histogram_done.UAV = {pResource = r.exposure_histogram}
+    r.command_list->ResourceBarrier(1, &histogram_done)
+    r.command_list->SetPipelineState(r.exposure_adapt_pipeline)
+    r.command_list->Dispatch(1, 1, 1)
+
+    // A copy for the panel, then back to being read by bloom and tone mapping.
+    barriers[0].Transition.StateBefore = {.PIXEL_SHADER_RESOURCE, .NON_PIXEL_SHADER_RESOURCE}
+    barriers[0].Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
+    barriers[1].Transition.StateBefore = {.UNORDERED_ACCESS}
+    barriers[1].Transition.StateAfter = {.COPY_SOURCE}
+    r.command_list->ResourceBarrier(len(barriers), &barriers[0])
+    r.command_list->CopyBufferRegion(r.exposure_readback, u64(r.frame_slot) * 8, r.exposure_buffer, 0, 8)
+    barriers[1].Transition.StateBefore = {.COPY_SOURCE}
+    barriers[1].Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
+    r.command_list->ResourceBarrier(1, &barriers[1])
+
+    r.auto_exposure_reset = false
+}
+
+// The exposure that frame `slot` computed, once the GPU has finished it.
+renderer_read_auto_exposure :: proc(slot: u32) {
+    r := &g_renderer
+    if !r.auto_exposure.enabled do return
+    read_range := d3d12.RANGE{Begin = uint(slot) * 8, End = uint(slot) * 8 + 8}
+    mapped: rawptr
+    dx_check(r.exposure_readback->Map(0, &read_range, &mapped))
+    // Map returns the buffer's start; the EV is the second float.
+    r.auto_exposure_ev = ([^]f32)(mapped)[slot * 2 + 1]
+    written_range := d3d12.RANGE{}
+    r.exposure_readback->Unmap(0, &written_range)
 }

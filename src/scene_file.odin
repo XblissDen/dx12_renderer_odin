@@ -7,7 +7,7 @@ import "core:strings"
 import alg "core:math/linalg"
 
 SCENE_FILE_PATH :: "scene.json"
-SCENE_FILE_VERSION :: 9 // 7: extra material slots per entity. 8: emission, occlusion, cutouts. 9: blending.
+SCENE_FILE_VERSION :: 10 // 7: extra material slots per entity. 8: emission, occlusion, cutouts. 9: blending. 10: auto-exposure.
 
 ScenePostSettings :: struct{
     exposure: f32,
@@ -47,6 +47,9 @@ SceneFile :: struct {
     shadow: Maybe(SceneShadowSettings),
     // Absent in files saved before SSAO; they load with the defaults.
     ambient_occlusion: Maybe(SceneAmbientOcclusionSettings),
+    // Absent in files saved before auto-exposure; they load with it off,
+    // keeping their manual exposure.
+    auto_exposure: Maybe(AutoExposureSettings),
 }
 
 SceneAmbientOcclusionSettings :: struct {
@@ -274,6 +277,7 @@ scene_save_to_file :: proc(scene: ^Scene, path: string) -> (ok: bool, message: s
             radius = g_renderer.ao_radius,
             intensity = g_renderer.ao_intensity,
         },
+        auto_exposure = g_renderer.auto_exposure,
     }
 
     data, encode_error := json.marshal(file, json.Marshal_Options{
@@ -416,6 +420,14 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
         environment.background_color = defaults.background_color
     }
     if !renderer_environment_settings_valid(environment) do return false, "Invalid environment settings."
+    auto_exposure := file.auto_exposure.? or_else AutoExposureSettings{
+        enabled = false,
+        min_ev = DEFAULT_AUTO_EXPOSURE.min_ev,
+        max_ev = DEFAULT_AUTO_EXPOSURE.max_ev,
+        adapt_dark = DEFAULT_AUTO_EXPOSURE.adapt_dark,
+        adapt_bright = DEFAULT_AUTO_EXPOSURE.adapt_bright,
+    }
+    if !auto_exposure_settings_valid(auto_exposure) do return false, "Invalid auto-exposure settings."
 
     for i in 0..<staged.entity_count{
         if staged.has_directional_light[i]{
@@ -443,6 +455,8 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
     g_renderer.shadow_bias_slope = shadow.bias_slope
     g_renderer.shadow_distance = shadow.distance
     g_renderer.ao_enabled = ambient_occlusion.enabled
+    g_renderer.auto_exposure = auto_exposure
+    g_renderer.auto_exposure_reset = true
     g_renderer.ao_radius = ambient_occlusion.radius
     g_renderer.ao_intensity = ambient_occlusion.intensity
 

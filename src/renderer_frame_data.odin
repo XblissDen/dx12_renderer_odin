@@ -72,7 +72,9 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     environment_sin := math.sin(math.to_radians(r.environment_settings.rotation_degrees))
     environment_cos := math.cos(math.to_radians(r.environment_settings.rotation_degrees))
 
-    post.exposure = r.post_exposure
+    // With auto-exposure, the compensation multiplies the GPU-side exposure.
+    post.auto_exposure = u32(r.auto_exposure.enabled)
+    post.exposure = math.pow(f32(2), r.auto_exposure.compensation) if r.auto_exposure.enabled else r.post_exposure
     post.bloom_threshold = r.post_threshold
     post.bloom_strength = r.post_strength
     post.tone_mapper = r.post_tone_mapper
