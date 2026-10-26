@@ -76,7 +76,9 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     post.auto_exposure = u32(r.auto_exposure.enabled)
     post.exposure = math.pow(f32(2), r.auto_exposure.compensation) if r.auto_exposure.enabled else r.post_exposure
     post.bloom_threshold = r.post_threshold
-    post.bloom_strength = r.post_strength
+    // Bloom mip 0 holds the sum of every level; average them so the strength
+    // does not depend on how many levels the window allows.
+    post.bloom_strength = r.post_strength / f32(max(r.bloom_mip_count, 1))
     post.tone_mapper = r.post_tone_mapper
     post.texel_size = {1 / f32(r.width), 1 / f32(r.height)}
     // History from a frame without TAA (or before a resize) is stale.

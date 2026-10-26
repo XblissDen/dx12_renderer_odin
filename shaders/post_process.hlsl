@@ -36,66 +36,108 @@ struct VSOutput
     float2 uv       : TEXCOORD0;
 };
 
-float4 PSExtract(VSOutput input) : SV_TARGET
+// ---------------------------------------------------------------------------
+// Bloom: a mip chain at half resolution and below (Jimenez, "Next Generation
+// Post Processing in Call of Duty: Advanced Warfare", 2014). The prefilter
+// keeps what is above the threshold, each downsample halves the size, and the
+// upsamples blur each level back into the next larger one, so mip 0 ends up
+// holding every level: tight glow near bright parts and a wide, soft halo.
+// Each pass reads one level (t0) through the clamp sampler, so nothing wraps
+// around the screen edges.
+
+float Luminance(float3 color)
 {
-    float3 color = g_hdr_texture.Sample(g_sampler, input.uv).rgb;
-    // The threshold applies to the exposed image, so what blooms stays the
-    // same as exposure changes. The output stays unexposed: PSMain adds it to
-    // the scene before exposing both.
-    float luminance = dot(color * Exposure(), float3(0.2126f, 0.7152f, 0.0722f));
-
-    // Retain only the energy above a brightness threshold
-    float weight = max(luminance - bloom_threshold, 0.0f) /
-               max(luminance, 0.0001f);
-
-    return float4(color * weight, 1.0f);
+    return dot(color, float3(0.2126f, 0.7152f, 0.0722f));
 }
 
-float3 Blur(float2 uv, float2 direction)
+float3 BloomTap(float2 uv)
+{
+    return g_hdr_texture.SampleLevel(g_clamp_sampler, uv, 0).rgb;
+}
+
+// 13 bilinear taps over a 4x4-texel area of the source level (twice the
+// target's size): a 2x2 box at the center (weight 0.5) and four overlapping
+// 2x2 boxes around it (0.125 each), which avoids a single box filter's
+// blockiness and shimmer. With `karis`, each box is weighted by 1 / (1 +
+// luminance) (Karis average), so a few super-bright pixels such as the sun
+// cannot dominate and make the bloom flicker as they move.
+float3 Downsample13(float2 uv, bool karis)
 {
     uint width, height;
     g_hdr_texture.GetDimensions(width, height);
+    float2 t = 1.0f / float2(width, height);
 
-    float2 dimensions = float2(width, height);
-    float2 step_uv = direction * 2.0f / dimensions;
+    float3 a = BloomTap(uv + t * float2(-2.0f, -2.0f));
+    float3 b = BloomTap(uv + t * float2( 0.0f, -2.0f));
+    float3 c = BloomTap(uv + t * float2( 2.0f, -2.0f));
+    float3 d = BloomTap(uv + t * float2(-2.0f,  0.0f));
+    float3 e = BloomTap(uv);
+    float3 f = BloomTap(uv + t * float2( 2.0f,  0.0f));
+    float3 g = BloomTap(uv + t * float2(-2.0f,  2.0f));
+    float3 h = BloomTap(uv + t * float2( 0.0f,  2.0f));
+    float3 i = BloomTap(uv + t * float2( 2.0f,  2.0f));
+    float3 j = BloomTap(uv + t * float2(-1.0f, -1.0f));
+    float3 k = BloomTap(uv + t * float2( 1.0f, -1.0f));
+    float3 l = BloomTap(uv + t * float2(-1.0f,  1.0f));
+    float3 m = BloomTap(uv + t * float2( 1.0f,  1.0f));
 
-    // Keep samples inside the image; our existing sampler uses WRAP.
-    float2 min_uv = 0.5f / dimensions;
-    float2 max_uv = 1.0f - min_uv;
-
-    static const float weights[5] = {
-        0.227027f, 0.1945946f, 0.1216216f, 0.054054f, 0.016216f
+    float3 boxes[5] = {
+        (j + k + l + m) * 0.25f,
+        (a + b + d + e) * 0.25f,
+        (b + c + e + f) * 0.25f,
+        (d + e + g + h) * 0.25f,
+        (e + f + h + i) * 0.25f,
     };
+    float weights[5] = {0.5f, 0.125f, 0.125f, 0.125f, 0.125f};
 
-    float3 result = g_hdr_texture.Sample(
-        g_sampler, clamp(uv, min_uv, max_uv)
-    ).rgb * weights[0];
-
+    float3 result = 0.0f;
+    float total = 0.0f;
     [unroll]
-    for (int i = 1; i <= 4; ++i)
+    for (uint box = 0u; box < 5u; ++box)
     {
-        float2 offset = step_uv * i;
-
-        result += g_hdr_texture.Sample(
-            g_sampler, clamp(uv + offset, min_uv, max_uv)
-        ).rgb * weights[i];
-
-        result += g_hdr_texture.Sample(
-            g_sampler, clamp(uv - offset, min_uv, max_uv)
-        ).rgb * weights[i];
+        float weight = weights[box];
+        if (karis)
+        {
+            weight /= 1.0f + Luminance(boxes[box]);
+        }
+        result += boxes[box] * weight;
+        total += weight;
     }
-
-    return result;
+    return result / total;
 }
 
-float4 PSBlurHorizontal(VSOutput input) : SV_TARGET
+// Scene color -> bloom mip 0: what is above the threshold.
+float4 PSBloomPrefilter(VSOutput input) : SV_TARGET
 {
-    return float4(Blur(input.uv, float2(1.0f, 0.0f)), 1.0f);
+    float3 color = Downsample13(input.uv, true);
+    // The threshold applies to the exposed image, so what blooms stays the
+    // same as exposure changes. The output stays unexposed: PSMain adds it to
+    // the scene before exposing both.
+    float luminance = Luminance(color) * Exposure();
+    float weight = max(luminance - bloom_threshold, 0.0f) / max(luminance, 0.0001f);
+    return float4(color * weight, 1.0f);
 }
 
-float4 PSBlurVertical(VSOutput input) : SV_TARGET
+// Bloom mip n -> mip n + 1.
+float4 PSBloomDownsample(VSOutput input) : SV_TARGET
 {
-    return float4(Blur(input.uv, float2(0.0f, 1.0f)), 1.0f);
+    return float4(Downsample13(input.uv, false), 1.0f);
+}
+
+// Bloom mip n + 1 -> mip n, added to what the downsample left there (the
+// pipeline blends additively): a 3x3 tent filter one source texel wide.
+float4 PSBloomUpsample(VSOutput input) : SV_TARGET
+{
+    uint width, height;
+    g_hdr_texture.GetDimensions(width, height);
+    float2 t = 1.0f / float2(width, height);
+
+    float3 sum = BloomTap(input.uv) * 4.0f;
+    sum += (BloomTap(input.uv + float2(t.x, 0.0f)) + BloomTap(input.uv - float2(t.x, 0.0f)) +
+            BloomTap(input.uv + float2(0.0f, t.y)) + BloomTap(input.uv - float2(0.0f, t.y))) * 2.0f;
+    sum += BloomTap(input.uv + t) + BloomTap(input.uv - t) +
+           BloomTap(input.uv + float2(t.x, -t.y)) + BloomTap(input.uv + float2(-t.x, t.y));
+    return float4(sum / 16.0f, 1.0f);
 }
 
 VSOutput VSMain(uint vertex_id : SV_VertexID)
@@ -182,7 +224,8 @@ float3 ToneMapAgX(float3 color)
 float4 PSMain(VSOutput input) : SV_TARGET
 {
     float3 hdr_color = g_hdr_texture.Sample(g_sampler, input.uv).rgb;
-    float3 bloom_color = g_bloom_texture.Sample(g_sampler, input.uv).rgb;
+    // Bloom mip 0 (half resolution), bilinearly upscaled.
+    float3 bloom_color = g_bloom_texture.Sample(g_clamp_sampler, input.uv).rgb;
 
     hdr_color += bloom_color * bloom_strength;
 

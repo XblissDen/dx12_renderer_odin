@@ -192,8 +192,8 @@ debug_ui_update :: proc() {
         ))
 
         pass_names := [GPU_PASS_COUNT]string{
-            "Shadow", "Scene", "Bloom extract", "Bloom horizontal",
-            "Bloom vertical", "Post + UI", "Depth prepass", "SSAO + blur", "FXAA", "TAA resolve",
+            "Shadow", "Scene", "Bloom prefilter", "Bloom downsample",
+            "Bloom upsample", "Post + UI", "Depth prepass", "SSAO + blur", "FXAA", "TAA resolve",
             "Auto exposure",
         }
         if ui_begin_table("GPU timings") {

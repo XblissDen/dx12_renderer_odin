@@ -128,9 +128,18 @@ in the same frame. The "Post + UI" timing includes tone mapping and the UI draw.
   the current exposure. The value stays on the GPU for bloom and tone mapping.
   Scenes saved before version 10 load with it off, keeping their manual
   **Exposure**.
+- **Bloom** is a mip chain (Jimenez, Call of Duty: Advanced Warfare, 2014),
+  about 0.1 ms at 1080p. A prefilter writes what is above **Bloom threshold**
+  at half resolution, using a 13-tap filter with a Karis average so the sun and
+  other tiny super-bright spots cannot make it flicker; five downsamples halve
+  it down to 1/64 resolution; upsamples then blur each level with a 3x3 tent
+  and add it into the next larger one. Tone mapping adds the result, averaged
+  over the levels, scaled by **Bloom strength**: a tight glow near bright
+  parts plus a wide, soft halo. Edges are clamped, not wrapped.
 - **Bloom threshold** applies to the exposed image, so what blooms does not
-  change as exposure adapts. With manual exposure 1.0 this matches the old
-  behaviour; at other exposures, saved thresholds may need retuning.
+  change as exposure adapts. Saved scenes keep their threshold and strength,
+  but the wider glow looks different from the old single blur, so they may
+  want retuning.
 - **Tone mapping**: ACES (fitted, the default), AgX, or Reinhard. Scenes saved
   before this option existed load with Reinhard, their original look.
 - **Shadow distance**: how far from the camera sun shadows reach (default 40). The

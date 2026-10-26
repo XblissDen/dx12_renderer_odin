@@ -18,8 +18,9 @@ FRAME_COUNT :: 2
 SHADOW_MAP_SIZE :: 2048
 SRV_HEAP_CAPACITY :: 65536 // Includes FRAME_COUNT * MAX_DRAWS material tables.
 
-BLOOM_TARGET_COUNT :: 2
-BLOOM_PASS_COUNT :: 3 // Extract, horizontal blur, vertical blur.
+// Bloom mip chain levels: half resolution down to 1/64 (about 30x17 at 1080p).
+BLOOM_MIP_COUNT :: 6
+BLOOM_PASS_COUNT :: 3 // Prefilter, downsample, upsample.
 
 IRRADIANCE_WIDTH :: 64
 IRRADIANCE_HEIGHT :: 32
@@ -34,9 +35,9 @@ GPU_TIMESTAMP_COUNT :: GPU_PASS_COUNT * 2
 GPU_Pass :: enum u32{
     Shadow,
     Scene,
-    Bloom_Extract,
-    Bloom_Horizontal,
-    Bloom_Vertical,
+    Bloom_Prefilter,
+    Bloom_Downsample,
+    Bloom_Upsample,
     Post_Process,
     Depth_Prepass,
     SSAO,
@@ -298,10 +299,13 @@ Renderer :: struct {
     transparent_front_pipeline_state, transparent_back_pipeline_state: ^d3d12.IPipelineState,
     post_pipeline_state: ^d3d12.IPipelineState,
 
-    bloom_targets: [BLOOM_TARGET_COUNT]^d3d12.IResource,
+    // One texture with the whole chain (renderer_post.odin); per-level RTVs
+    // and single-level SRVs. Small windows get fewer levels.
+    bloom_texture: ^d3d12.IResource,
+    bloom_mip_count: u32,
     bloom_rtv_heap: ^d3d12.IDescriptorHeap,
 
-    // Extract, horizontal blur, vertical blur.
+    // Prefilter, downsample, upsample.
     bloom_pipeline_states: [BLOOM_PASS_COUNT]^d3d12.IPipelineState,
 
     post_constant_buffer: ^d3d12.IResource,
@@ -975,9 +979,16 @@ renderer_create_pipelines :: proc() {
     renderer_create_fullscreen_pso(fullscreen, POST, "PSMain", .R8G8B8A8_UNORM, &r.post_pipeline_state)
     renderer_create_fullscreen_pso(fullscreen, POST, "PSFxaa", .R8G8B8A8_UNORM, &r.fxaa_pipeline_state)
     renderer_create_fullscreen_pso(fullscreen, POST, "PSTaaResolve", .R16G16B16A16_FLOAT, &r.taa_resolve_pipeline_state)
-    bloom_entries := [BLOOM_PASS_COUNT]cstring{"PSExtract", "PSBlurHorizontal", "PSBlurVertical"}
+    bloom_entries := [BLOOM_PASS_COUNT]cstring{"PSBloomPrefilter", "PSBloomDownsample", "PSBloomUpsample"}
     for entry, i in bloom_entries {
-        renderer_create_fullscreen_pso(fullscreen, POST, entry, .R16G16B16A16_FLOAT, &r.bloom_pipeline_states[i])
+        bloom := fullscreen
+        if i == 2 {
+            // Upsamples add onto the level the downsample left behind.
+            bloom.BlendState.RenderTarget[0].BlendEnable = true
+            bloom.BlendState.RenderTarget[0].SrcBlend = .ONE
+            bloom.BlendState.RenderTarget[0].DestBlend = .ONE
+        }
+        renderer_create_fullscreen_pso(bloom, POST, entry, .R16G16B16A16_FLOAT, &r.bloom_pipeline_states[i])
     }
 
     renderer_create_fullscreen_pso(fullscreen, "shaders/sky.hlsl", "PSMain", .R16G16B16A16_FLOAT, &r.sky_pipeline_state)
@@ -1220,9 +1231,7 @@ renderer_resize:: proc(width, height: u32){
     r.ldr_texture->Release()
     for target in r.ao_targets do target->Release()
     renderer_release_taa_targets()
-    for target in r.bloom_targets {
-        target->Release()
-    }
+    r.bloom_texture->Release()
 
     for i in 0..<FRAME_COUNT{
         r.render_targets[i]->Release()
@@ -1301,7 +1310,7 @@ renderer_load_textures :: proc(){
     r.ldr_srv_index = renderer_alloc_srv()
     r.taa_srv_start = renderer_alloc_srv(2)
     r.velocity_srv_index = renderer_alloc_srv()
-    r.bloom_srv_start = renderer_alloc_srv(BLOOM_TARGET_COUNT)
+    r.bloom_srv_start = renderer_alloc_srv(BLOOM_MIP_COUNT)
     r.environment_srv_index = renderer_alloc_srv()
     r.irradiance_srv_index = renderer_alloc_srv()
     r.prefilter_srv_index = renderer_alloc_srv()
@@ -1660,9 +1669,7 @@ renderer_destroy :: proc(){
     r.selection_pipeline_state->Release()
     r.selection_root_signature->Release()
 
-    for target in r.bloom_targets {
-        target->Release()
-    }
+    r.bloom_texture->Release()
     r.bloom_rtv_heap->Release()
 
     for target in r.ao_targets do target->Release()

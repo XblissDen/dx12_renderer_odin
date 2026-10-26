@@ -92,12 +92,14 @@ renderer_create_hdr_target :: proc() {
     renderer_write_srv(r.ldr_texture, .R8G8B8A8_UNORM, r.ldr_srv_index)
 }
 
+// The bloom mip chain: one texture, level 0 at half resolution. Rebuilt on
+// resize.
 renderer_create_bloom_targets :: proc() {
     r := &g_renderer
 
     if r.bloom_rtv_heap == nil {
         rtv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{
-            NumDescriptors = BLOOM_TARGET_COUNT,
+            NumDescriptors = BLOOM_MIP_COUNT,
             Type = .RTV,
         }
         dx_check(r.device->CreateDescriptorHeap(
@@ -107,13 +109,17 @@ renderer_create_bloom_targets :: proc() {
         ))
     }
 
+    width, height := max(1, r.width / 2), max(1, r.height / 2)
+    // A tiny window cannot hold every level.
+    r.bloom_mip_count = min(BLOOM_MIP_COUNT, texture_mip_count(width, height))
+
     heap_props := d3d12.HEAP_PROPERTIES{Type = .DEFAULT}
     desc := d3d12.RESOURCE_DESC{
         Dimension = .TEXTURE2D,
-        Width = u64(r.width),
-        Height = r.height,
+        Width = u64(width),
+        Height = height,
         DepthOrArraySize = 1,
-        MipLevels = 1,
+        MipLevels = u16(r.bloom_mip_count),
         Format = .R16G16B16A16_FLOAT,
         SampleDesc = {Count = 1},
         Flags = {.ALLOW_RENDER_TARGET},
@@ -124,72 +130,75 @@ renderer_create_bloom_targets :: proc() {
     }
     clear_value.Color = {0, 0, 0, 1}
 
+    dx_check(r.device->CreateCommittedResource(
+        &heap_props,
+        {},
+        &desc,
+        {.PIXEL_SHADER_RESOURCE},
+        &clear_value,
+        d3d12.IResource_UUID,
+        (^rawptr)(&r.bloom_texture),
+    ))
+
     rtv_increment := r.device->GetDescriptorHandleIncrementSize(.RTV)
-
-    for i in 0..<BLOOM_TARGET_COUNT {
-        dx_check(r.device->CreateCommittedResource(
-            &heap_props,
-            {},
-            &desc,
-            {.PIXEL_SHADER_RESOURCE},
-            &clear_value,
-            d3d12.IResource_UUID,
-            (^rawptr)(&r.bloom_targets[i]),
-        ))
-
+    for mip in 0..<r.bloom_mip_count {
+        rtv_desc := d3d12.RENDER_TARGET_VIEW_DESC{Format = .R16G16B16A16_FLOAT, ViewDimension = .TEXTURE2D}
+        rtv_desc.Texture2D = {MipSlice = mip}
         rtv: d3d12.CPU_DESCRIPTOR_HANDLE
         r.bloom_rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv)
-        rtv.ptr += uint(i) * uint(rtv_increment)
-        r.device->CreateRenderTargetView(r.bloom_targets[i], nil, rtv)
+        rtv.ptr += uint(mip) * uint(rtv_increment)
+        r.device->CreateRenderTargetView(r.bloom_texture, &rtv_desc, rtv)
 
+        // One level per view: each pass reads exactly one.
         srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
             Format = .R16G16B16A16_FLOAT,
             ViewDimension = .TEXTURE2D,
             Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
         }
-        srv_desc.Texture2D = {MipLevels = 1}
-
+        srv_desc.Texture2D = {MostDetailedMip = mip, MipLevels = 1}
         srv: d3d12.CPU_DESCRIPTOR_HANDLE
         r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv)
-        srv.ptr += uint(r.bloom_srv_start + u32(i)) *
-                   uint(r.srv_descriptor_size)
-        r.device->CreateShaderResourceView(r.bloom_targets[i], &srv_desc, srv)
+        srv.ptr += uint(r.bloom_srv_start + mip) * uint(r.srv_descriptor_size)
+        r.device->CreateShaderResourceView(r.bloom_texture, &srv_desc, srv)
     }
 }
 
+// Draws bloom level `target_mip` from the view at `source_srv_index`.
 renderer_bloom_pass :: proc(
-    target_index: int,
-    source_srv_index: int,
+    target_mip: u32,
+    source_srv_index: u32,
     pso: ^d3d12.IPipelineState,
 ) {
     r := &g_renderer
-    assert(target_index >= 0 && target_index < BLOOM_TARGET_COUNT)
-
-    target := r.bloom_targets[target_index]
+    assert(target_mip < r.bloom_mip_count)
 
     barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
     barrier.Transition = {
-        pResource = target,
+        pResource = r.bloom_texture,
         StateBefore = {.PIXEL_SHADER_RESOURCE},
         StateAfter = {.RENDER_TARGET},
-        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+        Subresource = target_mip,
     }
     r.command_list->ResourceBarrier(1, &barrier)
 
     rtv: d3d12.CPU_DESCRIPTOR_HANDLE
     r.bloom_rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv)
-    rtv_increment := r.device->GetDescriptorHandleIncrementSize(.RTV)
-    rtv.ptr += uint(target_index) * uint(rtv_increment)
+    rtv.ptr += uint(target_mip) * uint(r.device->GetDescriptorHandleIncrementSize(.RTV))
+
+    width := max(1, r.width / 2) >> target_mip
+    height := max(1, r.height / 2) >> target_mip
+    viewport := d3d12.VIEWPORT{Width = f32(max(1, width)), Height = f32(max(1, height)), MaxDepth = 1}
+    scissor := d3d12.RECT{right = i32(max(1, width)), bottom = i32(max(1, height))}
 
     r.command_list->OMSetRenderTargets(1, &rtv, false, nil)
     r.command_list->SetGraphicsRootSignature(r.root_signature)
     renderer_bind_cbv(.Post_Constants, renderer_post_cb_address())
     renderer_bind_buffer_srv(.Exposure_Buffer, r.exposure_buffer->GetGPUVirtualAddress())
     r.command_list->SetPipelineState(pso)
-    renderer_bind_srv(.Texture_T0, u32(source_srv_index))
+    renderer_bind_srv(.Texture_T0, source_srv_index)
 
-    r.command_list->RSSetViewports(1, &r.viewport)
-    r.command_list->RSSetScissorRects(1, &r.scissor_rect)
+    r.command_list->RSSetViewports(1, &viewport)
+    r.command_list->RSSetScissorRects(1, &scissor)
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
     r.command_list->DrawInstanced(3, 1, 0, 0)
 
@@ -241,29 +250,27 @@ renderer_apply_post_steps :: proc(
     renderer_update_post_title()
 }
 
+// Prefilter into level 0, downsample to the smallest level, then upsample
+// back, adding each level into the next larger one. Tone mapping reads level 0.
 renderer_render_bloom :: proc() {
     r := &g_renderer
+    levels := r.bloom_mip_count
 
-    renderer_begin_gpu_pass(.Bloom_Extract)
-    // HDR -> bright areas in bloom target 0.
-    renderer_bloom_pass(
-        0, int(r.scene_color_srv_index), r.bloom_pipeline_states[0],
-    )
-    renderer_end_gpu_pass(.Bloom_Extract)
+    renderer_begin_gpu_pass(.Bloom_Prefilter)
+    renderer_bloom_pass(0, r.scene_color_srv_index, r.bloom_pipeline_states[0])
+    renderer_end_gpu_pass(.Bloom_Prefilter)
 
-    // Target 0 -> horizontal blur in target 1.
-    renderer_begin_gpu_pass(.Bloom_Horizontal)
-    renderer_bloom_pass(
-        1, int(r.bloom_srv_start), r.bloom_pipeline_states[1],
-    )
-    renderer_end_gpu_pass(.Bloom_Horizontal)
+    renderer_begin_gpu_pass(.Bloom_Downsample)
+    for mip in 1..<levels {
+        renderer_bloom_pass(mip, r.bloom_srv_start + mip - 1, r.bloom_pipeline_states[1])
+    }
+    renderer_end_gpu_pass(.Bloom_Downsample)
 
-    // Target 1 -> vertical blur back in target 0.
-    renderer_begin_gpu_pass(.Bloom_Vertical)
-    renderer_bloom_pass(
-        0, int(r.bloom_srv_start) + 1, r.bloom_pipeline_states[2],
-    )
-    renderer_end_gpu_pass(.Bloom_Vertical)
+    renderer_begin_gpu_pass(.Bloom_Upsample)
+    for mip := levels - 1; mip > 0; mip -= 1 {
+        renderer_bloom_pass(mip - 1, r.bloom_srv_start + mip, r.bloom_pipeline_states[2])
+    }
+    renderer_end_gpu_pass(.Bloom_Upsample)
 }
 
 // Auto-exposure settings, saved with the scene. Exposure is 2^EV: +1 EV
