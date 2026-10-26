@@ -37,7 +37,7 @@ a solid background instead.
 
 ## Importing models
 
-The import panel (**Import Assets...**) accepts OBJ, glTF 2.0 (`.gltf` with its
+The **Assets...** panel imports OBJ, glTF 2.0 (`.gltf` with its
 `.bin` and images beside it, or a single `.glb`), and PNG/JPEG textures.
 
 A glTF import copies the model and every file it references into
@@ -84,6 +84,26 @@ uploaded, and the GPU renders the mip chain from it (`shaders/texture_mips.hlsl`
 2x2 averages in linear space for color, renormalized directions for normal
 maps, rounded the same way as the CPU filter it replaced. With Sponza and the
 helmets in the catalog (129 textures), textures take about 1.2 s.
+
+### Removing assets
+
+The same panel removes a model or texture from the catalog (with a
+confirmation step):
+
+- It is refused while anything uses the asset: an entity in the scene (for
+  textures, in any material slot or map, including disabled ones), or another
+  model's default material. The panel names the user.
+- Removing a model also removes the textures its import registered
+  (`<model id>.…`) that nothing else uses.
+- `assets.json` is rewritten without them and their GPU data is freed. Files the
+  importer copied are deleted: a glTF model's `models/imported/<id>/` folder, an
+  imported OBJ or texture file. Files outside `models/imported/` and
+  `textures/imported/` are never deleted, only unlisted.
+- Undo history is cleared (old steps could bring back an entity using the asset),
+  and the removal itself cannot be undone. Saved scenes that use a removed asset
+  no longer load.
+- Handles are not reused during a session, so nothing else shifts; the catalog is
+  compacted at the next start.
 
 ## Debug UI
 

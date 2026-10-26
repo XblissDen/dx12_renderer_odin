@@ -7,6 +7,7 @@ import "core:io"
 import "core:mem"
 import "core:os"
 import "core:strings"
+import "core:slice"
 import "core:thread"
 import "core:image"
 import c "core:c"
@@ -69,8 +70,12 @@ MeshAsset :: struct {
     material: Material,
     material_slots: MaterialSlots,
     material_names: [MAX_MODEL_MATERIALS]cstring,
+    // Removed from the catalog this session. The handle stays reserved, so
+    // handles held elsewhere never shift; it is simply no longer valid.
+    removed: bool,
 }
-TextureAsset :: struct {desc: TextureDesc, label: cstring, hidden: bool}
+// `removed`: as for MeshAsset.
+TextureAsset :: struct {desc: TextureDesc, label: cstring, hidden, removed: bool}
 AssetRegistry :: struct {
     arena: mem.Dynamic_Arena,
     active: bool,
@@ -113,9 +118,11 @@ assets_prepare_catalog :: proc(
     models := make([dynamic]MeshDesc, context.temp_allocator)
     textures := make([dynamic]TextureDesc, context.temp_allocator)
     environments := make([dynamic]EnvironmentDesc, context.temp_allocator)
-    for asset in g_assets.meshes[1:] do append(&models, asset.desc)
+    for asset in g_assets.meshes[1:] {
+        if !asset.removed do append(&models, asset.desc)
+    }
     for asset in g_assets.textures[1:] {
-        if !asset.hidden do append(&textures, asset.desc)
+        if !asset.hidden && !asset.removed do append(&textures, asset.desc)
     }
     if model != nil do append(&models, model^)
     if texture != nil do append(&textures, texture^)
@@ -489,8 +496,8 @@ assets_import_gltf :: proc(request: AssetImportRequest) -> (model: MeshHandle, m
     return
 }
 
-assets_mesh_valid :: proc(h: MeshHandle) -> bool {return h != 0 && int(h) < len(g_assets.meshes)}
-assets_texture_valid :: proc(h: TextureHandle) -> bool {return h != 0 && int(h) < len(g_assets.textures)}
+assets_mesh_valid :: proc(h: MeshHandle) -> bool {return h != 0 && int(h) < len(g_assets.meshes) && !g_assets.meshes[h].removed}
+assets_texture_valid :: proc(h: TextureHandle) -> bool {return h != 0 && int(h) < len(g_assets.textures) && !g_assets.textures[h].removed}
 assets_optional_texture_valid :: proc(h: TextureHandle) -> bool {return h == 0 || assets_texture_valid(h)}
 assets_mesh :: proc(id: string) -> MeshHandle {return g_assets.mesh_ids[id]}
 assets_texture :: proc(id: string) -> TextureHandle {return g_assets.texture_ids[id]}
@@ -941,4 +948,154 @@ assets_unmarshal_environment :: proc(parser: ^json.Parser, value: any) -> json.U
     if id != "" && handle == 0 do return json.Unmarshal_Data_Error.Invalid_Data
     (^EnvironmentHandle)(value.data)^ = handle
     return nil
+}
+
+// Every texture a material references, in use or not (a disabled map still
+// names its texture, and saving the scene writes it).
+assets_material_textures :: proc(material: Material) -> [6]TextureHandle {
+    return {
+        material.texture, material.normal_texture, material.roughness_texture,
+        material.metallic_texture, material.emissive_texture, material.occlusion_texture,
+    }
+}
+
+assets_material_uses :: proc(material: Material, texture: TextureHandle) -> bool {
+    for handle in assets_material_textures(material) {
+        if handle == texture do return true
+    }
+    return false
+}
+
+// A model's default materials: slot 0, then the rest.
+assets_model_material :: proc(asset: ^MeshAsset, slot: int) -> Material {
+    return asset.material if slot == 0 else asset.material_slots.extra[slot - 1]
+}
+
+assets_model_material_count :: proc(asset: ^MeshAsset) -> int {
+    return max(asset.material_slots.count, 1)
+}
+
+// Who uses a model or texture: the first scene entity, or (for a texture)
+// another model's default material. Empty when nothing does. `ignore` is a
+// model being removed together with the texture.
+assets_user :: proc(scene: ^Scene, mesh: MeshHandle, texture: TextureHandle, ignore: MeshHandle = 0) -> string {
+    for i in 0..<scene.entity_count {
+        if !scene.alive[i] do continue
+        used := mesh != 0 && scene.has_mesh_renderer[i] && scene.mesh_renderers[i].mesh == mesh
+        if texture != 0 && scene.has_material[i] {
+            for slot in 0..<scene_material_count(scene, i) {
+                used ||= assets_material_uses(scene_material(scene, i, slot)^, texture)
+            }
+        }
+        if used {
+            name := scene.names[i] if scene.names[i] != "" else fmt.tprintf("entity %d", i)
+            return fmt.tprintf("Used by \"%s\" in the scene.", name)
+        }
+    }
+    if texture == 0 do return ""
+    for &asset, i in g_assets.meshes[1:] {
+        handle := MeshHandle(i + 1)
+        if asset.removed || handle == ignore do continue
+        for slot in 0..<assets_model_material_count(&asset) {
+            if assets_material_uses(assets_model_material(&asset, slot), texture) {
+                return fmt.tprintf("Used by the default material of model \"%s\".", asset.label)
+            }
+        }
+    }
+    return ""
+}
+
+// What removing a model or a texture takes with it. A model takes the
+// textures its import registered (ids "<model id>.…") that nothing else uses.
+// `message` says why it cannot be removed.
+assets_plan_removal :: proc(scene: ^Scene, mesh: MeshHandle, texture: TextureHandle) -> (textures: []TextureHandle, message: string) {
+    if mesh != 0 {
+        if !assets_mesh_valid(mesh) do return nil, "Choose a model."
+        if user := assets_user(scene, mesh, 0); user != "" do return nil, user
+        asset := &g_assets.meshes[mesh]
+        owned := make([dynamic]TextureHandle, context.temp_allocator)
+        prefix := fmt.tprintf("%s.", asset.desc.id)
+        for slot in 0..<assets_model_material_count(asset) {
+            for handle in assets_material_textures(assets_model_material(asset, slot)) {
+                if !assets_texture_valid(handle) || g_assets.textures[handle].hidden do continue
+                if !strings.has_prefix(g_assets.textures[handle].desc.id, prefix) do continue
+                if slice.contains(owned[:], handle) do continue
+                if assets_user(scene, 0, handle, ignore = mesh) != "" do continue
+                append(&owned, handle)
+            }
+        }
+        return owned[:], ""
+    }
+    if !assets_texture_valid(texture) || g_assets.textures[texture].hidden do return nil, "Choose a texture."
+    if user := assets_user(scene, 0, texture); user != "" do return nil, user
+    textures = make([]TextureHandle, 1, context.temp_allocator)
+    textures[0] = texture
+    return textures, ""
+}
+
+// Deletes a file or folder the importer copied into the project. Anything
+// outside models/imported/ and textures/imported/ is the user's own file and
+// stays. A glTF model owns its whole folder; an OBJ or texture its one file.
+assets_delete_imported :: proc(path: string, model: bool) {
+    for root in ([]string{"models/imported/", "textures/imported/"}) {
+        if !strings.has_prefix(path, root) do continue
+        rest := path[len(root):]
+        if model && strings.contains(rest, "/") {
+            os.remove_all(fmt.tprintf("%s%s", root, rest[:strings.index_byte(rest, '/')]))
+        } else if !strings.contains(rest, "/") {
+            os.remove(path)
+        }
+        // A texture inside a glTF model's folder goes with the model.
+    }
+}
+
+// Removes a model (with the textures only it used) or a texture from the
+// catalog: assets.json is rewritten without them, their GPU data is freed,
+// and files the importer copied are deleted. Refused while anything uses
+// them. Handles are not reused, so nothing else shifts.
+assets_remove :: proc(scene: ^Scene, mesh: MeshHandle, texture: TextureHandle) -> (message: string) {
+    textures, refusal := assets_plan_removal(scene, mesh, texture)
+    if refusal != "" do return refusal
+
+    set_removed :: proc(mesh: MeshHandle, textures: []TextureHandle, removed: bool) {
+        if mesh != 0 do g_assets.meshes[mesh].removed = removed
+        for handle in textures do g_assets.textures[handle].removed = removed
+    }
+    set_removed(mesh, textures, true)
+    committed := false
+    defer if !committed do set_removed(mesh, textures, false)
+
+    catalog_tmp, catalog_contents, prepared := assets_prepare_catalog()
+    if !prepared do return "Could not write the updated asset catalog."
+    defer os.remove(catalog_tmp)
+    current, read_error := os.read_entire_file(g_assets.catalog_path, context.temp_allocator)
+    if read_error != nil || string(current) != g_assets.catalog_text {
+        return "Catalog changed on disk. Restart to load those edits before removing."
+    }
+    saved_text := strings.clone(catalog_contents) or_else panic("Catalog snapshot allocation failed")
+    if os.rename(catalog_tmp, g_assets.catalog_path) != nil {
+        delete(saved_text)
+        return "Cannot replace assets.json; check whether it is writable."
+    }
+    committed = true
+    delete(g_assets.catalog_text)
+    g_assets.catalog_text = saved_text
+
+    // The frames in flight may still draw with the GPU data.
+    renderer_wait_for_gpu()
+    if mesh != 0 {
+        asset := &g_assets.meshes[mesh]
+        delete_key(&g_assets.mesh_ids, asset.desc.id)
+        renderer_release_mesh(mesh)
+        mesh_destroy(asset.data)
+        asset.data = {}
+        assets_delete_imported(asset.desc.path, true)
+    }
+    for handle in textures {
+        asset := &g_assets.textures[handle]
+        delete_key(&g_assets.texture_ids, asset.desc.id)
+        renderer_release_texture(handle)
+        assets_delete_imported(asset.desc.path, false)
+    }
+    return ""
 }

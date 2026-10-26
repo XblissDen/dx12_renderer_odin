@@ -1312,6 +1312,21 @@ renderer_load_textures :: proc(){
     }
 }
 
+// Frees a removed asset's GPU data; the GPU must be idle. The SRV slot stays
+// allocated (handles are not reused), so its descriptor is simply never bound.
+renderer_release_mesh :: proc(handle: MeshHandle) {
+    mesh := &g_renderer.meshes[handle]
+    if mesh.vertex_buffer != nil do mesh.vertex_buffer->Release()
+    if mesh.index_buffer != nil do mesh.index_buffer->Release()
+    mesh^ = {}
+}
+
+renderer_release_texture :: proc(handle: TextureHandle) {
+    texture := &g_renderer.textures[handle]
+    if texture.resource != nil do texture.resource->Release()
+    texture.resource = nil
+}
+
 renderer_upload_texture :: proc(
     gpu: ^GpuTexture,
     desc: TextureDesc,
@@ -1578,14 +1593,14 @@ renderer_destroy :: proc(){
     r.depth_buffer->Release()
     r.dsv_heap->Release()
 
+    // Assets removed from the catalog were released already.
     for &mesh in r.meshes[1:] {
-        mesh.vertex_buffer->Release()
-        mesh.index_buffer->Release()
-
+        if mesh.vertex_buffer != nil do mesh.vertex_buffer->Release()
+        if mesh.index_buffer != nil do mesh.index_buffer->Release()
     }
 
     for texture in r.textures[1:] {
-        texture.resource->Release()
+        if texture.resource != nil do texture.resource->Release()
     }
     delete(r.meshes)
     delete(r.textures)

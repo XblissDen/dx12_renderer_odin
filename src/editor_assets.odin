@@ -11,10 +11,22 @@ EditorImport :: struct {
     usage: TextureUsage,
     flip_v, flip_green: bool,
     maps: [4]TextureHandle,
-    status: string,
+    status: string, // Always in status_buffer, so it outlives the step that set it.
+    status_buffer: [512]u8,
+
+    // Removing a model or a texture from the catalog, confirmed first.
+    remove_model: bool,
+    remove_mesh: MeshHandle,
+    remove_texture: TextureHandle,
+    remove_confirm, remove_pending: bool,
 }
 
-g_editor_import := EditorImport{model = true, flip_v = true}
+editor_import_status :: proc(format: string, args: ..any) {
+    state := &g_editor_import
+    state.status = fmt.bprintf(state.status_buffer[:], format, ..args)
+}
+
+g_editor_import := EditorImport{model = true, flip_v = true, remove_model = true}
 
 editor_import_text :: proc(buffer: []u8) -> string {
     return string(cstring(raw_data(buffer)))
@@ -27,7 +39,7 @@ editor_import_map :: proc(label: cstring, selected: ^TextureHandle, usage: Textu
         if ui_selectable("None", selected^ == 0) do selected^ = 0
         for i in 1..<len(g_assets.textures) {
             asset := &g_assets.textures[i]
-            if asset.hidden || asset.desc.usage != usage do continue
+            if asset.hidden || asset.removed || asset.desc.usage != usage do continue
             ui_push_id(i32(i))
             if ui_selectable(asset.label, selected^ == TextureHandle(i)) do selected^ = TextureHandle(i)
             ui_pop_id()
@@ -39,8 +51,8 @@ editor_import_map :: proc(label: cstring, selected: ^TextureHandle, usage: Textu
 editor_draw_import_panel :: proc() {
     state := &g_editor_import
     if !state.open do return
-    ui_next_window(788, 16, 440, 430)
-    if ui_begin_panel("Asset import") {
+    ui_next_window(788, 16, 440, 540)
+    if ui_begin_panel("Assets") {
         ui_begin_disabled(state.pending)
         if ui_begin_combo("Type", "Model (OBJ, glTF)" if state.model else "Texture (PNG, JPEG)") {
             if ui_selectable("Model (OBJ, glTF)", state.model) {
@@ -62,9 +74,9 @@ editor_draw_import_panel :: proc() {
                 stem := os.stem(editor_import_text(state.path[:]))
                 if len(stem) >= len(state.name) do stem = "Imported asset"
                 copy(state.name[:len(state.name)-1], transmute([]u8)stem)
-                state.status = ""
+                editor_import_status("")
             } else if count < 0 {
-                state.status = "File selection failed."
+                editor_import_status("File selection failed.")
             }
         }
         path := editor_import_text(state.path[:])
@@ -94,6 +106,10 @@ editor_draw_import_panel :: proc() {
         ui_begin_disabled(path == "")
         if ui_button("Import") do state.pending = true
         ui_end_disabled()
+        ui_separator()
+        debug_ui_text("Remove from catalog")
+        editor_draw_asset_removal()
+        ui_separator()
         if ui_button("Close") do state.open = false
         ui_end_disabled()
         if state.status != "" do debug_ui_text(state.status)
@@ -101,8 +117,26 @@ editor_draw_import_panel :: proc() {
     ui_end_panel()
 }
 
+// Runs the import or removal the panel asked for, outside the UI frame.
 editor_process_asset_import :: proc() {
     state := &g_editor_import
+    if state.remove_pending {
+        state.remove_pending = false
+        state.remove_confirm = false
+        editor_finish_edit()
+        mesh := state.remove_mesh if state.remove_model else 0
+        texture := state.remove_texture if !state.remove_model else 0
+        message := assets_remove(&g_scene, mesh, texture)
+        if message == "" {
+            // Undo steps could bring back an entity using the removed asset.
+            editor_clear_history()
+            if !assets_mesh_valid(g_editor_model_to_add) do g_editor_model_to_add = 0
+            for &handle in state.maps do if !assets_texture_valid(handle) do handle = 0
+            state.remove_mesh, state.remove_texture = 0, 0
+            message = "Removed from the catalog."
+        }
+        editor_import_status("%s", message)
+    }
     if !state.pending do return
     state.pending = false
     editor_finish_edit()
@@ -122,14 +156,63 @@ editor_process_asset_import :: proc() {
         material = material,
     })
     // A successful glTF import can still carry a note (e.g. skipped primitives).
-    state.status = error
+    // Copied: import errors are formatted in memory the import frees.
     if model != 0 {
         g_editor_model_to_add = model
-        state.status = "Model imported. Use Add Model in the Scene panel."
-        @(static) note_buffer: [512]u8
-        if error != "" do state.status = fmt.bprintf(note_buffer[:], "%s\n%s", state.status, error)
+        editor_import_status("Model imported. Use Add Model in the Scene panel.%s%s", "\n" if error != "" else "", error)
     } else if texture != 0 {
-        state.status = "Texture imported and available in material pickers."
+        editor_import_status("Texture imported and available in material pickers.")
+    } else {
+        editor_import_status("%s", error)
+    }
+}
+
+// Remove-from-catalog section of the Assets panel.
+editor_draw_asset_removal :: proc() {
+    state := &g_editor_import
+    // "##..." gives the dropdown and the confirm button, both shown as
+    // "Remove", distinct ImGui IDs.
+    if ui_begin_combo("Remove##kind", "Model" if state.remove_model else "Texture") {
+        if ui_selectable("Model", state.remove_model) do state.remove_model, state.remove_confirm = true, false
+        if ui_selectable("Texture", !state.remove_model) do state.remove_model, state.remove_confirm = false, false
+        ui_end_combo()
+    }
+    if state.remove_model {
+        if editor_model_picker("Model##remove", &state.remove_mesh) do state.remove_confirm = false
+    } else {
+        preview: cstring = "Select texture"
+        if assets_texture_valid(state.remove_texture) do preview = g_assets.textures[state.remove_texture].label
+        if ui_begin_combo("Texture##remove", preview) {
+            for i in 1..<len(g_assets.textures) {
+                asset := &g_assets.textures[i]
+                if asset.hidden || asset.removed do continue
+                ui_push_id(i32(i))
+                if ui_selectable(fmt.ctprintf("%s (%v)", asset.label, asset.desc.usage), state.remove_texture == TextureHandle(i)) {
+                    state.remove_texture = TextureHandle(i)
+                    state.remove_confirm = false
+                }
+                ui_pop_id()
+            }
+            ui_end_combo()
+        }
+    }
+
+    mesh := state.remove_mesh if state.remove_model else 0
+    texture := state.remove_texture if !state.remove_model else 0
+    textures, refusal := assets_plan_removal(&g_scene, mesh, texture)
+    if refusal != "" {
+        debug_ui_text(refusal)
+    } else if !state.remove_confirm {
+        if ui_button("Remove...") do state.remove_confirm = true
+    } else {
+        label := g_assets.meshes[mesh].label if mesh != 0 else g_assets.textures[texture].label
+        extra := fmt.tprintf(" and %d of its textures", len(textures)) if mesh != 0 && len(textures) > 0 else ""
+        debug_ui_text(fmt.tprintf("Remove \"%s\"%s? Files the importer copied are", label, extra))
+        debug_ui_text("deleted, undo history is cleared, and saved scenes")
+        debug_ui_text("that use it will no longer load.")
+        if ui_button("Remove##confirm") do state.remove_pending = true
+        ui_same_line()
+        if ui_button("Cancel") do state.remove_confirm = false
     }
 }
 
@@ -141,6 +224,7 @@ editor_model_picker :: proc(label: cstring, selected: ^MeshHandle) -> bool {
     changed := false
     if ui_begin_combo(label, preview) {
         for i in 1..<len(g_assets.meshes) {
+            if g_assets.meshes[i].removed do continue
             ui_push_id(i32(i))
             if ui_selectable(g_assets.meshes[i].label, selected^ == MeshHandle(i)) {
                 selected^ = MeshHandle(i)
@@ -169,7 +253,7 @@ editor_texture_picker :: proc(scene: ^Scene, index: int, field: EditorField, lab
         }
         for i in 1..<len(g_assets.textures) {
             asset := &g_assets.textures[i]
-            if asset.hidden || asset.desc.usage != usage do continue
+            if asset.hidden || asset.removed || asset.desc.usage != usage do continue
             ui_push_id(i32(i))
             if ui_selectable(asset.label, enabled && current.texture == TextureHandle(i)) {
                 strength := current.strength if current.strength > 0 else f32(1)
