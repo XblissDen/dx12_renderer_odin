@@ -40,6 +40,11 @@ a solid background instead.
 The **Assets...** panel imports OBJ, glTF 2.0 (`.gltf` with its
 `.bin` and images beside it, or a single `.glb`), and PNG/JPEG textures.
 
+OBJ files are read as right-handed (+Y up), as Blender and most tools write
+them, and converted to the renderer's left-handed space like glTF, so models
+are not mirrored. **Flip V** (on by default) matches their bottom-left UV
+origin.
+
 A glTF import copies the model and every file it references into
 `models/imported/<id>/` (embedded GLB images become files there), registers it
 in `assets.json`, and is undone completely if any step fails:

@@ -119,7 +119,9 @@ mesh_load_obj :: proc(
                 y, y_ok := strconv.parse_f32(fields[2])
                 z, z_ok := strconv.parse_f32(fields[3])
                 if !x_ok || !y_ok || !z_ok || math.is_nan(x) || math.is_nan(y) || math.is_nan(z) || math.is_inf(x) || math.is_inf(y) || math.is_inf(z) do return {}, false
-                append(&positions, [3]f32{x, y, z})
+                // OBJ is right-handed; negating Z converts it to this renderer's
+                // left-handed space (faces are reversed below, as in gltf.odin).
+                append(&positions, [3]f32{x, y, -z})
 
             case "vn":
                 if len(fields) < 4 do return {}, false
@@ -127,7 +129,7 @@ mesh_load_obj :: proc(
                 y, y_ok := strconv.parse_f32(fields[2])
                 z, z_ok := strconv.parse_f32(fields[3])
                 if !x_ok || !y_ok || !z_ok || math.is_nan(x) || math.is_nan(y) || math.is_nan(z) || math.is_inf(x) || math.is_inf(y) || math.is_inf(z) do return {}, false
-                append(&normals, [3]f32{x, y, z})
+                append(&normals, [3]f32{x, y, -z})
 
             case "vt":
                 if len(fields) < 3 do return {}, false
@@ -183,10 +185,12 @@ mesh_load_obj :: proc(
                 }
 
                 if len(face_indices) < 3 do return {}, false
+                // Reversed: OBJ's counter-clockwise front faces become the
+                // clockwise ones D3D expects.
                 for i in 1..<len(face_indices) - 1 {
                     append(&out_indices, face_indices[0])
-                    append(&out_indices, face_indices[i])
                     append(&out_indices, face_indices[i + 1])
+                    append(&out_indices, face_indices[i])
                 }
         }
     }
