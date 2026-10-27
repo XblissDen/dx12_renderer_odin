@@ -207,7 +207,15 @@ in the same frame. The "Post + UI" timing includes tone mapping and the UI draw.
     16 point and spot lights together, and adding, duplicating or undoing past
     that is refused with a note. The sun cannot be deleted: the renderer always
     uses exactly one directional light.
-  - Only the sun casts shadows so far.
+  - **Spot light shadows**: each frame the 4 spot lights nearest the camera with
+    **Cast shadows** on (the default) get a 1024² shadow map, rendered from the
+    light with the outer cone as its field of view and the range as its far
+    plane, culled to that view. Cutout casters work as for the sun. Sampling
+    uses the sun's 5×5 tent filter; acne is handled by a slope-scaled depth bias
+    on the casters plus a 1.5-texel normal offset at the receiver. The Inspector
+    says whether a light got a shadow this frame. Point lights do not cast
+    shadows yet, and unlit light markers never do. Spot lights from version 11
+    scenes load with shadows on.
 - **L**: release/capture the mouse. Release it to interact with the panel;
   capture it for the existing WASD/mouse camera controls.
 - **F1**: hide/show the panel.

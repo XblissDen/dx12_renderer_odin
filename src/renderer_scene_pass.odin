@@ -44,6 +44,7 @@ renderer_render_scene_pass :: proc(draws: []Draw, draw_indices, transparent_indi
 
     r.command_list->SetGraphicsRootSignature(r.root_signature)
     renderer_bind_srv(.Texture_T1, r.shadow_srv_index)
+    renderer_bind_srv(.Spot_Shadows, r.spot_shadow_srv_index)
     renderer_bind_srv(.Irradiance, r.irradiance_srv_index)
     renderer_bind_srv(.Prefiltered, r.prefilter_srv_index)
     // Blurred ambient occlusion (ignored by the shader while disabled).

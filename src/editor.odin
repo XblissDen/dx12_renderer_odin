@@ -282,6 +282,14 @@ editor_draw_spot_light_controls :: proc(scene: ^Scene, index: int) {
     editor_drag_number(scene, index, .Spot_Range, "Range", 0.05, 0.1, 1000.0)
     editor_drag_number(scene, index, .Spot_Inner_Angle, "Inner angle", 0.5, 0.0, 89.0, degrees = true)
     editor_drag_number(scene, index, .Spot_Outer_Angle, "Outer angle", 0.5, 1.0, 89.0, degrees = true)
+    editor_checkbox(scene, index, .Spot_Cast_Shadows, "Cast shadows")
+    if scene.spot_lights[index].cast_shadows {
+        has_slot := false
+        for entity in g_renderer.spot_shadow_entities do has_slot ||= entity == index
+        text_buffer: [96]u8
+        debug_ui_text("Shadow: on" if has_slot else fmt.bprintf(text_buffer[:],
+            "Shadow: off (only the %d nearest shadowed spots get one)", SPOT_SHADOW_COUNT))
+    }
     debug_ui_text("Aim it with Rotation or the rotate gizmo (E):")
     debug_ui_text("it shines along the marker's base (local -Y).")
 }

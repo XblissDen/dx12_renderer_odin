@@ -64,6 +64,12 @@ GpuLight :: struct {
     spot_offset: f32,
     direction: [3]f32, // The cone's axis; unused for point lights.
     spot_scale: f32,
+    // Spot shadow slot (spot_shadow_view_projection, spot shadow map slice),
+    // or -1 for none.
+    shadow_index: i32,
+    // World size of one shadow-map texel per unit of distance along the axis.
+    shadow_texel_scale: f32,
+    _pad: [2]f32,
 }
 
 GpuMesh :: struct {
@@ -162,10 +168,12 @@ FrameConstants :: struct #align(256) {
     ao_show: u32,
 
     lights: [MAX_LIGHTS]GpuLight,
+    // View-projection of each spot shadow slot (GpuLight.shadow_index).
+    spot_shadow_view_projection: [SPOT_SHADOW_COUNT]alg.Matrix4f32,
 }
 
 #assert(SHADOW_CASCADE_COUNT == 4) // Packed as float4 rows in scene.hlsl.
-#assert(size_of(FrameConstants) == 1536)
+#assert(size_of(FrameConstants) == 2048)
 
 // Written per draw (b0).
 ObjectConstants :: struct #align(256) {
@@ -295,6 +303,14 @@ Renderer :: struct {
 
     shadow_map: ^d3d12.IResource,
     shadow_dsv_heap: ^d3d12.IDescriptorHeap,
+    // Spot light shadows (renderer_shadow.odin): one slice per slot, the
+    // entity each slot went to this frame (-1: unused), and pipelines with a
+    // slope-scaled depth bias.
+    spot_shadow_map: ^d3d12.IResource,
+    spot_shadow_dsv_heap: ^d3d12.IDescriptorHeap,
+    spot_shadow_srv_index: u32,
+    spot_shadow_entities: [SPOT_SHADOW_COUNT]int,
+    spot_shadow_pipeline_states: [Draw_Variant]^d3d12.IPipelineState,
     shadow_pipeline_states: [Draw_Variant]^d3d12.IPipelineState,
 
     hdr_texture: ^d3d12.IResource,
@@ -506,6 +522,7 @@ renderer_init :: proc() {
 
     r.post_exposure = 1.0
     r.auto_exposure = DEFAULT_AUTO_EXPOSURE
+    for &entity in r.spot_shadow_entities do entity = -1
     r.post_threshold = 1.0
     r.post_strength = 0.6
     r.post_tone_mapper = .ACES
@@ -662,6 +679,7 @@ Root_Slot :: enum u32 {
     Depth,               // t9: scene depth
     Mip_Constants,       // b6: root constant, texture mip builder flags
     Exposure_Buffer,     // t16: root SRV, the automatic exposure (auto_exposure.hlsl)
+    Spot_Shadows,        // t5: spot light shadow maps (one slice per slot)
 }
 
 // SRV: a root shader-resource view of a buffer, bound by GPU address.
@@ -693,6 +711,7 @@ ROOT_LAYOUT := [Root_Slot]Root_Param{
     .Depth               = {.Table, 9, 1, .PIXEL},
     .Mip_Constants       = {.Constants, 6, 1, .PIXEL},
     .Exposure_Buffer     = {.SRV, 16, 0, .PIXEL},
+    .Spot_Shadows        = {.Table, 5, 1, .PIXEL},
 }
 
 // Binds a draw's object constants and geometry and draws its submesh range.
@@ -932,6 +951,13 @@ renderer_create_pipelines :: proc() {
         shadow_desc.NumRenderTargets = 0
         shadow_desc.RTVFormats[0] = .UNKNOWN
         renderer_create_pso(&shadow_desc, &r.shadow_pipeline_states[variant])
+
+        // Spot shadows are perspective, where a fixed receiver bias does not
+        // fit every distance; a rasterizer slope-scaled bias does the bulk.
+        spot_shadow_desc := shadow_desc
+        spot_shadow_desc.RasterizerState.DepthBias = SPOT_SHADOW_DEPTH_BIAS
+        spot_shadow_desc.RasterizerState.SlopeScaledDepthBias = SPOT_SHADOW_SLOPE_BIAS
+        renderer_create_pso(&spot_shadow_desc, &r.spot_shadow_pipeline_states[variant])
 
         // Depth prepass, which also writes per-pixel motion for TAA. VSDepth
         // computes positions with the same code as VSMain, so the lit pass can
@@ -1312,6 +1338,7 @@ renderer_load_textures :: proc(){
     r.material_srv_start = renderer_alloc_srv(FRAME_COUNT * MAX_DRAWS * MATERIAL_TEXTURE_COUNT)
 
     r.shadow_srv_index = renderer_alloc_srv()
+    r.spot_shadow_srv_index = renderer_alloc_srv()
     r.hdr_srv_index = renderer_alloc_srv()
     r.ldr_srv_index = renderer_alloc_srv()
     r.taa_srv_start = renderer_alloc_srv(2)
@@ -1529,11 +1556,11 @@ renderer_render_frame :: proc(scene: ^Scene) {
     frame := renderer_prepare_frame(scene)
 
     draws := frame.draws[:frame.draw_count]
-    cascade_draws: [SHADOW_CASCADE_COUNT][]u32
-    for cascade in 0..<SHADOW_CASCADE_COUNT {
-        cascade_draws[cascade] = frame.shadow_indices[cascade][:frame.shadow_draw_count[cascade]]
+    shadow_draws: [SHADOW_VIEW_COUNT][]u32
+    for view in 0..<SHADOW_VIEW_COUNT {
+        shadow_draws[view] = frame.shadow_indices[view][:frame.shadow_draw_count[view]]
     }
-    renderer_render_shadow_pass(draws, cascade_draws)
+    renderer_render_shadow_pass(draws, shadow_draws)
 
     // Depth first: SSAO reads it, and the lit pass only shades visible pixels.
     visible := frame.scene_indices[:frame.scene_draw_count]
@@ -1658,6 +1685,9 @@ renderer_destroy :: proc(){
     for pso in r.shadow_pipeline_states do pso->Release()
     r.shadow_map->Release()
     r.shadow_dsv_heap->Release()
+    r.spot_shadow_map->Release()
+    r.spot_shadow_dsv_heap->Release()
+    for pso in r.spot_shadow_pipeline_states do pso->Release()
 
     r.hdr_texture->Release()
     r.hdr_rtv_heap->Release()

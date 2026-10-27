@@ -185,6 +185,7 @@ editor_add_spot_light :: proc(scene: ^Scene) {
         range = 15,
         inner_angle = math.to_radians(f32(20)),
         outer_angle = math.to_radians(f32(30)),
+        cast_shadows = true,
     })
 }
 

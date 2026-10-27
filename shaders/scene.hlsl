@@ -2,6 +2,9 @@
 #define SHADOW_CASCADE_COUNT 4
 // Must match SHADOW_NORMAL_OFFSET_TEXELS in renderer_shadow.odin.
 #define SHADOW_NORMAL_OFFSET_TEXELS 1.0f
+// Spot shadows; must match renderer_shadow.odin.
+#define SPOT_SHADOW_COUNT 4
+#define SPOT_SHADOW_NORMAL_OFFSET_TEXELS 1.5f
 #define SHADOW_CASCADE_BLEND_FRACTION 0.1f
 
 // A point or spot light (renderer.odin's GpuLight).
@@ -13,6 +16,9 @@ struct GpuLight
     float  spot_offset; // Cone fade: saturate(cos * spot_scale + spot_offset)^2;
     float3 direction;   // the cone's axis. Point lights: scale 0, offset 1.
     float  spot_scale;
+    int    shadow_index;       // Spot shadow slot, or -1.
+    float  shadow_texel_scale; // Texel size per unit of distance along the axis.
+    float2 _light_pad;
 };
 
 // Per-draw data.
@@ -86,6 +92,7 @@ cbuffer FrameConstants : register(b4)
     uint  ao_show;
 
     GpuLight lights[MAX_LIGHTS];
+    float4x4 spot_shadow_view_projection[SPOT_SHADOW_COUNT];
 };
 
 // Which cascade the shadow pass is drawing.
@@ -107,6 +114,7 @@ SamplerState g_sampler : register(s0);
 SamplerState g_material_sampler : register(s2);
 SamplerState g_environment_sampler : register(s3);
 Texture2DArray<float> g_shadow_map : register(t1);
+Texture2DArray<float> g_spot_shadow_map : register(t5); // One slice per spot shadow slot.
 SamplerComparisonState g_shadow_sampler : register(s1);
 Texture2D<float4> g_irradiance : register(t3);
 Texture2D<float4> g_prefiltered_environment : register(t4);
@@ -222,7 +230,11 @@ ShadowInput VSShadow(VSInput input)
 {
     ShadowInput output;
     float4 world_pos = mul(float4(input.position, 1.0f), model);
-    output.position = mul(world_pos, cascade_view_projection[shadow_cascade_index]);
+    // Views 0-3 are the sun's cascades, then the spot shadow slots.
+    float4x4 light_view_projection = shadow_cascade_index < SHADOW_CASCADE_COUNT
+        ? cascade_view_projection[shadow_cascade_index]
+        : spot_shadow_view_projection[shadow_cascade_index - SHADOW_CASCADE_COUNT];
+    output.position = mul(world_pos, light_view_projection);
     output.texcoord = input.texcoord;
     return output;
 }
@@ -236,10 +248,10 @@ void PSShadowMasked(ShadowInput input)
 // 5x5 tent filter from 9 bilinear comparison taps (Ignacio Castano's
 // optimized PCF). Bilinear taps at weighted offsets reproduce the tent's
 // weights, so edges are smooth without 25 separate samples.
-float SampleShadowTent5x5(float2 uv, float depth, uint cascade)
+float SampleShadowTent5x5(Texture2DArray<float> shadow_map, float2 uv, float depth, uint slice)
 {
     uint width, height, elements;
-    g_shadow_map.GetDimensions(width, height, elements);
+    shadow_map.GetDimensions(width, height, elements);
     float2 size = float2(width, height);
 
     float2 texel_uv = uv * size;
@@ -269,13 +281,40 @@ float SampleShadowTent5x5(float2 uv, float depth, uint cascade)
         for (uint x = 0u; x < 3u; ++x)
         {
             float2 tap = base + float2(u_offset[x], v_offset[y]) / size;
-            sum += u_weight[x] * v_weight[y] * g_shadow_map.SampleCmpLevelZero(
-                g_shadow_sampler, float3(tap, float(cascade)), depth
+            sum += u_weight[x] * v_weight[y] * shadow_map.SampleCmpLevelZero(
+                g_shadow_sampler, float3(tap, float(slice)), depth
             );
         }
     }
     // The weights in each direction sum to 12.
     return sum / 144.0f;
+}
+
+// How much of a spot light reaches this point past shadow casters; 1 when the
+// light has no shadow slot. The lookup starts slightly off the surface along
+// its normal, by texels at this distance from the light; the casters' own
+// slope-scaled bias does the rest. Single exit: see CascadeVisibility.
+float SpotShadowVisibility(GpuLight light, float3 world_pos, float3 geometric_normal)
+{
+    float visibility = 1.0f;
+    if (light.shadow_index >= 0)
+    {
+        float axis_distance = max(dot(world_pos - light.position, light.direction), 0.0f);
+        float3 offset_pos = world_pos + geometric_normal *
+            (SPOT_SHADOW_NORMAL_OFFSET_TEXELS * light.shadow_texel_scale * axis_distance);
+        float4 clip = mul(float4(offset_pos, 1.0f), spot_shadow_view_projection[light.shadow_index]);
+        if (clip.w > 0.0f)
+        {
+            float3 ndc = clip.xyz / clip.w;
+            float2 uv = float2(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f);
+            // Outside the map is outside the cone, which is dark anyway.
+            if (all(uv >= 0.0f) && all(uv <= 1.0f) && ndc.z <= 1.0f)
+            {
+                visibility = SampleShadowTent5x5(g_spot_shadow_map, uv, ndc.z, uint(light.shadow_index));
+            }
+        }
+    }
+    return visibility;
 }
 
 // Sun visibility from one cascade; 1 outside its map.
@@ -295,7 +334,7 @@ float CascadeVisibility(uint cascade, float3 world_pos, float3 geometric_normal,
     {
         float bias = (shadow_bias_constant + shadow_bias_slope * tan_angle) *
                      cascade_texel_depth[cascade];
-        visibility = SampleShadowTent5x5(uv, ndc.z - bias, cascade);
+        visibility = SampleShadowTent5x5(g_shadow_map, uv, ndc.z - bias, cascade);
     }
     return visibility;
 }
@@ -601,7 +640,8 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
 
         // Spot cone: smooth from the inner to the outer angle.
         float cone = saturate(dot(-L, light.direction) * light.spot_scale + light.spot_offset);
-        float3 radiance = light.radiance * attenuation * cone * cone;
+        float3 radiance = light.radiance * attenuation * cone * cone *
+                          SpotShadowVisibility(light, input.world_pos, geometric_normal);
 
         result += EvaluateDirectLight(
             N, V, L, albedo,

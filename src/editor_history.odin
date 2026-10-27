@@ -39,6 +39,7 @@ EditorField :: enum {
     Spot_Range,
     Spot_Inner_Angle,
     Spot_Outer_Angle,
+    Spot_Cast_Shadows,
 
     Sun_Color,
     Sun_Intensity,
@@ -174,7 +175,8 @@ editor_field_exists :: proc(
              .Spot_Intensity,
              .Spot_Range,
              .Spot_Inner_Angle,
-             .Spot_Outer_Angle:
+             .Spot_Outer_Angle,
+             .Spot_Cast_Shadows:
             return scene.has_spot_light[index]
 
         case .Sun_Color, .Sun_Intensity, .Sun_Direction:
@@ -261,6 +263,8 @@ editor_value :: proc(
             return {scene.spot_lights[index].inner_angle, 0, 0}
         case .Spot_Outer_Angle:
             return {scene.spot_lights[index].outer_angle, 0, 0}
+        case .Spot_Cast_Shadows:
+            return editor_bool_value(scene.spot_lights[index].cast_shadows)
 
         case .Sun_Color:
             return scene.directional_lights[index].color
@@ -357,6 +361,8 @@ editor_apply_value :: proc(
         case .Spot_Outer_Angle:
             light := &scene.spot_lights[index]
             light.outer_angle = clamp(value[0], max(light.inner_angle, math.to_radians(f32(1))), SPOT_MAX_ANGLE)
+        case .Spot_Cast_Shadows:
+            scene.spot_lights[index].cast_shadows = value[0] != 0
 
         case .Sun_Color:
             scene.directional_lights[index].color = value

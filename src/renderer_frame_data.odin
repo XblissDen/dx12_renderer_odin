@@ -49,8 +49,9 @@ FrameDraws :: struct {
     transparent_indices: [MAX_DRAWS]u32,
     transparent_draw_count: int,
 
-    shadow_indices: [SHADOW_CASCADE_COUNT][MAX_DRAWS]u32,
-    shadow_draw_count: [SHADOW_CASCADE_COUNT]int,
+    // Casters per shadow view: the sun's cascades, then the spot shadow slots.
+    shadow_indices: [SHADOW_VIEW_COUNT][MAX_DRAWS]u32,
+    shadow_draw_count: [SHADOW_VIEW_COUNT]int,
 
     caster_bounds: [MAX_DRAWS]WorldBounds,
     caster_count: int,
@@ -127,6 +128,16 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     previous_view_projection := r.previous_view_projection
     if r.frame_counter == 1 do previous_view_projection = view_projection
     
+    // Spot shadow slots first: the lights below say which slot they use.
+    spot_shadows := renderer_select_spot_shadows(scene, camera_position)
+    spot_shadow_view_projection: [SPOT_SHADOW_COUNT]alg.Matrix4f32
+    spot_shadow_frustums: [SPOT_SHADOW_COUNT]Frustum
+    for shadow, slot in spot_shadows {
+        if shadow.entity < 0 do continue
+        spot_shadow_view_projection[slot] = shadow.view_projection
+        spot_shadow_frustums[slot] = frustum_from_matrix(shadow.view_projection)
+    }
+
     gpu_lights: [MAX_LIGHTS]GpuLight
     light_count := 0
 
@@ -143,6 +154,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
                 range = light.range,
                 radiance = light.color * light.intensity,
                 spot_offset = 1,
+                shadow_index = -1,
             }
             light_count += 1
         } else if scene.has_spot_light[i] {
@@ -159,6 +171,12 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
                 direction = spot_light_direction(scene.transforms[i]),
                 spot_scale = scale,
                 spot_offset = -cos_outer * scale,
+                shadow_index = -1,
+            }
+            for shadow, slot in spot_shadows {
+                if shadow.entity != i do continue
+                gpu_lights[light_count].shadow_index = i32(slot)
+                gpu_lights[light_count].shadow_texel_scale = shadow.texel_scale
             }
             light_count += 1
         }
@@ -328,6 +346,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         ao_enabled = u32(r.ao_enabled),
         ao_show = u32(r.ao_enabled && r.ao_show),
         lights = gpu_lights,
+        spot_shadow_view_projection = spot_shadow_view_projection,
     }
 
     // Blended draws with their distance from the camera, for sorting.
@@ -357,6 +376,13 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
                     data.shadow_indices[cascade][count^] = u32(draw_index)
                     count^ += 1
                 }
+            }
+            for shadow, slot in spot_shadows {
+                if shadow.entity < 0 do continue
+                if r.frustum_culling_enabled && !frustum_intersects_bounds(spot_shadow_frustums[slot], bounds) do continue
+                view := SHADOW_CASCADE_COUNT + slot
+                data.shadow_indices[view][data.shadow_draw_count[view]] = u32(draw_index)
+                data.shadow_draw_count[view] += 1
             }
         }
     }
