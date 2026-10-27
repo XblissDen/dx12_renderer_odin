@@ -33,6 +33,41 @@ PointLight :: struct{
     orbit_angle: f32,
     orbit_speed: f32,
     orbit_enabled: bool,
+    // Distance at which the light has faded out completely. Zero in scenes
+    // saved before ranges existed; loading derives one (light_default_range).
+    range: f32,
+}
+
+// A cone of light along the entity's local -Y axis: with no rotation it shines
+// straight down, out of the base of its pyramid marker.
+SpotLight :: struct {
+    color: [3]f32,
+    intensity: f32,
+    range: f32,
+    // Half-angles of the cone in radians: full brightness inside the inner
+    // angle, fading to none at the outer one.
+    inner_angle, outer_angle: f32,
+}
+
+// The cone half-angle limit, just under 90 degrees.
+SPOT_MAX_ANGLE :: f32(89.0 * math.PI / 180.0)
+
+// Where the inverse-square falloff intensity / (1 + d^2) drops to 1% of a
+// unit light: the range given to lights saved before ranges existed, so they
+// keep reaching about as far as they visibly did.
+light_default_range :: proc(intensity: f32) -> f32 {
+    return math.sqrt(max(intensity * 100 - 1, 1))
+}
+
+spot_light_direction :: proc(transform: Transform) -> alg.Vector3f32 {
+    r := transform_rotation_matrix(transform.rotation)
+    return alg.normalize(alg.Vector3f32{-r[0, 1], -r[1, 1], -r[2, 1]})
+}
+
+spot_light_valid :: proc(light: SpotLight) -> bool {
+    return light.intensity >= 0 && light.range > 0 && light.range < 1e6 &&
+           light.inner_angle >= 0 && light.inner_angle <= light.outer_angle &&
+           light.outer_angle > 0 && light.outer_angle <= SPOT_MAX_ANGLE
 }
 
 DirectionalLight :: struct{
@@ -113,6 +148,9 @@ Scene :: struct{
     point_lights: [MAX_ENTITIES]PointLight,
     has_point_light: [MAX_ENTITIES]bool,
 
+    spot_lights: [MAX_ENTITIES]SpotLight,
+    has_spot_light: [MAX_ENTITIES]bool,
+
     cameras: [MAX_ENTITIES]Camera,
     has_camera: [MAX_ENTITIES]bool,
 
@@ -160,6 +198,9 @@ scene_clear_entity_slot :: proc(scene: ^Scene, index: int) {
     scene.point_lights[index] = {}
     scene.has_point_light[index] = false
 
+    scene.spot_lights[index] = {}
+    scene.has_spot_light[index] = false
+
     scene.directional_lights[index] = {}
     scene.has_directional_light[index] = false
 
@@ -204,6 +245,21 @@ scene_add_point_light :: proc(scene: ^Scene, entity: Entity, light: PointLight){
     index := int(entity)
     scene.point_lights[index] = light
     scene.has_point_light[index] = true
+}
+
+scene_add_spot_light :: proc(scene: ^Scene, entity: Entity, light: SpotLight) {
+    index := int(entity)
+    scene.spot_lights[index] = light
+    scene.has_spot_light[index] = true
+}
+
+// Point and spot lights, which share the renderer's MAX_LIGHTS.
+scene_local_light_count :: proc(scene: ^Scene) -> int {
+    count := 0
+    for i in 0..<scene.entity_count {
+        if scene.alive[i] && (scene.has_point_light[i] || scene.has_spot_light[i]) do count += 1
+    }
+    return count
 }
 
 scene_add_directional_light :: proc(
@@ -339,6 +395,7 @@ scene_init :: proc(){
         orbit_radius = 2.0,
         orbit_speed = 0.6,
         orbit_enabled = true,
+        range = light_default_range(3.0),
     })
     scene_add_mesh_renderer(&g_scene, light_entity, MeshRenderer{
     mesh = assets_mesh("cube"),
@@ -363,6 +420,7 @@ scene_init :: proc(){
         orbit_angle = math.PI,
         orbit_speed = 0.6,
         orbit_enabled = true,
+        range = light_default_range(3.0),
     })
 
     scene_add_mesh_renderer(&g_scene, second_light_entity, MeshRenderer{
@@ -435,6 +493,11 @@ scene_update :: proc(scene: ^Scene, dt: f32){
             if scene.has_material[i] {
                 scene.materials[i].tint = light.color
             }
+        }
+
+        // The marker shows the light's color.
+        if scene.has_spot_light[i] && scene.has_material[i] {
+            scene.materials[i].tint = scene.spot_lights[i].color
         }
 
         if scene.has_transform[i] && scene.has_camera[i]{

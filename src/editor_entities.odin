@@ -25,28 +25,22 @@ editor_find_available_mesh_slot :: proc(scene: ^Scene) -> int {
     return -1
 }
 
-// Live point lights; the renderer takes at most MAX_LIGHTS.
-scene_point_light_count :: proc(scene: ^Scene) -> int {
-    count := 0
-    for i in 0..<scene.entity_count {
-        if scene.alive[i] && scene.has_point_light[i] do count += 1
-    }
-    return count
-}
-
-// Whether one more point light fits; if not, says so in the Scene panel.
-editor_point_light_fits :: proc(scene: ^Scene) -> bool {
-    if scene_point_light_count(scene) < MAX_LIGHTS do return true
+// Whether one more point or spot light fits (they share MAX_LIGHTS); if not,
+// says so in the Scene panel.
+editor_light_fits :: proc(scene: ^Scene) -> bool {
+    if scene_local_light_count(scene) < MAX_LIGHTS do return true
     // The status outlives this frame's temporary allocations.
     @(static) message: [64]u8
-    g_editor_file_status = fmt.bprintf(message[:], "At most %d point lights are supported.", MAX_LIGHTS)
+    g_editor_file_status = fmt.bprintf(message[:], "At most %d point and spot lights are supported.", MAX_LIGHTS)
     return false
 }
 
 editor_can_duplicate_mesh :: proc(scene: ^Scene, entity: Entity) -> bool {
+    index := int(entity)
+    is_light := index >= 0 && (scene.has_point_light[index] || scene.has_spot_light[index])
     return editor_find_available_mesh_slot(scene) >= 0 &&
            editor_can_delete_mesh(scene, entity) &&
-           (!scene.has_point_light[int(entity)] || scene_point_light_count(scene) < MAX_LIGHTS)
+           (!is_light || scene_local_light_count(scene) < MAX_LIGHTS)
 }
 
 editor_mesh_snapshot :: proc(scene: ^Scene, index: int) -> EditorMeshSnapshot {
@@ -58,6 +52,7 @@ editor_mesh_snapshot :: proc(scene: ^Scene, index: int) -> EditorMeshSnapshot {
         material_slots = scene.material_slots[index],
     }
     if scene.has_point_light[index] do snapshot.point_light = scene.point_lights[index]
+    if scene.has_spot_light[index] do snapshot.spot_light = scene.spot_lights[index]
     return snapshot
 }
 
@@ -67,6 +62,7 @@ editor_add_snapshot_components :: proc(scene: ^Scene, entity: Entity, snapshot: 
     scene_add_mesh_renderer(scene, entity, snapshot.mesh_renderer)
     scene_set_materials(scene, entity, snapshot.material, snapshot.material_slots)
     if light, ok := snapshot.point_light.?; ok do scene_add_point_light(scene, entity, light)
+    if light, ok := snapshot.spot_light.?; ok do scene_add_spot_light(scene, entity, light)
 }
 
 editor_restore_created_mesh :: proc(
@@ -79,7 +75,7 @@ editor_restore_created_mesh :: proc(
     if index < 0 || index >= MAX_ENTITIES {
         return false
     }
-    if snapshot.point_light != nil && !editor_point_light_fits(scene) {
+    if (snapshot.point_light != nil || snapshot.spot_light != nil) && !editor_light_fits(scene) {
         return false
     }
 
@@ -167,23 +163,48 @@ editor_duplicate_selected :: proc(scene: ^Scene) {
     editor_create_entity(scene, snapshot, source)
 }
 
-// A white point light with an unlit marker cube, three units in front of the
+// A white point light (marker: a small cube) three units in front of the
 // camera.
 editor_add_point_light :: proc(scene: ^Scene) {
+    intensity: f32 = 3
+    editor_add_light(scene, "cube", "Point light", PointLight{
+        color = {1, 1, 1},
+        intensity = intensity,
+        range = light_default_range(intensity),
+        orbit_radius = 2,
+        orbit_speed = 0.6,
+    }, nil)
+}
+
+// A white spot light (marker: a small pyramid, base along the beam) three
+// units in front of the camera, shining straight down.
+editor_add_spot_light :: proc(scene: ^Scene) {
+    editor_add_light(scene, "pyramid", "Spot light", nil, SpotLight{
+        color = {1, 1, 1},
+        intensity = 10,
+        range = 15,
+        inner_angle = math.to_radians(f32(20)),
+        outer_angle = math.to_radians(f32(30)),
+    })
+}
+
+// Creates a light entity, with an unlit marker in the light's color, as one
+// undoable step.
+editor_add_light :: proc(scene: ^Scene, marker_id, name: string, point: Maybe(PointLight), spot: Maybe(SpotLight)) {
     editor_finish_edit()
-    marker := assets_mesh("cube")
+    marker := assets_mesh(marker_id)
     if !assets_mesh_valid(marker) {
-        g_editor_file_status = "The light marker needs the \"cube\" model in the catalog."
+        @(static) message: [96]u8
+        g_editor_file_status = fmt.bprintf(message[:], "The light marker needs the \"%s\" model in the catalog.", marker_id)
         return
     }
-    if !editor_point_light_fits(scene) do return
-    name, name_ok := scene_store_owned_name("Point light")
+    if !editor_light_fits(scene) do return
+    owned_name, name_ok := scene_store_owned_name(name)
     if !name_ok {
         g_editor_file_status = "Could not allocate the light's name."
         return
     }
 
-    light := PointLight{color = {1, 1, 1}, intensity = 3, orbit_radius = 2, orbit_speed = 0.6}
     transform := Transform{scale = {0.2, 0.2, 0.2}}
     camera := camera_find_active(scene)
     if camera >= 0 {
@@ -192,7 +213,7 @@ editor_add_point_light :: proc(scene: ^Scene) {
     // The same marker material as the scene's starting lights; scene_update
     // keeps its tint at the light's color.
     marker_material := Material{
-        tint = light.color,
+        tint = {1, 1, 1},
         texture = assets_texture("checkerboard"),
         unlit = true,
         uv_scale = 1,
@@ -200,16 +221,17 @@ editor_add_point_light :: proc(scene: ^Scene) {
     if !assets_texture_valid(marker_material.texture) do marker_material.texture = g_assets.white
 
     editor_create_entity(scene, EditorMeshSnapshot{
-        name = name,
+        name = owned_name,
         transform = transform,
         mesh_renderer = {mesh = marker},
         material = marker_material,
-        point_light = light,
+        point_light = point,
+        spot_light = spot,
     }, g_editor_selected)
 }
 
-// Models and point lights. The sun (the renderer needs exactly one) and the
-// camera stay.
+// Models, and point and spot lights. The sun (the renderer needs exactly one)
+// and the camera stay.
 editor_can_delete_mesh :: proc(scene: ^Scene, entity: Entity) -> bool {
     if !scene_entity_is_alive(scene, entity) {
         return false
@@ -244,7 +266,7 @@ editor_restore_deleted_mesh :: proc(
        scene.alive[index] {
         return false
     }
-    if snapshot.point_light != nil && !editor_point_light_fits(scene) {
+    if (snapshot.point_light != nil || snapshot.spot_light != nil) && !editor_light_fits(scene) {
         return false
     }
 

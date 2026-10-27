@@ -4,12 +4,15 @@
 #define SHADOW_NORMAL_OFFSET_TEXELS 1.0f
 #define SHADOW_CASCADE_BLEND_FRACTION 0.1f
 
-struct GpuPointLight
+// A point or spot light (renderer.odin's GpuLight).
+struct GpuLight
 {
     float3 position;
-    float  _pad0;
-    float3 color;
-    float  intensity;
+    float  range;       // Fades out completely here.
+    float3 radiance;    // Color times intensity.
+    float  spot_offset; // Cone fade: saturate(cos * spot_scale + spot_offset)^2;
+    float3 direction;   // the cone's axis. Point lights: scale 0, offset 1.
+    float  spot_scale;
 };
 
 // Per-draw data.
@@ -82,7 +85,7 @@ cbuffer FrameConstants : register(b4)
     uint  ao_enabled;
     uint  ao_show;
 
-    GpuPointLight lights[MAX_LIGHTS];
+    GpuLight lights[MAX_LIGHTS];
 };
 
 // Which cascade the shadow pass is drawing.
@@ -584,12 +587,21 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
 
     for (uint i = 0; i < light_count; ++i)
     {
-        float3 to_light = lights[i].position - input.world_pos;
+        GpuLight light = lights[i];
+        float3 to_light = light.position - input.world_pos;
         float distance_squared = dot(to_light, to_light);
         float3 L = to_light * rsqrt(max(distance_squared, 0.0001f));
 
-        float attenuation = lights[i].intensity / (1.0f + distance_squared);
-        float3 radiance = lights[i].color * attenuation;
+        // Inverse-square falloff, windowed to reach exactly zero at the range
+        // ((1 - (d / range)^4)^2, as in Unreal and Frostbite); close to 1 well
+        // inside it.
+        float distance_ratio_squared = distance_squared / (light.range * light.range);
+        float window = saturate(1.0f - distance_ratio_squared * distance_ratio_squared);
+        float attenuation = window * window / (1.0f + distance_squared);
+
+        // Spot cone: smooth from the inner to the outer angle.
+        float cone = saturate(dot(-L, light.direction) * light.spot_scale + light.spot_offset);
+        float3 radiance = light.radiance * attenuation * cone * cone;
 
         result += EvaluateDirectLight(
             N, V, L, albedo,

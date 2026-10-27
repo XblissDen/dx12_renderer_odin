@@ -32,6 +32,13 @@ EditorField :: enum {
     Point_Orbit_Radius,
     Point_Orbit_Height,
     Point_Orbit_Speed,
+    Point_Range,
+
+    Spot_Color,
+    Spot_Intensity,
+    Spot_Range,
+    Spot_Inner_Angle,
+    Spot_Outer_Angle,
 
     Sun_Color,
     Sun_Intensity,
@@ -69,6 +76,7 @@ EditorMeshSnapshot :: struct {
     material: Material,
     material_slots: MaterialSlots,
     point_light: Maybe(PointLight),
+    spot_light: Maybe(SpotLight),
 }
 
 // The Inspector edits one material slot at a time; each undo step records
@@ -158,8 +166,16 @@ editor_field_exists :: proc(
              .Point_Intensity,
              .Point_Orbit_Enabled,
              .Point_Orbit_Radius,
-             .Point_Orbit_Speed:
+             .Point_Orbit_Speed,
+             .Point_Range:
             return scene.has_point_light[index]
+
+        case .Spot_Color,
+             .Spot_Intensity,
+             .Spot_Range,
+             .Spot_Inner_Angle,
+             .Spot_Outer_Angle:
+            return scene.has_spot_light[index]
 
         case .Sun_Color, .Sun_Intensity, .Sun_Direction:
             return scene.has_directional_light[index]
@@ -233,6 +249,18 @@ editor_value :: proc(
             return {scene.transforms[index].position.y, 0, 0}
         case .Point_Orbit_Speed:
             return {scene.point_lights[index].orbit_speed, 0, 0}
+        case .Point_Range:
+            return {scene.point_lights[index].range, 0, 0}
+        case .Spot_Color:
+            return scene.spot_lights[index].color
+        case .Spot_Intensity:
+            return {scene.spot_lights[index].intensity, 0, 0}
+        case .Spot_Range:
+            return {scene.spot_lights[index].range, 0, 0}
+        case .Spot_Inner_Angle:
+            return {scene.spot_lights[index].inner_angle, 0, 0}
+        case .Spot_Outer_Angle:
+            return {scene.spot_lights[index].outer_angle, 0, 0}
 
         case .Sun_Color:
             return scene.directional_lights[index].color
@@ -314,6 +342,21 @@ editor_apply_value :: proc(
             scene.transforms[index].position.y = value[0]
         case .Point_Orbit_Speed:
             scene.point_lights[index].orbit_speed = value[0]
+        case .Point_Range:
+            scene.point_lights[index].range = max(value[0], 0.1)
+        case .Spot_Color:
+            scene.spot_lights[index].color = value
+        case .Spot_Intensity:
+            scene.spot_lights[index].intensity = max(value[0], 0)
+        case .Spot_Range:
+            scene.spot_lights[index].range = max(value[0], 0.1)
+        // The inner angle stays within the outer one.
+        case .Spot_Inner_Angle:
+            light := &scene.spot_lights[index]
+            light.inner_angle = clamp(value[0], 0, light.outer_angle)
+        case .Spot_Outer_Angle:
+            light := &scene.spot_lights[index]
+            light.outer_angle = clamp(value[0], max(light.inner_angle, math.to_radians(f32(1))), SPOT_MAX_ANGLE)
 
         case .Sun_Color:
             scene.directional_lights[index].color = value

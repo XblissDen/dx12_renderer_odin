@@ -7,7 +7,9 @@ import "core:strings"
 import alg "core:math/linalg"
 
 SCENE_FILE_PATH :: "scene.json"
-SCENE_FILE_VERSION :: 10 // 7: extra material slots per entity. 8: emission, occlusion, cutouts. 9: blending. 10: auto-exposure.
+// 7: extra material slots per entity. 8: emission, occlusion, cutouts.
+// 9: blending. 10: auto-exposure. 11: light ranges, spot lights.
+SCENE_FILE_VERSION :: 11
 
 ScenePostSettings :: struct{
     exposure: f32,
@@ -35,6 +37,8 @@ SceneFileEntity :: struct {
     // Version 7+: material slots 1 and up of multi-material models.
     extra_materials: []Material,
     point_light: Maybe(PointLight),
+    // Version 11+.
+    spot_light: Maybe(SpotLight),
     directional_light: Maybe(DirectionalLight),
     camera: Maybe(Camera),
 }
@@ -156,7 +160,8 @@ scene_file_validate :: proc(scene: ^Scene) -> string{
         return "Invalid entity count."
     }
 
-    camera_count, sun_count, point_count: int
+    // Point and spot lights share MAX_LIGHTS.
+    camera_count, sun_count, light_count: int
 
     for i in 0..<scene.entity_count{
         if !scene.alive[i] {
@@ -185,7 +190,20 @@ scene_file_validate :: proc(scene: ^Scene) -> string{
                 return "Point light needs a Transform."
             }
 
-            point_count += 1
+            if !(scene.point_lights[i].range > 0 && scene.point_lights[i].range < 1e6) {
+                return "Invalid point light range."
+            }
+            light_count += 1
+        }
+
+        if scene.has_spot_light[i] {
+            if !scene.has_transform[i] {
+                return "Spot light needs a Transform."
+            }
+            if !spot_light_valid(scene.spot_lights[i]) {
+                return "Invalid spot light settings."
+            }
+            light_count += 1
         }
 
         if scene.has_mesh_renderer[i]{
@@ -220,8 +238,8 @@ scene_file_validate :: proc(scene: ^Scene) -> string{
     if sun_count != 1{
         return "Scene needs exactly one sun."
     }
-    if point_count > MAX_LIGHTS{
-        return "Too many point lights."
+    if light_count > MAX_LIGHTS{
+        return "Too many point and spot lights."
     }
 
     return ""
@@ -251,6 +269,7 @@ scene_save_to_file :: proc(scene: ^Scene, path: string) -> (ok: bool, message: s
             entity.extra_materials = scene.material_slots[i].extra[:scene_material_count(scene, i) - 1]
         }
         if scene.has_point_light[i] do entity.point_light = scene.point_lights[i]
+        if scene.has_spot_light[i] do entity.spot_light = scene.spot_lights[i]
         if scene.has_directional_light[i] do entity.directional_light = scene.directional_lights[i]
         if scene.has_camera[i] do entity.camera = scene.cameras[i]
         append(&entities, entity)
@@ -359,7 +378,13 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
 
         if transform, ok := source.transform.?; ok do scene_add_transform(staged, entity, transform)
         if mesh_renderer, ok := source.mesh_renderer.?; ok do scene_add_mesh_renderer(staged, entity, mesh_renderer)
-        if point_light, ok := source.point_light.?; ok do scene_add_point_light(staged, entity, point_light)
+        if point_light, ok := source.point_light.?; ok {
+            // Saved before lights had a range.
+            light := point_light
+            if light.range == 0 do light.range = light_default_range(light.intensity)
+            scene_add_point_light(staged, entity, light)
+        }
+        if spot_light, ok := source.spot_light.?; ok do scene_add_spot_light(staged, entity, spot_light)
         if directional_light, ok := source.directional_light.?; ok do scene_add_directional_light(staged, entity, directional_light)
         if camera, ok := source.camera.?; ok do scene_add_camera(staged, entity, camera)
 

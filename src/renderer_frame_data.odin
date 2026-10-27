@@ -127,21 +127,38 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     previous_view_projection := r.previous_view_projection
     if r.frame_counter == 1 do previous_view_projection = view_projection
     
-    gpu_lights: [MAX_LIGHTS]GpuPointLight
+    gpu_lights: [MAX_LIGHTS]GpuLight
     light_count := 0
 
     for i in 0..<scene.entity_count {
-        if !scene.alive[i] {
+        if !scene.alive[i] || !scene.has_transform[i] {
             continue
         }
 
-        if scene.has_transform[i] && scene.has_point_light[i] {
+        if scene.has_point_light[i] {
             assert(light_count < MAX_LIGHTS)
-
-            gpu_lights[light_count] = GpuPointLight{
+            light := scene.point_lights[i]
+            gpu_lights[light_count] = GpuLight{
                 position = scene.transforms[i].position,
-                color = scene.point_lights[i].color,
-                intensity = scene.point_lights[i].intensity,
+                range = light.range,
+                radiance = light.color * light.intensity,
+                spot_offset = 1,
+            }
+            light_count += 1
+        } else if scene.has_spot_light[i] {
+            assert(light_count < MAX_LIGHTS)
+            light := scene.spot_lights[i]
+            // Full brightness inside the inner cone, none outside the outer.
+            cos_inner := math.cos(light.inner_angle)
+            cos_outer := math.cos(light.outer_angle)
+            scale := 1 / max(cos_inner - cos_outer, 0.0001)
+            gpu_lights[light_count] = GpuLight{
+                position = scene.transforms[i].position,
+                range = light.range,
+                radiance = light.color * light.intensity,
+                direction = spot_light_direction(scene.transforms[i]),
+                spot_scale = scale,
+                spot_offset = -cos_outer * scale,
             }
             light_count += 1
         }

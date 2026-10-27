@@ -17,10 +17,12 @@ editor_draw_scene :: proc(scene: ^Scene){
         ui_begin_disabled(!assets_mesh_valid(g_editor_model_to_add) || editor_find_available_mesh_slot(scene) < 0)
         if ui_button("Add Model") do editor_add_model(scene, g_editor_model_to_add)
         ui_end_disabled()
-        ui_begin_disabled(editor_find_available_mesh_slot(scene) < 0 || scene_point_light_count(scene) >= MAX_LIGHTS)
+        ui_begin_disabled(editor_find_available_mesh_slot(scene) < 0 || scene_local_light_count(scene) >= MAX_LIGHTS)
         if ui_button("Add Point Light") do editor_add_point_light(scene)
+        ui_same_line()
+        if ui_button("Add Spot Light") do editor_add_spot_light(scene)
         ui_end_disabled()
-        if scene_point_light_count(scene) >= MAX_LIGHTS {
+        if scene_local_light_count(scene) >= MAX_LIGHTS {
             ui_same_line()
             debug_ui_text("(limit reached)")
         }
@@ -121,7 +123,7 @@ editor_draw_scene :: proc(scene: ^Scene){
                 continue
             }
 
-            if !scene.has_mesh_renderer[i] && !scene.has_directional_light[i] && !scene.has_point_light[i]{
+            if !scene.has_mesh_renderer[i] && !scene.has_directional_light[i] && !scene.has_point_light[i] && !scene.has_spot_light[i] {
                 continue
             }
 
@@ -249,6 +251,7 @@ editor_draw_point_light_controls :: proc(scene: ^Scene, index: int) {
 
     editor_color(scene, index, .Point_Color, "Light color")
     editor_slider(scene, index, .Point_Intensity, "Intensity", 0.0, 20.0)
+    editor_drag_number(scene, index, .Point_Range, "Range", 0.05, 0.1, 1000.0)
     editor_checkbox(scene, index, .Point_Orbit_Enabled, "Orbit enabled")
 
     if light.orbit_enabled {
@@ -268,6 +271,19 @@ editor_draw_point_light_controls :: proc(scene: ^Scene, index: int) {
 
         debug_ui_text("Disable orbit to edit Position manually.")
     }
+}
+
+editor_draw_spot_light_controls :: proc(scene: ^Scene, index: int) {
+    ui_separator()
+    debug_ui_text("Spot light")
+
+    editor_color(scene, index, .Spot_Color, "Light color")
+    editor_slider(scene, index, .Spot_Intensity, "Intensity", 0.0, 50.0)
+    editor_drag_number(scene, index, .Spot_Range, "Range", 0.05, 0.1, 1000.0)
+    editor_drag_number(scene, index, .Spot_Inner_Angle, "Inner angle", 0.5, 0.0, 89.0, degrees = true)
+    editor_drag_number(scene, index, .Spot_Outer_Angle, "Outer angle", 0.5, 1.0, 89.0, degrees = true)
+    debug_ui_text("Aim it with Rotation or the rotate gizmo (E):")
+    debug_ui_text("it shines along the marker's base (local -Y).")
 }
 
 editor_draw_directional_light_controls :: proc(scene: ^Scene, index: int) {
@@ -364,11 +380,16 @@ editor_draw_inspector :: proc(scene: ^Scene) {
                 editor_draw_point_light_controls(scene, index)
             }
 
+            if scene.has_spot_light[index] {
+                editor_draw_spot_light_controls(scene, index)
+            }
+
             if scene.has_directional_light[index] {
                 editor_draw_directional_light_controls(scene, index)
             }
 
-            if scene.has_material[index] && !scene.has_point_light[index] {
+            // A light's marker material follows the light; it is not edited.
+            if scene.has_material[index] && !scene.has_point_light[index] && !scene.has_spot_light[index] {
                 editor_draw_material_controls(scene, index)
             }
 

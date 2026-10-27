@@ -190,12 +190,24 @@ in the same frame. The "Post + UI" timing includes tone mapping and the UI draw.
   **Ctrl** during a drag flips it. Right-click during a drag cancels it; each
   drag is one undo step. The modes, space, snapping and step sizes are in the
   Inspector. Orbiting point lights cannot be moved.
-- **Lights**: **Add Point Light** (Scene panel) places a white light, shown by a
-  small unlit cube, three units in front of the camera. Point lights can be
-  duplicated and deleted like models, with undo; a duplicated orbiting light
-  starts 45° further along its orbit. The shader takes at most 16 point lights,
-  and adding, duplicating or undoing past that is refused with a note. The sun
-  cannot be deleted: the renderer always uses exactly one directional light.
+- **Lights**: **Add Point Light** and **Add Spot Light** (Scene panel) place a
+  white light three units in front of the camera, shown by a small unlit marker
+  in the light's color: a cube for point lights, a pyramid for spot lights.
+  - Every point and spot light has a **Range**: the inverse-square falloff
+    `intensity / (1 + d²)` is multiplied by `(1 - (d / range)⁴)²`, which reaches
+    zero exactly at the range and stays close to 1 well inside it. Scenes saved
+    before ranges (version < 11) get the distance where the old falloff drops to
+    1% (about 17 units at intensity 3), so they look the same.
+  - A spot light shines along its entity's local -Y axis, out of the pyramid's
+    base: straight down until rotated (Rotation, or the rotate gizmo). Full
+    brightness inside **Inner angle**, fading smoothly to none at **Outer angle**
+    (half-angles, up to 89°).
+  - Lights can be duplicated and deleted like models, with undo; a duplicated
+    orbiting light starts 45° further along its orbit. The shader takes at most
+    16 point and spot lights together, and adding, duplicating or undoing past
+    that is refused with a note. The sun cannot be deleted: the renderer always
+    uses exactly one directional light.
+  - Only the sun casts shadows so far.
 - **L**: release/capture the mouse. Release it to interact with the panel;
   capture it for the existing WASD/mouse camera controls.
 - **F1**: hide/show the panel.

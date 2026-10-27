@@ -53,11 +53,17 @@ Vertex :: struct {
     tangent:   [4]f32,
 }
 
-GpuPointLight :: struct {
+// A point or spot light as the shader sees it (scene.hlsl's GpuLight).
+GpuLight :: struct {
     position: [3]f32,
-    _pad0: f32,
-    color: [3]f32,
-    intensity: f32,
+    range: f32,
+    // Color times intensity.
+    radiance: [3]f32,
+    // Cone fade: saturate(cos(angle to the axis) * spot_scale + spot_offset),
+    // squared. A point light has scale 0 and offset 1: no cone.
+    spot_offset: f32,
+    direction: [3]f32, // The cone's axis; unused for point lights.
+    spot_scale: f32,
 }
 
 GpuMesh :: struct {
@@ -155,11 +161,11 @@ FrameConstants :: struct #align(256) {
     // Nonzero shows the occlusion buffer instead of lighting.
     ao_show: u32,
 
-    lights: [MAX_LIGHTS]GpuPointLight,
+    lights: [MAX_LIGHTS]GpuLight,
 }
 
 #assert(SHADOW_CASCADE_COUNT == 4) // Packed as float4 rows in scene.hlsl.
-#assert(size_of(FrameConstants) == 1280)
+#assert(size_of(FrameConstants) == 1536)
 
 // Written per draw (b0).
 ObjectConstants :: struct #align(256) {
