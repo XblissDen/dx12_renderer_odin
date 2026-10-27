@@ -197,6 +197,32 @@ in the same frame. The "Post + UI" timing includes tone mapping and the UI draw.
   exponent applied to the result. Direct sun and point light are unaffected.
   Materials with an occlusion map multiply it in. **Show AO only** displays the
   combined occlusion for tuning.
+- **Screen-space reflections (SSR)** (on by default; about 0.6 ms at 1080p):
+  reflections of what is on screen replace the environment's reflection on
+  opaque surfaces. The depth prepass also writes each pixel's view-space
+  normal (normal map included) and roughness. Before the lit pass, each pixel's
+  reflected ray is marched through the depth buffer, up to 64 steps in screen
+  space plus a binary search. Where the ray passes behind a surface, it reads
+  that surface's color from last frame's HDR image, moved by its motion vector.
+  Using last frame's image means reflections include the lighting and earlier
+  reflections, so mirrors facing each other repeat. Hits fade out towards the
+  screen edges, towards the end of the ray, and on back faces; there the
+  environment's reflection shows instead. Settings:
+  - **SSR max distance** is the ray length in world units.
+  - **SSR thickness** is how far behind a visible surface the ray still counts
+    as hitting it. Raise it if thin reflections break up; lower it if
+    reflections smear behind objects.
+  - **SSR max roughness**: rougher surfaces get no SSR, fading in below 60% of
+    it. Normal-map detail too fine for the pixel raises the roughness used,
+    as in lighting.
+
+  With TAA, each pixel's ray direction is drawn from the GGX specular lobe
+  with noise that changes every frame, and the TAA history averages them into
+  blurred reflections on rough surfaces. Without TAA, rays are mirror
+  reflections. **Show reflections only** displays this frame's raw SSR output
+  before TAA, so it shows the noise. Blended surfaces (glass) get no SSR, and
+  nothing off screen or hidden behind a foreground object can be reflected.
+  Scenes saved before SSR load with the defaults.
 - **Sun from HDRI** (HDRI lighting, on by default): the panorama's sun is found when
   it loads, removed from the image-based lighting, and becomes the shadowed
   directional light, with its measured direction, color and intensity. It follows

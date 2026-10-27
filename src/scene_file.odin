@@ -58,12 +58,21 @@ SceneFile :: struct {
     // Absent in files saved before auto-exposure; they load with it off,
     // keeping their manual exposure.
     auto_exposure: Maybe(AutoExposureSettings),
+    // Absent in files saved before SSR; they load with the defaults.
+    reflections: Maybe(SceneReflectionSettings),
 }
 
 SceneAmbientOcclusionSettings :: struct {
     enabled: bool,
     radius: f32,
     intensity: f32,
+}
+
+SceneReflectionSettings :: struct {
+    enabled: bool,
+    max_distance: f32,
+    thickness: f32,
+    max_roughness: f32,
 }
 
 // Versions 1-5 stored the in-memory component arrays directly, with 16 slots,
@@ -302,6 +311,12 @@ scene_save_to_file :: proc(scene: ^Scene, path: string) -> (ok: bool, message: s
             intensity = g_renderer.ao_intensity,
         },
         auto_exposure = g_renderer.auto_exposure,
+        reflections = SceneReflectionSettings{
+            enabled = g_renderer.ssr_enabled,
+            max_distance = g_renderer.ssr_max_distance,
+            thickness = g_renderer.ssr_thickness,
+            max_roughness = g_renderer.ssr_max_roughness,
+        },
     }
 
     data, encode_error := json.marshal(file, json.Marshal_Options{
@@ -450,6 +465,17 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
        !(ambient_occlusion.intensity >= 0 && ambient_occlusion.intensity <= MAX_AO_INTENSITY) {
         return false, "Invalid ambient occlusion settings."
     }
+    reflections := file.reflections.? or_else SceneReflectionSettings{
+        enabled = true,
+        max_distance = DEFAULT_SSR_MAX_DISTANCE,
+        thickness = DEFAULT_SSR_THICKNESS,
+        max_roughness = DEFAULT_SSR_MAX_ROUGHNESS,
+    }
+    if !(reflections.max_distance >= MIN_SSR_MAX_DISTANCE && reflections.max_distance <= MAX_SSR_MAX_DISTANCE) ||
+       !(reflections.thickness >= MIN_SSR_THICKNESS && reflections.thickness <= MAX_SSR_THICKNESS) ||
+       !(reflections.max_roughness >= MIN_SSR_MAX_ROUGHNESS && reflections.max_roughness <= MAX_SSR_MAX_ROUGHNESS) {
+        return false, "Invalid reflection settings."
+    }
     environment, has_environment := file.environment.(EnvironmentSettings)
     defaults := renderer_default_environment_settings()
     if !has_environment {
@@ -504,6 +530,10 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
     g_renderer.auto_exposure_reset = true
     g_renderer.ao_radius = ambient_occlusion.radius
     g_renderer.ao_intensity = ambient_occlusion.intensity
+    g_renderer.ssr_enabled = reflections.enabled
+    g_renderer.ssr_max_distance = reflections.max_distance
+    g_renderer.ssr_thickness = reflections.thickness
+    g_renderer.ssr_max_roughness = reflections.max_roughness
 
     commited = true
     return true, "Scene loaded."

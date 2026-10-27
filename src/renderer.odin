@@ -48,6 +48,7 @@ GPU_Pass :: enum u32{
     FXAA,
     TAA,
     Auto_Exposure,
+    SSR,
 }
 
 Vertex :: struct {
@@ -173,6 +174,17 @@ FrameConstants :: struct #align(256) {
     ao_enabled: u32,
     // Nonzero shows the occlusion buffer instead of lighting.
     ao_show: u32,
+
+    // Screen-space reflections (renderer_ssr.odin): view-space ray length and
+    // surface thickness, and the roughness above which there are none.
+    ssr_max_distance: f32,
+    ssr_thickness: f32,
+    ssr_max_roughness: f32,
+    ssr_enabled: u32,
+    // Nonzero (with TAA) spreads rays over the specular lobe, varying by frame.
+    ssr_stochastic: u32,
+    ssr_frame: u32,
+    _ssr_pad: [2]f32,
 
     lights: [MAX_LIGHTS]GpuLight,
     // View-projection of each spot shadow slot (GpuLight.shadow_index).
@@ -433,6 +445,21 @@ Renderer :: struct {
     ssao_pipeline_state: ^d3d12.IPipelineState,
     ssao_blur_pipeline_state: ^d3d12.IPipelineState,
 
+    // Screen-space reflections (renderer_ssr.odin).
+    ssr_enabled: bool,
+    ssr_show: bool,
+    ssr_max_distance: f32,
+    ssr_thickness: f32,
+    ssr_max_roughness: f32,
+    // The prepass's view-space normal and roughness, and the traced
+    // reflections (color, confidence), with their two RTVs.
+    surface_texture, ssr_texture: ^d3d12.IResource,
+    ssr_rtv_heap: ^d3d12.IDescriptorHeap,
+    surface_srv_index, ssr_srv_index: u32,
+    ssr_pipeline_state: ^d3d12.IPipelineState,
+    // Last frame's scene color holds an image of this size to reflect.
+    ssr_history_valid: bool,
+
     // Material texture mips are rendered on the GPU (texture_mips.odin), with
     // scratch views for building one texture at a time.
     mip_pipeline: ^d3d12.IPipelineState,
@@ -672,7 +699,7 @@ renderer_pipeline_slots :: proc() -> []^^d3d12.IPipelineState {
         &r.post_pipeline_state, &r.fxaa_pipeline_state, &r.sharpen_pipeline_state,
         &r.taa_resolve_pipeline_state, &r.sky_pipeline_state,
         &r.irradiance_pipeline_state, &r.prefilter_pipeline_state,
-        &r.ssao_pipeline_state, &r.ssao_blur_pipeline_state, &r.mip_pipeline,
+        &r.ssao_pipeline_state, &r.ssao_blur_pipeline_state, &r.ssr_pipeline_state, &r.mip_pipeline,
         &r.selection_pipeline_state,
         &r.exposure_histogram_pipeline, &r.exposure_adapt_pipeline,
     )
@@ -787,6 +814,11 @@ renderer_init :: proc() {
     r.ao_enabled = true
     r.ao_radius = DEFAULT_AO_RADIUS
     r.ao_intensity = DEFAULT_AO_INTENSITY
+
+    r.ssr_enabled = true
+    r.ssr_max_distance = DEFAULT_SSR_MAX_DISTANCE
+    r.ssr_thickness = DEFAULT_SSR_THICKNESS
+    r.ssr_max_roughness = DEFAULT_SSR_MAX_ROUGHNESS
 
     r.frustum_culling_enabled = true
 
@@ -933,6 +965,8 @@ Root_Slot :: enum u32 {
     Exposure_Buffer,     // t16: root SRV, the automatic exposure (auto_exposure.hlsl)
     Spot_Shadows,        // t5: spot light shadow maps (one slice per slot)
     Point_Shadows,       // t6: point light shadow cube maps (one cube per slot)
+    Surface,             // t7: view-space normal and roughness from the prepass
+    Reflections,         // t17: screen-space reflections for the lit pass
 }
 
 // SRV: a root shader-resource view of a buffer, bound by GPU address.
@@ -966,6 +1000,8 @@ ROOT_LAYOUT := [Root_Slot]Root_Param{
     .Exposure_Buffer     = {.SRV, 16, 0, .PIXEL},
     .Spot_Shadows        = {.Table, 5, 1, .PIXEL},
     .Point_Shadows       = {.Table, 6, 1, .PIXEL},
+    .Surface             = {.Table, 7, 1, .PIXEL},
+    .Reflections         = {.Table, 17, 1, .PIXEL},
 }
 
 // Binds a draw's object constants and geometry and draws its submesh range.
@@ -1146,10 +1182,10 @@ renderer_create_pipelines :: proc() {
     defer shadow_vs->Release()
     depth_vs := renderer_compile_shader("shaders/scene.hlsl", "VSDepth", "vs_5_1")
     defer depth_vs->Release()
-    velocity_ps := renderer_compile_shader("shaders/scene.hlsl", "PSVelocity", "ps_5_1")
-    defer velocity_ps->Release()
-    velocity_mask_ps := renderer_compile_shader("shaders/scene.hlsl", "PSVelocityMasked", "ps_5_1")
-    defer velocity_mask_ps->Release()
+    prepass_ps := renderer_compile_shader("shaders/scene.hlsl", "PSPrepass", "ps_5_1")
+    defer prepass_ps->Release()
+    prepass_mask_ps := renderer_compile_shader("shaders/scene.hlsl", "PSPrepassMasked", "ps_5_1")
+    defer prepass_mask_ps->Release()
     shadow_mask_ps := renderer_compile_shader("shaders/scene.hlsl", "PSShadowMasked", "ps_5_1")
     defer shadow_mask_ps->Release()
     fullscreen_vs := renderer_compile_shader("shaders/post_process.hlsl", "VSMain", "vs_5_1")
@@ -1215,13 +1251,15 @@ renderer_create_pipelines :: proc() {
         spot_shadow_desc.RasterizerState.SlopeScaledDepthBias = SPOT_SHADOW_SLOPE_BIAS
         renderer_create_pso(&spot_shadow_desc, &r.spot_shadow_pipeline_states[variant])
 
-        // Depth prepass, which also writes per-pixel motion for TAA. VSDepth
-        // computes positions with the same code as VSMain, so the lit pass can
-        // test LESS_EQUAL against it.
+        // Depth prepass, which also writes per-pixel motion for TAA and the
+        // surface buffer for SSR. VSDepth computes positions with the same
+        // code as VSMain, so the lit pass can test LESS_EQUAL against it.
         depth_desc := variant_desc
         depth_desc.VS = shader_bytecode(depth_vs)
-        depth_desc.PS = shader_bytecode(velocity_mask_ps if masked else velocity_ps)
+        depth_desc.PS = shader_bytecode(prepass_mask_ps if masked else prepass_ps)
+        depth_desc.NumRenderTargets = 2
         depth_desc.RTVFormats[0] = .R16G16_FLOAT
+        depth_desc.RTVFormats[1] = SSR_FORMAT
         renderer_create_pso(&depth_desc, &r.depth_prepass_pipeline_states[variant])
 
         // Lit pass into the HDR target, testing against the prepass without
@@ -1287,6 +1325,7 @@ renderer_create_pipelines :: proc() {
     // SSAO's pixel shaders live in scene.hlsl to share its frame constants.
     renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSSsao", .R8_UNORM, &r.ssao_pipeline_state)
     renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSSsaoBlur", .R8_UNORM, &r.ssao_blur_pipeline_state)
+    renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSSsr", SSR_FORMAT, &r.ssr_pipeline_state)
 
     renderer_create_fullscreen_pso(fullscreen, "shaders/texture_mips.hlsl", "PSDownsample", .R8G8B8A8_UNORM, &r.mip_pipeline)
 }
@@ -1307,7 +1346,7 @@ renderer_load_assets :: proc(){
     // CONSTANT BUFFER
     renderer_create_frame_constant_buffers()
 
-    // ── 6. Viewport & Scissor ─────────────────────────────────────────────────
+    // â”€â”€ 6. Viewport & Scissor â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     r.viewport = d3d12.VIEWPORT {
         Width    = WINDOW_WIDTH,
         Height   = WINDOW_HEIGHT,
@@ -1519,6 +1558,7 @@ renderer_resize:: proc(width, height: u32){
     r.ldr_texture->Release()
     for target in r.ao_targets do target->Release()
     renderer_release_taa_targets()
+    renderer_release_ssr_targets()
     r.bloom_texture->Release()
 
     for i in 0..<FRAME_COUNT{
@@ -1562,6 +1602,7 @@ renderer_resize:: proc(width, height: u32){
     renderer_create_bloom_targets()
     renderer_create_ssao_targets()
     renderer_create_taa_targets()
+    renderer_create_ssr_targets()
 }
 
 renderer_load_textures :: proc(){
@@ -1607,6 +1648,8 @@ renderer_load_textures :: proc(){
     r.environment_bake_srv_index = renderer_alloc_srv()
     r.ao_srv_start = renderer_alloc_srv(AO_TARGET_COUNT)
     r.depth_srv_index = renderer_alloc_srv()
+    r.surface_srv_index = renderer_alloc_srv()
+    r.ssr_srv_index = renderer_alloc_srv()
     // These slots stay valid before an HDRI is loaded or its IBL maps are baked.
     null_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
         Format = .R16G16B16A16_FLOAT, ViewDimension = .TEXTURE2D,
@@ -1763,7 +1806,7 @@ renderer_upload_texture :: proc(
     }
     r.command_list->CopyTextureRegion(&dst_location, 0, 0, 0, &src_location, nil)
 
-    // Level 0: COPY_DEST → PIXEL_SHADER_RESOURCE; the mip builder moves the rest.
+    // Level 0: COPY_DEST â†’ PIXEL_SHADER_RESOURCE; the mip builder moves the rest.
     copy_barrier := d3d12.RESOURCE_BARRIER { Type = .TRANSITION }
     copy_barrier.Transition = {
         pResource   = gpu.resource,
@@ -1782,7 +1825,7 @@ renderer_upload_texture :: proc(
 
     renderer_wait_for_gpu()
 
-    // ── SRV ───────────────────────────────────────────────────────────────────
+    // â”€â”€ SRV â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC {
         Format                  = format,
         ViewDimension           = .TEXTURE2D,
@@ -1819,10 +1862,13 @@ renderer_render_frame :: proc(scene: ^Scene) {
     }
     renderer_render_shadow_pass(draws, shadow_draws)
 
-    // Depth first: SSAO reads it, and the lit pass only shades visible pixels.
+    // Depth first: SSAO and SSR read it, and the lit pass only shades
+    // visible pixels. SSR reads last frame's image before the lit pass
+    // overwrites the HDR target.
     visible := frame.scene_indices[:frame.scene_draw_count]
     renderer_render_depth_prepass(draws, visible)
     renderer_render_ssao()
+    renderer_render_ssr()
     transparent := frame.transparent_indices[:frame.transparent_draw_count]
     renderer_render_scene_pass(draws, visible, transparent)
 
@@ -1831,6 +1877,7 @@ renderer_render_frame :: proc(scene: ^Scene) {
     renderer_render_auto_exposure()
     renderer_render_bloom()
     renderer_render_post_process(scene)
+    r.ssr_history_valid = true
 
     // The prepass left depth readable; the next frame's prepass writes it.
     depth_barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
@@ -1953,6 +2000,8 @@ renderer_destroy :: proc(){
     renderer_release_taa_targets()
     r.taa_rtv_heap->Release()
     r.velocity_rtv_heap->Release()
+    renderer_release_ssr_targets()
+    r.ssr_rtv_heap->Release()
     r.selection_root_signature->Release()
 
     r.bloom_texture->Release()

@@ -94,6 +94,16 @@ cbuffer FrameConstants : register(b4)
     uint  ao_enabled;
     uint  ao_show;
 
+    // Screen-space reflections (renderer_ssr.odin): view-space ray length and
+    // surface thickness, and the roughness above which there are none.
+    float ssr_max_distance;
+    float ssr_thickness;
+    float ssr_max_roughness;
+    uint  ssr_enabled;
+    uint  ssr_stochastic; // With TAA: rays spread over the GGX lobe, averaged over frames.
+    uint  ssr_frame;
+    float2 _ssr_pad;
+
     GpuLight lights[MAX_LIGHTS];
     float4x4 spot_shadow_view_projection[SPOT_SHADOW_COUNT];
     float4x4 point_shadow_face_view_projection[POINT_SHADOW_COUNT * POINT_SHADOW_FACES];
@@ -126,6 +136,15 @@ Texture2D<float4> g_prefiltered_environment : register(t4);
 // Ambient occlusion: the blurred map in the lit pass, the raw map in the blur.
 Texture2D<float> g_ao : register(t8);
 Texture2D<float> g_depth : register(t9);
+// Written by the prepass: view-space shading normal and specular roughness.
+Texture2D<float4> g_surface : register(t7);
+// SSR: reflected color premultiplied by its confidence, which the lit pass
+// blends over the environment's specular.
+Texture2D<float4> g_reflections : register(t17);
+// SSR's inputs: last frame's HDR image and this frame's motion vectors.
+Texture2D<float4> g_scene_color : register(t0);
+Texture2D<float2> g_velocity : register(t8);
+SamplerState g_clamp_sampler : register(s4);
 
 struct VSInput
 {
@@ -174,6 +193,9 @@ struct VelocityInput
     float4 current_clip  : TEXCOORD0; // Unjittered.
     float4 previous_clip : TEXCOORD1;
     float2 texcoord      : TEXCOORD2;
+    // World space, for the surface buffer's shading normal.
+    float3 normal        : NORMAL;
+    float4 tangent       : TEXCOORD3;
 };
 
 VelocityInput VSDepth(VSInput input)
@@ -185,24 +207,18 @@ VelocityInput VSDepth(VSInput input)
     float4 previous_world = mul(float4(input.position, 1.0f), previous_model);
     output.previous_clip = mul(previous_world, previous_view_projection);
     output.texcoord = input.texcoord;
+    output.normal = mul(input.normal, (float3x3)normal_matrix);
+    output.tangent = float4(mul(input.tangent.xyz, (float3x3)model), input.tangent.w);
     return output;
 }
 
 // Screen motion since last frame, in UV units (y down). TAA subtracts it to
 // find where this pixel's surface was in the history.
-float2 PSVelocity(VelocityInput input) : SV_TARGET
+float2 Velocity(VelocityInput input)
 {
     float2 current = input.current_clip.xy / input.current_clip.w;
     float2 previous = input.previous_clip.xy / input.previous_clip.w;
     return (current - previous) * float2(0.5f, -0.5f);
-}
-
-// The prepass for cutouts: their depth only where alpha passes. The lit pass
-// then shades exactly those pixels (EQUAL depth test).
-float2 PSVelocityMasked(VelocityInput input) : SV_TARGET
-{
-    ClipAlpha(input.texcoord);
-    return PSVelocity(input);
 }
 
 PSInput VSMain(VSInput input)
@@ -497,51 +513,39 @@ float FilterSpecularRoughness(float material_roughness, float3 N)
     return pow(saturate(alpha * alpha + kernel), 0.25f);
 }
 
-// Lit surface color; `transparent` adds coverage in alpha for blending.
-// Unlit materials are handled by the entry points: an early return here makes
-// FXC report X4000 (see CascadeVisibility).
-float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
+// The shading normal (normal map applied) and specular roughness, shared by
+// the lit pass and the prepass's surface buffer so SSR traces what is lit.
+// Back faces (visible only on double-sided materials) are lit from their own
+// side: the whole surface basis flips, as in the glTF sample viewer.
+void SurfaceNormalRoughness(
+    float3 interpolated_normal,
+    float4 tangent,
+    float2 material_uv,
+    bool is_front_face,
+    out float3 geometric_normal,
+    out float3 N,
+    out float material_roughness
+)
 {
-    // Albedo SRVs are _SRGB, so the sampler returns filtered linear values.
-    float2 material_uv = input.texcoord * uv_scale;
-
-    float4 albedo_sample = g_texture.Sample(
-        g_material_sampler, material_uv
-    );
-    float3 albedo = albedo_sample.rgb * material_tint;
-
     float roughness_value = roughness;
-
     if (use_roughness_map != 0)
     {
         roughness_value *= g_roughness_map.Sample(
             g_material_sampler, material_uv
         ).r;
     }
+    material_roughness = clamp(roughness_value, 0.08f, 1.0f);
 
-    float material_roughness = clamp(roughness_value, 0.08f, 1.0f);
-    
-    float metallic_value = metallic;
-    if (use_metallic_map != 0)
-    {
-        metallic_value *= g_metallic_map.Sample(
-            g_material_sampler, material_uv
-        ).r;
-    }
-    float material_metallic = saturate(metallic_value);
-    
-    // Back faces (visible only on double-sided materials) are lit from their
-    // own side: the whole surface basis flips, as in the glTF sample viewer.
     float face_sign = is_front_face ? 1.0f : -1.0f;
-    float3 geometric_normal = normalize(input.normal) * face_sign;
-    float3 N = geometric_normal;
+    geometric_normal = normalize(interpolated_normal) * face_sign;
+    N = geometric_normal;
     if (normal_strength > 0.0f)
     {
         // Rebuild an orthogonal surface basis after interpolation.
         float3 T = normalize(
-            input.tangent.xyz - N * dot(N, input.tangent.xyz)
+            tangent.xyz - N * dot(N, tangent.xyz)
         ) * face_sign;
-        float3 B = cross(N, T) * input.tangent.w * face_sign;
+        float3 B = cross(N, T) * tangent.w * face_sign;
 
         // Normal maps encode signed directions in unsigned RGB channels.
         float3 tangent_normal = g_normal_map.Sample(
@@ -557,6 +561,75 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
         );
     }
     material_roughness = FilterSpecularRoughness(material_roughness, N);
+}
+
+struct PrepassOutput
+{
+    float2 velocity : SV_TARGET0;
+    float4 surface  : SV_TARGET1; // View-space shading normal, roughness.
+};
+
+// The depth prepass's outputs: motion for TAA and the surface for SSR.
+// Unlit surfaces get roughness 1, which SSR skips.
+PrepassOutput Prepass(VelocityInput input, bool is_front_face)
+{
+    float3 geometric_normal, N;
+    float material_roughness;
+    SurfaceNormalRoughness(
+        input.normal, input.tangent, input.texcoord * uv_scale, is_front_face,
+        geometric_normal, N, material_roughness
+    );
+
+    PrepassOutput output;
+    output.velocity = Velocity(input);
+    output.surface = float4(
+        mul(N, (float3x3)view),
+        unlit != 0 ? 1.0f : material_roughness
+    );
+    return output;
+}
+
+PrepassOutput PSPrepass(VelocityInput input, bool is_front_face : SV_IsFrontFace)
+{
+    return Prepass(input, is_front_face);
+}
+
+// The prepass for cutouts: their depth only where alpha passes. The lit pass
+// then shades exactly those pixels (EQUAL depth test).
+PrepassOutput PSPrepassMasked(VelocityInput input, bool is_front_face : SV_IsFrontFace)
+{
+    ClipAlpha(input.texcoord);
+    return Prepass(input, is_front_face);
+}
+
+// Lit surface color; `transparent` adds coverage in alpha for blending.
+// Unlit materials are handled by the entry points: an early return here makes
+// FXC report X4000 (see CascadeVisibility).
+float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
+{
+    // Albedo SRVs are _SRGB, so the sampler returns filtered linear values.
+    float2 material_uv = input.texcoord * uv_scale;
+
+    float4 albedo_sample = g_texture.Sample(
+        g_material_sampler, material_uv
+    );
+    float3 albedo = albedo_sample.rgb * material_tint;
+
+    float metallic_value = metallic;
+    if (use_metallic_map != 0)
+    {
+        metallic_value *= g_metallic_map.Sample(
+            g_material_sampler, material_uv
+        ).r;
+    }
+    float material_metallic = saturate(metallic_value);
+
+    float3 geometric_normal, N;
+    float material_roughness;
+    SurfaceNormalRoughness(
+        input.normal, input.tangent, material_uv, is_front_face,
+        geometric_normal, N, material_roughness
+    );
     float3 V = normalize(view_position - input.world_pos);
     float3 sun_L = normalize(-sun_direction);
 
@@ -584,6 +657,14 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
         prefiltered_color = g_prefiltered_environment.SampleLevel(
             g_environment_sampler, reflection_uv, material_roughness * 4.0f
         ).rgb * environment_intensity;
+    }
+    // Where SSR found the reflected surface, it replaces the environment.
+    // Like SSAO it is per pixel of the opaque surface, so blended ones skip it.
+    if (ssr_enabled != 0u && !transparent)
+    {
+        // Color is premultiplied by confidence.
+        float4 screen_reflection = g_reflections.Load(int3(input.position.xy, 0));
+        prefiltered_color = prefiltered_color * (1.0f - screen_reflection.a) + screen_reflection.rgb;
     }
 
     float3 ambient_F0 = lerp(
@@ -895,4 +976,160 @@ float PSSsaoBlur(FullscreenInput input) : SV_TARGET
         }
     }
     return sum / weight_sum;
+}
+
+// ---------------------------------------------------------------------------
+// Screen-space reflections: march the reflected ray through the depth buffer,
+// and where it passes behind a surface, read that surface's color from last
+// frame's HDR image (moved by its motion vector). Runs before the lit pass,
+// which blends the result over the environment's specular.
+
+#define SSR_MAX_STEPS 64
+#define SSR_REFINE_STEPS 5
+// Fraction of the screen over which hits fade out towards its edges.
+#define SSR_EDGE_FADE 0.1f
+
+// Jorge Jimenez's interleaved gradient noise: well spread over neighbouring
+// pixels, so TAA (or the eye) averages it quickly.
+float InterleavedGradientNoise(float2 pixel)
+{
+    return frac(52.9829189f * frac(dot(pixel, float2(0.06711056f, 0.00583715f))));
+}
+
+float2 ClipToUv(float4 clip)
+{
+    return clip.xy / clip.w * float2(0.5f, -0.5f) + 0.5f;
+}
+
+float SceneViewDepth(float2 uv, float2 size)
+{
+    int2 pixel = clamp(int2(uv * size), int2(0, 0), int2(size) - 1);
+    return ViewDepthFromDevice(g_depth.Load(int3(pixel, 0)));
+}
+
+// Color (premultiplied) and confidence of the reflection at `pixel`; zero where the ray
+// leaves the screen or passes behind nothing. Single exit: see CascadeVisibility.
+float4 TraceReflection(int2 pixel, float2 size, float3 N, float surface_roughness)
+{
+    float3 P = ViewPositionAt(pixel, size);
+    float3 V = normalize(P); // From the camera to the surface.
+
+    // Per-pixel noise, changing every frame when TAA will average it.
+    float2 noise_pixel = float2(pixel) + (ssr_stochastic != 0u ? float(ssr_frame % 64u) * 5.588238f : 0.0f);
+    float march_noise = InterleavedGradientNoise(noise_pixel);
+
+    float3 R = reflect(V, N);
+    if (ssr_stochastic != 0u)
+    {
+        // A microfacet normal from the GGX distribution (Walter et al.), so
+        // over many frames the rays cover the specular lobe: rough surfaces
+        // get blurred reflections instead of mirror images.
+        float alpha = surface_roughness * surface_roughness;
+        float u1 = InterleavedGradientNoise(noise_pixel + float2(47.0f, 13.0f));
+        float u2 = InterleavedGradientNoise(noise_pixel + float2(-29.0f, 71.0f));
+        float cos_theta = sqrt((1.0f - u1) / (1.0f + (alpha * alpha - 1.0f) * u1));
+        float sin_theta = sqrt(max(1.0f - cos_theta * cos_theta, 0.0f));
+        float phi = 2.0f * PI * u2;
+        float3 helper = abs(N.y) < 0.99f ? float3(0, 1, 0) : float3(1, 0, 0);
+        float3 T = normalize(cross(helper, N));
+        float3 B = cross(N, T);
+        float3 H = T * (sin_theta * cos(phi)) + B * (sin_theta * sin(phi)) + N * cos_theta;
+        float3 sampled = reflect(V, H);
+        // Directions below the surface would only hit the surface itself.
+        if (dot(sampled, N) > 0.0f) R = sampled;
+    }
+
+    // Stop the ray before it crosses the near plane, where it cannot be projected.
+    float near_z = ViewDepthFromDevice(0.0f);
+    float ray_length = ssr_max_distance;
+    if (R.z < 0.0f) ray_length = min(ray_length, max(P.z - near_z * 1.5f, 0.0f) / -R.z);
+    float3 end = P + R * ray_length;
+
+    // March in screen space; view depth along the ray is linear in 1/z there.
+    float2 start_uv = ClipToUv(mul(float4(P, 1.0f), projection));
+    float2 end_uv = ClipToUv(mul(float4(end, 1.0f), projection));
+    float2 pixel_delta = (end_uv - start_uv) * size;
+    uint steps = uint(clamp(max(abs(pixel_delta.x), abs(pixel_delta.y)), 1.0f, float(SSR_MAX_STEPS)));
+    float step_t = 1.0f / float(steps);
+    float inverse_start_z = 1.0f / P.z;
+    float inverse_end_z = 1.0f / end.z;
+
+    float previous_t = 0.0f;
+    float previous_z = P.z;
+    float hit_t = -1.0f;
+    [loop]
+    for (uint i = 0u; i < steps; ++i)
+    {
+        // The first sample is at least a step out, past the surface itself.
+        float t = (float(i) + 0.5f + march_noise) * step_t;
+        float2 uv = lerp(start_uv, end_uv, t);
+        if (any(uv < 0.0f) || any(uv > 1.0f) || t > 1.0f)
+        {
+            break;
+        }
+        float ray_z = 1.0f / lerp(inverse_start_z, inverse_end_z, t);
+        float scene_z = SceneViewDepth(uv, size);
+        // Hit when the segment since the last sample passes behind the
+        // visible surface, but not so far behind that it went around it.
+        if (max(previous_z, ray_z) >= scene_z && min(previous_z, ray_z) <= scene_z + ssr_thickness)
+        {
+            hit_t = t;
+            break;
+        }
+        previous_t = t;
+        previous_z = ray_z;
+    }
+
+    float4 result = 0.0f;
+    [branch]
+    if (hit_t >= 0.0f)
+    {
+        // Narrow the crossing down between the last two samples.
+        float low = previous_t;
+        float high = hit_t;
+        [unroll]
+        for (uint j = 0u; j < SSR_REFINE_STEPS; ++j)
+        {
+            float middle = 0.5f * (low + high);
+            float ray_z = 1.0f / lerp(inverse_start_z, inverse_end_z, middle);
+            if (ray_z >= SceneViewDepth(lerp(start_uv, end_uv, middle), size)) high = middle;
+            else low = middle;
+        }
+
+        float2 hit_uv = lerp(start_uv, end_uv, high);
+        int2 hit_pixel = clamp(int2(hit_uv * size), int2(0, 0), int2(size) - 1);
+        // Where that surface was last frame, in the image being read.
+        float2 previous_uv = hit_uv - g_velocity.Load(int3(hit_pixel, 0));
+        float3 hit_normal = g_surface.Load(int3(hit_pixel, 0)).xyz;
+
+        float2 edge = min(previous_uv, 1.0f - previous_uv);
+        float confidence = saturate(min(edge.x, edge.y) / SSR_EDGE_FADE);
+        // Fade towards the end of the ray, so the cutoff does not show.
+        confidence *= 1.0f - high * high;
+        // A surface facing away is the back of something; its color is unknown.
+        confidence *= saturate(-dot(hit_normal, R) * 4.0f);
+        // Smoothly hand rough surfaces over to the environment.
+        confidence *= 1.0f - smoothstep(0.6f * ssr_max_roughness, ssr_max_roughness, surface_roughness);
+
+        float3 color = g_scene_color.SampleLevel(g_clamp_sampler, saturate(previous_uv), 0).rgb;
+        result = float4(color * confidence, confidence);
+    }
+    return result;
+}
+
+float4 PSSsr(FullscreenInput input) : SV_TARGET
+{
+    uint width, height;
+    g_depth.GetDimensions(width, height);
+    int2 pixel = int2(input.position.xy);
+
+    // The prepass clears the sky to roughness 1, so this skips it too.
+    float4 surface = g_surface.Load(int3(pixel, 0));
+    float4 result = 0.0f;
+    [branch]
+    if (surface.w < ssr_max_roughness)
+    {
+        result = TraceReflection(pixel, float2(width, height), normalize(surface.xyz), surface.w);
+    }
+    return result;
 }

@@ -206,7 +206,7 @@ debug_ui_update :: proc() {
         pass_names := [GPU_PASS_COUNT]string{
             "Shadow", "Scene", "Bloom prefilter", "Bloom downsample",
             "Bloom upsample", "Post + UI", "Depth prepass", "SSAO + blur", "FXAA / sharpen", "TAA resolve",
-            "Auto exposure",
+            "Auto exposure", "SSR",
         }
         if ui_begin_table("GPU timings") {
             ui_table_column("GPU pass")
@@ -309,6 +309,15 @@ debug_ui_shadow_controls :: proc() {
         ui_slider_float("AO radius", &r.ao_radius, MIN_AO_RADIUS, MAX_AO_RADIUS)
         ui_slider_float("AO intensity", &r.ao_intensity, 0, MAX_AO_INTENSITY)
         ui_checkbox("Show AO only", &r.ao_show)
+    }
+
+    ui_separator()
+    ui_checkbox("Screen-space reflections (SSR)", &r.ssr_enabled)
+    if r.ssr_enabled {
+        ui_slider_float("SSR max distance", &r.ssr_max_distance, MIN_SSR_MAX_DISTANCE, MAX_SSR_MAX_DISTANCE)
+        ui_slider_float("SSR thickness", &r.ssr_thickness, MIN_SSR_THICKNESS, MAX_SSR_THICKNESS)
+        ui_slider_float("SSR max roughness", &r.ssr_max_roughness, MIN_SSR_MAX_ROUGHNESS, MAX_SSR_MAX_ROUGHNESS)
+        ui_checkbox("Show reflections only", &r.ssr_show)
     }
 }
 

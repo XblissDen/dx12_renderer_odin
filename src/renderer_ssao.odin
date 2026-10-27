@@ -94,22 +94,28 @@ renderer_render_depth_prepass :: proc(draws: []Draw, draw_indices: []u32) {
     r := &g_renderer
 
     renderer_begin_gpu_pass(.Depth_Prepass)
-    // Motion vectors for TAA come out of the same draw; zero where nothing draws.
-    velocity_barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
-    velocity_barrier.Transition = {
-        pResource = r.velocity_texture,
-        StateBefore = {.PIXEL_SHADER_RESOURCE},
-        StateAfter = {.RENDER_TARGET},
-        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+    // Motion vectors for TAA and the surface buffer for SSR come out of the
+    // same draw; cleared to no motion and no reflection where nothing draws.
+    barriers: [2]d3d12.RESOURCE_BARRIER
+    for &barrier, i in barriers {
+        barrier.Type = .TRANSITION
+        barrier.Transition = {
+            pResource = r.velocity_texture if i == 0 else r.surface_texture,
+            StateBefore = {.PIXEL_SHADER_RESOURCE},
+            StateAfter = {.RENDER_TARGET},
+            Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+        }
     }
-    r.command_list->ResourceBarrier(1, &velocity_barrier)
+    r.command_list->ResourceBarrier(len(barriers), &barriers[0])
 
     dsv := renderer_depth_dsv(read_only = false)
-    velocity_rtv := renderer_velocity_rtv()
-    r.command_list->OMSetRenderTargets(1, &velocity_rtv, false, &dsv)
+    rtvs := [2]d3d12.CPU_DESCRIPTOR_HANDLE{renderer_velocity_rtv(), renderer_ssr_rtv(0)}
+    r.command_list->OMSetRenderTargets(len(rtvs), &rtvs[0], false, &dsv)
     r.command_list->ClearDepthStencilView(dsv, {.DEPTH}, 1.0, 0, 0, nil)
     zero := [4]f32{}
-    r.command_list->ClearRenderTargetView(velocity_rtv, &zero, 0, nil)
+    r.command_list->ClearRenderTargetView(rtvs[0], &zero, 0, nil)
+    no_surface := [4]f32{0, 0, 0, 1}
+    r.command_list->ClearRenderTargetView(rtvs[1], &no_surface, 0, nil)
 
     r.command_list->SetGraphicsRootSignature(r.root_signature)
     // Cutouts read their albedo alpha through the material table.
@@ -122,20 +128,22 @@ renderer_render_depth_prepass :: proc(draws: []Draw, draw_indices: []u32) {
 
     renderer_draw_list(draws, draw_indices, r.depth_prepass_pipeline_states)
 
-    // Read-only from here to the end of the frame: SSAO samples it and the
-    // lit and selection passes test against it.
-    barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
-    barrier.Transition = {
+    // Read-only from here to the end of the frame: SSAO and SSR sample it and
+    // the lit and selection passes test against it.
+    depth_barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
+    depth_barrier.Transition = {
         pResource = r.depth_buffer,
         StateBefore = {.DEPTH_WRITE},
         StateAfter = {.DEPTH_READ, .PIXEL_SHADER_RESOURCE},
         Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
     }
-    r.command_list->ResourceBarrier(1, &barrier)
+    r.command_list->ResourceBarrier(1, &depth_barrier)
 
-    velocity_barrier.Transition.StateBefore = {.RENDER_TARGET}
-    velocity_barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
-    r.command_list->ResourceBarrier(1, &velocity_barrier)
+    for &barrier in barriers {
+        barrier.Transition.StateBefore = {.RENDER_TARGET}
+        barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
+    }
+    r.command_list->ResourceBarrier(len(barriers), &barriers[0])
     renderer_end_gpu_pass(.Depth_Prepass)
 }
 
