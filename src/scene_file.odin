@@ -10,7 +10,8 @@ SCENE_FILE_PATH :: "scene.json"
 // 7: extra material slots per entity. 8: emission, occlusion, cutouts.
 // 9: blending. 10: auto-exposure. 11: light ranges, spot lights.
 // 12: spot light shadows. 13: point light shadows. 14: orbit centers.
-SCENE_FILE_VERSION :: 14
+// 15: TAA sharpening.
+SCENE_FILE_VERSION :: 15
 
 ScenePostSettings :: struct{
     exposure: f32,
@@ -20,6 +21,8 @@ ScenePostSettings :: struct{
     tone_mapper: ToneMapper,
     // Absent in older files, which decode as FXAA.
     anti_aliasing: AntiAliasing,
+    // Sharpening after TAA (0-1). Absent in older files: 0, no sharpening.
+    sharpness: f32,
 }
 
 SceneShadowSettings :: struct {
@@ -285,6 +288,7 @@ scene_save_to_file :: proc(scene: ^Scene, path: string) -> (ok: bool, message: s
             bloom_strength = g_renderer.post_strength,
             tone_mapper = g_renderer.post_tone_mapper,
             anti_aliasing = g_renderer.post_anti_aliasing,
+            sharpness = g_renderer.post_sharpness,
         },
         environment = g_renderer.environment_settings,
         shadow = SceneShadowSettings{
@@ -423,7 +427,8 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
     post := file.post_process
     if post.exposure < 0.1 || post.exposure > 5.0 || post.bloom_threshold < 0.1 || post.bloom_threshold > 5.0 ||
         post.bloom_strength < 0.0 || post.bloom_strength > 2.0 ||
-        post.tone_mapper > max(ToneMapper) || post.anti_aliasing > max(AntiAliasing) {
+        post.tone_mapper > max(ToneMapper) || post.anti_aliasing > max(AntiAliasing) ||
+        !(post.sharpness >= 0 && post.sharpness <= 1) {
         return false, "Invalid post-process settings."
     }
     shadow := file.shadow.? or_else SceneShadowSettings{
@@ -490,6 +495,7 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
     g_renderer.post_strength = post.bloom_strength
     g_renderer.post_tone_mapper = post.tone_mapper
     g_renderer.post_anti_aliasing = post.anti_aliasing
+    g_renderer.post_sharpness = post.sharpness
     g_renderer.shadow_bias_constant = shadow.bias_constant
     g_renderer.shadow_bias_slope = shadow.bias_slope
     g_renderer.shadow_distance = shadow.distance

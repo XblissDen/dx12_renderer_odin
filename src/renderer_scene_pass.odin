@@ -99,9 +99,12 @@ renderer_render_post_process :: proc(scene: ^Scene) {
     r.rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
     rtv_handle.ptr += uint(r.frame_index * r.rtv_descriptor_size)
 
-    // With FXAA, tone mapping writes an intermediate image that FXAA then
-    // filters into the back buffer; otherwise it writes the back buffer directly.
+    // With FXAA, or sharpening after TAA, tone mapping writes an intermediate
+    // image that that pass then filters into the back buffer; otherwise it
+    // writes the back buffer directly.
     fxaa := r.post_anti_aliasing == .FXAA
+    sharpen := r.post_anti_aliasing == .TAA && r.post_sharpness > 0
+    final_pass := fxaa || sharpen
     ldr_barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
     ldr_barrier.Transition = {
         pResource = r.ldr_texture,
@@ -110,7 +113,7 @@ renderer_render_post_process :: proc(scene: ^Scene) {
         Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
     }
     tone_map_rtv := rtv_handle
-    if fxaa {
+    if final_pass {
         r.command_list->ResourceBarrier(1, &ldr_barrier)
         r.ldr_rtv_heap->GetCPUDescriptorHandleForHeapStart(&tone_map_rtv)
     }
@@ -129,14 +132,14 @@ renderer_render_post_process :: proc(scene: ^Scene) {
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
     r.command_list->DrawInstanced(3, 1, 0, 0)
 
-    if fxaa {
+    if final_pass {
         ldr_barrier.Transition.StateBefore = {.RENDER_TARGET}
         ldr_barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
         r.command_list->ResourceBarrier(1, &ldr_barrier)
 
         renderer_begin_gpu_pass(.FXAA)
         r.command_list->OMSetRenderTargets(1, &rtv_handle, false, nil)
-        r.command_list->SetPipelineState(r.fxaa_pipeline_state)
+        r.command_list->SetPipelineState(r.fxaa_pipeline_state if fxaa else r.sharpen_pipeline_state)
         renderer_bind_srv(.Texture_T0, r.ldr_srv_index)
         r.command_list->DrawInstanced(3, 1, 0, 0)
         renderer_end_gpu_pass(.FXAA)

@@ -8,6 +8,9 @@ import d3d12 "vendor:directx/d3d12"
 
 // Share of the new frame per blend; the rest is accumulated history.
 TAA_BLEND :: f32(0.1)
+// Contrast-adaptive sharpening after TAA (0-1), restoring detail the history
+// blend softens. Files saved before it existed load with 0: no sharpening.
+DEFAULT_SHARPNESS :: f32(0.5)
 
 // (Re)creates the velocity target and both history buffers. Called with the
 // other screen-sized targets, at startup and on resize; the history restarts.

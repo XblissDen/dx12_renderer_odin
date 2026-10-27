@@ -166,6 +166,9 @@ debug_ui_update :: proc() {
         if ui_combo("Anti-aliasing", &anti_aliasing, raw_data(anti_aliasing_labels[:]), i32(len(anti_aliasing_labels))) {
             r.post_anti_aliasing = AntiAliasing(anti_aliasing)
         }
+        if r.post_anti_aliasing == .TAA {
+            ui_slider_float("Sharpening", &r.post_sharpness, 0.0, 1.0)
+        }
         debug_ui_shadow_controls()
         debug_ui_environment_controls()
 
@@ -199,7 +202,7 @@ debug_ui_update :: proc() {
 
         pass_names := [GPU_PASS_COUNT]string{
             "Shadow", "Scene", "Bloom prefilter", "Bloom downsample",
-            "Bloom upsample", "Post + UI", "Depth prepass", "SSAO + blur", "FXAA", "TAA resolve",
+            "Bloom upsample", "Post + UI", "Depth prepass", "SSAO + blur", "FXAA / sharpen", "TAA resolve",
             "Auto exposure",
         }
         if ui_begin_table("GPU timings") {

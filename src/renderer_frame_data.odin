@@ -127,7 +127,19 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     }
     previous_view_projection := r.previous_view_projection
     if r.frame_counter == 1 do previous_view_projection = view_projection
-    
+
+    // The sky is infinitely far away, so only camera rotation moves it on
+    // screen. With the translation removed from both frames' cameras, a sky
+    // pixel's far-plane position maps to where that direction was last frame.
+    sky_view := view
+    sky_view[3, 0], sky_view[3, 1], sky_view[3, 2] = 0, 0, 0
+    sky_view_projection := sky_view * proj
+    previous_sky_view_projection := r.previous_sky_view_projection
+    if r.frame_counter == 1 do previous_sky_view_projection = sky_view_projection
+    post.sky_reprojection = alg.matrix4_inverse_f32(sky_view_projection) * previous_sky_view_projection
+    r.previous_sky_view_projection = sky_view_projection
+    post.sharpness = r.post_sharpness
+
     // Spot shadow slots first: the lights below say which slot they use.
     spot_shadows := renderer_select_spot_shadows(scene, camera_position)
     spot_shadow_view_projection: [SPOT_SHADOW_COUNT]alg.Matrix4f32

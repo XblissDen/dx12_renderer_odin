@@ -1,5 +1,5 @@
 {
-  "version": 14,
+  "version": 15,
   "entities": [
     {
       "name": "Cube (left)",
@@ -11,7 +11,7 @@
         ],
         "rotation": [
           0.00000000,
-          131.09661865,
+          194.09194946,
           0.00000000
         ],
         "rotation_speed": 0.60000002,
@@ -76,7 +76,7 @@
         ],
         "rotation": [
           0.00000000,
-          131.09661865,
+          194.09194946,
           0.00000000
         ],
         "rotation_speed": 0.60000002,
@@ -141,7 +141,7 @@
         ],
         "rotation": [
           0.00000000,
-          131.09661865,
+          194.09194946,
           0.00000000
         ],
         "rotation_speed": 0.60000002,
@@ -290,9 +290,9 @@
       "name": "Warm point light",
       "transform": {
         "position": [
-          1.31955636,
+          1.54656422,
           1.50000000,
-          -1.50292087
+          -1.26812422
         ],
         "rotation": [
           0.00000000,
@@ -354,7 +354,7 @@
         ],
         "intensity": 3.00000000,
         "orbit_radius": 2.00000000,
-        "orbit_angle": 131.09661865,
+        "orbit_angle": 194.09194946,
         "orbit_speed": 0.60000002,
         "orbit_enabled": true,
         "orbit_center": [
@@ -373,9 +373,9 @@
       "name": "Cool point light",
       "transform": {
         "position": [
-          -1.31970727,
+          -1.54669166,
           1.50000000,
-          1.50278831
+          1.26796889
         ],
         "rotation": [
           0.00000000,
@@ -437,7 +437,7 @@
         ],
         "intensity": 3.00000000,
         "orbit_radius": 2.00000000,
-        "orbit_angle": 134.23831177,
+        "orbit_angle": 197.23364258,
         "orbit_speed": 0.60000002,
         "orbit_enabled": true,
         "orbit_center": [
@@ -456,9 +456,9 @@
       "name": "",
       "transform": {
         "position": [
-          37.70415878,
-          -3.67055583,
-          -2.85265136
+          29.13460541,
+          -3.23222518,
+          -1.99778652
         ],
         "rotation": [
           0.00000000,
@@ -481,8 +481,8 @@
       "spot_light": null,
       "directional_light": null,
       "camera": {
-        "yaw": 15.48464966,
-        "pitch": 0.05662403,
+        "yaw": 15.81459045,
+        "pitch": -0.00337783,
         "speed": 3.00000000,
         "sensitivity": 0.00300000,
         "far_clip": 0.00000000
@@ -1372,9 +1372,9 @@
       "name": "Point light",
       "transform": {
         "position": [
-          26.65980339,
+          26.71643829,
           -2.77622247,
-          -1.33775759
+          -1.86115336
         ],
         "rotation": [
           0.00000000,
@@ -1436,7 +1436,7 @@
         ],
         "intensity": 3.00000000,
         "orbit_radius": 1.25000000,
-        "orbit_angle": 248.08143616,
+        "orbit_angle": 411.86859131,
         "orbit_speed": 1.55997527,
         "orbit_enabled": true,
         "orbit_center": [
@@ -1540,14 +1540,15 @@
     "bloom_threshold": 1.00000000,
     "bloom_strength": 0.60000002,
     "tone_mapper": "ACES",
-    "anti_aliasing": "FXAA"
+    "anti_aliasing": "TAA",
+    "sharpness": 0.50000000
   },
   "environment": {
     "asset": "autumn_field_puresky",
     "intensity": 1.00000000,
     "rotation_degrees": 0.00000000,
     "background_brightness": 1.00000000,
-    "ambient_mode": "Color",
+    "ambient_mode": "HDRI",
     "ambient_color": [
       0.15000001,
       0.18000001,

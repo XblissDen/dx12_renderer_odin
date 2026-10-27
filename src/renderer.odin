@@ -234,6 +234,13 @@ PostConstants :: struct #align(256) {
     taa_blend: f32,
     // Nonzero: exposure multiplies the automatic exposure (auto_exposure.hlsl).
     auto_exposure: u32,
+    // Contrast-adaptive sharpening after TAA, 0-1.
+    sharpness: f32,
+    _pad0: [2]f32,
+    // Takes a sky pixel's clip position (on the far plane) to last frame's:
+    // the inverse of this frame's rotation-only, unjittered view-projection
+    // times last frame's. TAA uses it where nothing was drawn.
+    sky_reprojection: alg.Matrix4f32,
 }
 
 SkyConstants :: struct #align(256) {
@@ -369,6 +376,9 @@ Renderer :: struct {
     ldr_rtv_heap: ^d3d12.IDescriptorHeap,
     ldr_srv_index: u32,
     fxaa_pipeline_state: ^d3d12.IPipelineState,
+    // Contrast-adaptive sharpening after TAA; like FXAA, it reads the
+    // tone-mapped image and writes the back buffer.
+    sharpen_pipeline_state: ^d3d12.IPipelineState,
 
     // TAA: two HDR histories used in turn (one read, one written), and the
     // per-pixel motion written by the depth prepass.
@@ -389,6 +399,10 @@ Renderer :: struct {
     // A model is only reused if it was recorded on the previous frame.
     frame_counter: u64,
     previous_view_projection: alg.Matrix4f32,
+    // Last frame's rotation-only view-projection, for sky motion.
+    previous_sky_view_projection: alg.Matrix4f32,
+    // Strength of the sharpening pass after TAA (0: off).
+    post_sharpness: f32,
     // This frame's submesh draws (rebuilt by renderer_prepare_frame).
     frame_draws: FrameDraws,
 
@@ -538,7 +552,9 @@ renderer_init :: proc() {
     r.post_threshold = 1.0
     r.post_strength = 0.6
     r.post_tone_mapper = .ACES
-    r.post_anti_aliasing = .FXAA
+    // New scenes use TAA; files saved without the setting load as FXAA.
+    r.post_anti_aliasing = .TAA
+    r.post_sharpness = DEFAULT_SHARPNESS
 
     r.shadow_bias_constant = DEFAULT_SHADOW_BIAS_CONSTANT
     r.shadow_bias_slope = DEFAULT_SHADOW_BIAS_SLOPE
@@ -1024,6 +1040,7 @@ renderer_create_pipelines :: proc() {
     POST :: "shaders/post_process.hlsl"
     renderer_create_fullscreen_pso(fullscreen, POST, "PSMain", .R8G8B8A8_UNORM, &r.post_pipeline_state)
     renderer_create_fullscreen_pso(fullscreen, POST, "PSFxaa", .R8G8B8A8_UNORM, &r.fxaa_pipeline_state)
+    renderer_create_fullscreen_pso(fullscreen, POST, "PSSharpen", .R8G8B8A8_UNORM, &r.sharpen_pipeline_state)
     renderer_create_fullscreen_pso(fullscreen, POST, "PSTaaResolve", .R16G16B16A16_FLOAT, &r.taa_resolve_pipeline_state)
     bloom_entries := [BLOOM_PASS_COUNT]cstring{"PSBloomPrefilter", "PSBloomDownsample", "PSBloomUpsample"}
     for entry, i in bloom_entries {
@@ -1711,6 +1728,7 @@ renderer_destroy :: proc(){
     r.ldr_texture->Release()
     r.ldr_rtv_heap->Release()
     r.fxaa_pipeline_state->Release()
+    r.sharpen_pipeline_state->Release()
     renderer_release_taa_targets()
     r.taa_rtv_heap->Release()
     r.velocity_rtv_heap->Release()

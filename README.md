@@ -150,14 +150,28 @@ in the same frame. The "Post + UI" timing includes tone mapping and the UI draw.
   red/green/blue/yellow by cascade.
 - **Shadow bias / slope bias**: sun-shadow depth bias in shadow-map texels. Raise
   them for acne (striped self-shadowing); lower them if shadows detach from objects.
-- **Anti-aliasing**: FXAA (default), TAA, or Off. FXAA runs on the tone-mapped
-  image, finds high-contrast edges, and blends across them along the edge's
-  direction. TAA renders each frame with a sub-pixel jitter (8-sample Halton
-  pattern) and blends it into a history reprojected with per-pixel motion vectors
-  from the depth prepass, clipping the history to the current neighbourhood's
-  colours to avoid ghosting; it resolves in HDR before bloom, which also steadies
-  edge flicker in motion and SSAO noise. The selection outline and this UI are
-  drawn afterwards, so text stays sharp.
+- **Anti-aliasing**: TAA (default for new scenes), FXAA, or Off. Scenes saved
+  without the setting load with FXAA. FXAA runs on the tone-mapped image, finds
+  high-contrast edges, and blends across them along the edge's direction. TAA
+  renders each frame with a sub-pixel jitter (8-sample Halton pattern) and
+  blends it into a history reprojected with per-pixel motion vectors from the
+  depth prepass, clipping the history to the current neighbourhood's colours to
+  avoid ghosting; it resolves in HDR before bloom, which also steadies edge
+  flicker in motion and SSAO noise. The selection outline and this UI are drawn
+  afterwards, so text stays sharp.
+  - **Sky motion**: the prepass draws no sky, so where a pixel's whole 3x3
+    neighbourhood is sky, TAA computes its motion from camera rotation (the sky
+    is infinitely far, so moving the camera does not move it): the pixel's
+    far-plane point reprojected with last frame's rotation-only camera. After a
+    90° turn, the sky is about ten times closer to a converged still frame than
+    before. Glass and other blended surfaces still have no motion vectors.
+  - **Sharpening** (TAA only, 0–1, default 0.5): AMD's contrast-adaptive
+    sharpening (CAS) after tone mapping restores detail the history blend
+    softens. Each pixel is pushed away from its four neighbours, less where the
+    3x3 neighbourhood already has strong contrast, so edges get no halos. It
+    runs like FXAA: tone mapping writes an intermediate image, and the sharpen
+    pass writes the back buffer. 0 skips the pass. Scenes saved before version
+    15 load with 0.
 - **Ambient occlusion (SSAO)**: darkens ambient (sky) light in creases and where
   objects meet, using a depth prepass, 16 view-space samples per pixel within
   **AO radius** (world units), and a depth-aware blur. **AO intensity** is the

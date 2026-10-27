@@ -14,6 +14,11 @@ cbuffer PostConstants : register(b1)
     uint  taa_history_valid;
     float taa_blend;   // Share of the new frame in each TAA blend.
     uint  auto_exposure;
+    float sharpness;   // Contrast-adaptive sharpening after TAA, 0-1.
+    float2 _post_pad;
+    // A sky pixel's clip position (far plane) to last frame's, from camera
+    // rotation alone (renderer_frame_data.odin).
+    float4x4 sky_reprojection;
 };
 
 // Written by auto_exposure.hlsl: the automatic exposure at byte 0.
@@ -248,6 +253,56 @@ float4 PSMain(VSOutput input) : SV_TARGET
     // The back buffer is UNORM (ImGui draws to it too), so encode sRGB here.
     return float4(LinearToSrgb(saturate(mapped)), 1.0f);
 }
+
+// ---------------------------------------------------------------------------
+// Contrast-adaptive sharpening after TAA, following AMD FidelityFX CAS: each
+// pixel is pushed away from its four neighbours by an amount that shrinks
+// where the 3x3 neighbourhood already spans much of the range, so edges get
+// no halos and noise is not amplified. Input: the tone-mapped,
+// display-encoded frame (t0); it sharpens in linear space.
+
+float3 SrgbToLinear(float3 value)
+{
+    float3 low = value / 12.92f;
+    float3 high = pow(max((value + 0.055f) / 1.055f, 0.0f), 2.4f);
+    return value <= 0.04045f ? low : high;
+}
+
+float3 SharpenTap(int2 pixel, int2 last)
+{
+    return SrgbToLinear(g_hdr_texture.Load(int3(clamp(pixel, int2(0, 0), last), 0)).rgb);
+}
+
+float4 PSSharpen(VSOutput input) : SV_TARGET
+{
+    int2 p = int2(input.position.xy);
+    int2 last = int2(1.0f / texel_size) - 1;
+    // a b c
+    // d e f
+    // g h i
+    float3 a = SharpenTap(p + int2(-1, -1), last);
+    float3 b = SharpenTap(p + int2( 0, -1), last);
+    float3 c = SharpenTap(p + int2( 1, -1), last);
+    float3 d = SharpenTap(p + int2(-1,  0), last);
+    float3 e = SharpenTap(p, last);
+    float3 f = SharpenTap(p + int2( 1,  0), last);
+    float3 g = SharpenTap(p + int2(-1,  1), last);
+    float3 h = SharpenTap(p + int2( 0,  1), last);
+    float3 i = SharpenTap(p + int2( 1,  1), last);
+
+    // Soft minimum and maximum: the cross's plus the whole 3x3's (0-2).
+    float3 cross_min = min(min(min(b, d), min(e, f)), h);
+    float3 cross_max = max(max(max(b, d), max(e, f)), h);
+    float3 soft_min = cross_min + min(cross_min, min(min(a, c), min(g, i)));
+    float3 soft_max = cross_max + max(cross_max, max(max(a, c), max(g, i)));
+
+    // Room to sharpen before clipping at 0 or 1, relative to the brightest.
+    float3 amount = sqrt(saturate(min(soft_min, 2.0f - soft_max) / max(soft_max, 0.00001f)));
+    float3 weight = amount * (-1.0f / lerp(8.0f, 5.0f, saturate(sharpness)));
+    float3 result = (b * weight + d * weight + f * weight + h * weight + e) / (1.0f + 4.0f * weight);
+    return float4(LinearToSrgb(saturate(result)), 1.0f);
+}
+
 // ---------------------------------------------------------------------------
 // FXAA, following the published algorithm (Lottes' FXAA 3.11 quality path):
 // find pixels on a contrasting edge, work out the edge's direction, search
@@ -475,6 +530,16 @@ float3 SampleHistoryCatmullRom(float2 uv)
     return max(result / total, 0.0f); // The filter can undershoot slightly.
 }
 
+// Screen motion of the sky at `uv` since last frame, in UV units like
+// PSVelocity: this pixel's far-plane point reprojected with last frame's
+// rotation (sky_reprojection).
+float2 SkyVelocity(float2 uv)
+{
+    float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
+    float4 previous = mul(float4(ndc, 1.0f, 1.0f), sky_reprojection);
+    return (ndc - previous.xy / previous.w) * float2(0.5f, -0.5f);
+}
+
 float4 PSTaaResolve(VSOutput input) : SV_TARGET
 {
     int2 pixel = int2(input.position.xy);
@@ -514,7 +579,14 @@ float4 PSTaaResolve(VSOutput input) : SV_TARGET
     float3 box_min = mean - TAA_CLIP_SIGMA * sigma;
     float3 box_max = mean + TAA_CLIP_SIGMA * sigma;
 
-    float2 history_uv = input.uv - g_velocity.Load(int3(closest_pixel, 0));
+    // Nothing was drawn anywhere around this pixel: it is sky, which the
+    // prepass leaves motionless. Its motion comes from camera rotation alone.
+    float2 velocity = g_velocity.Load(int3(closest_pixel, 0));
+    if (closest_depth >= 1.0f)
+    {
+        velocity = SkyVelocity(input.uv);
+    }
+    float2 history_uv = input.uv - velocity;
     if (any(history_uv < 0.0f) || any(history_uv > 1.0f))
     {
         return float4(current, 1.0f); // Newly revealed at the screen edge.
