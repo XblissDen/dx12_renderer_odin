@@ -154,6 +154,11 @@ void dx12_ui_text(const char* text, std::size_t length) {
     if (length != 0)
         ImGui::TextUnformatted(text, text + length);
 }
+void dx12_ui_text_wrapped(const char* text, std::size_t length) {
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextUnformatted(text, text + length);
+    ImGui::PopTextWrapPos();
+}
 void dx12_ui_separator() { ImGui::Separator(); }
 bool dx12_ui_slider_float(const char* label, float* value, float minimum, float maximum) {
     return ImGui::SliderFloat(label, value, minimum, maximum, "%.2f");

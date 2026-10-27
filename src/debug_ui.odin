@@ -29,6 +29,7 @@ foreign imgui_lib {
     ui_begin_panel :: proc(title: cstring) -> bool ---
     ui_end_panel :: proc() ---
     ui_text :: proc(text: [^]u8, length: uint) ---
+    ui_text_wrapped :: proc(text: [^]u8, length: uint) ---
     ui_separator :: proc() ---
     ui_slider_float :: proc(label: cstring, value: ^f32, minimum, maximum: f32) -> bool ---
     ui_checkbox :: proc(label: cstring, value: ^bool) -> bool ---
@@ -150,6 +151,8 @@ debug_ui_update :: proc() {
             debug_ui_text("L: capture mouse for camera")
         }
         debug_ui_text("F1: show/hide panel | Esc: quit")
+        // At the top, so a shader error is in view while editing.
+        debug_ui_shader_controls()
         ui_separator()
 
         // Do not short-circuit these calls: every widget must run each frame.
@@ -235,6 +238,29 @@ debug_ui_update :: proc() {
     }
 
     editor_finish_idle_edit()
+}
+
+// Shaders reload by themselves when a file in shaders/ is saved; the button
+// forces it, including the IBL re-bake.
+debug_ui_shader_controls :: proc() {
+    r := &g_renderer
+    if ui_button("Reload shaders") {
+        r.shader_stamp = 0
+        r.environment_shader_stamp = 0
+    }
+    ui_same_line()
+    text_buffer: [128]u8
+    switch {
+    case r.shader_error != "":
+        debug_ui_text("Failed: previous shaders kept")
+    case r.shader_reload_count > 0:
+        debug_ui_text(fmt.bprintf(text_buffer[:], "Reloaded (%.0f ms)", r.shader_reload_ms))
+    case:
+        debug_ui_text("Watching shaders/")
+    }
+    if r.shader_error != "" {
+        ui_text_wrapped(raw_data(r.shader_error), uint(len(r.shader_error)))
+    }
 }
 
 debug_ui_render :: proc() {

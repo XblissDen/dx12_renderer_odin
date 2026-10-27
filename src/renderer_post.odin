@@ -353,15 +353,6 @@ renderer_create_auto_exposure :: proc() {
         d3d12.IRootSignature_UUID, (^rawptr)(&r.exposure_root_signature),
     ))
 
-    entries := [2]cstring{"CSHistogram", "CSAdapt"}
-    pipelines := [2]^^d3d12.IPipelineState{&r.exposure_histogram_pipeline, &r.exposure_adapt_pipeline}
-    for entry, i in entries {
-        cs := renderer_compile_shader("shaders/auto_exposure.hlsl", entry, "cs_5_1")
-        defer cs->Release()
-        desc := d3d12.COMPUTE_PIPELINE_STATE_DESC{pRootSignature = r.exposure_root_signature, CS = shader_bytecode(cs)}
-        dx_check(r.device->CreateComputePipelineState(&desc, d3d12.IPipelineState_UUID, (^rawptr)(pipelines[i])))
-    }
-
     buffer :: proc(size: u64, heap_type: d3d12.HEAP_TYPE, flags: d3d12.RESOURCE_FLAGS, state: d3d12.RESOURCE_STATES) -> (resource: ^d3d12.IResource) {
         heap := d3d12.HEAP_PROPERTIES{Type = heap_type}
         desc := d3d12.RESOURCE_DESC{
@@ -398,10 +389,23 @@ renderer_create_auto_exposure :: proc() {
     r.auto_exposure_reset = true
 }
 
+// The histogram and adaptation pipelines; rebuilt by shader hot-reload.
+renderer_create_exposure_pipelines :: proc() {
+    r := &g_renderer
+    entries := [2]cstring{"CSHistogram", "CSAdapt"}
+    pipelines := [2]^^d3d12.IPipelineState{&r.exposure_histogram_pipeline, &r.exposure_adapt_pipeline}
+    for entry, i in entries {
+        cs := renderer_compile_shader("shaders/auto_exposure.hlsl", entry, "cs_5_1")
+        defer cs->Release()
+        if renderer_skip_pipeline() do continue
+        desc := d3d12.COMPUTE_PIPELINE_STATE_DESC{pRootSignature = r.exposure_root_signature, CS = shader_bytecode(cs)}
+        renderer_check_pipeline(r.device->CreateComputePipelineState(&desc, d3d12.IPipelineState_UUID, (^rawptr)(pipelines[i])))
+    }
+}
+
+// The pipelines are released with the others (renderer_pipeline_slots).
 renderer_release_auto_exposure :: proc() {
     r := &g_renderer
-    r.exposure_histogram_pipeline->Release()
-    r.exposure_adapt_pipeline->Release()
     r.exposure_root_signature->Release()
     r.exposure_histogram->Release()
     r.exposure_buffer->Release()

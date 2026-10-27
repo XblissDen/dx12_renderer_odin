@@ -2,6 +2,10 @@ package main
 
 import "base:runtime"
 import "core:fmt"
+import "core:os"
+import "core:slice"
+import "core:strings"
+import "core:thread"
 import "core:time"
 import win32 "core:sys/windows"
 import d3d12 "vendor:directx/d3d12"
@@ -475,6 +479,21 @@ Renderer :: struct {
     selection_root_signature: ^d3d12.IRootSignature,
     selection_pipeline_state: ^d3d12.IPipelineState,
 
+    // Shader hot-reload. Stamps sum the write times of shaders/*.hlsl: as
+    // loaded, as last polled, and for the IBL bake shaders as last baked.
+    shader_stamp, shader_polled_stamp, environment_shader_stamp: u64,
+    shader_poll_time: time.Time,
+    // Why the last reload was rejected ("" when it succeeded).
+    shader_error: string,
+    shader_reload_count: int,
+    shader_reload_ms: f32,
+    // Used only inside renderer_build_pipelines: shaders by
+    // "path|entry|target", whether the creation code is only being run to
+    // list them, and the first error.
+    shader_blobs: map[string]^d3d12.IBlob,
+    shader_collecting: bool,
+    shader_build_error: string,
+
     frame_index: u32,
     frame_slot: u32,
     frame_fence_values: [FRAME_COUNT]u64,
@@ -518,25 +537,230 @@ dx_check:: proc(hr: win32.HRESULT, loc := #caller_location){
     }
 }
 
-// Every shader goes through here: debug builds keep symbols and skip
-// optimization so tools like PIX can step through them.
+// Every pipeline's shaders come through here, already compiled by
+// renderer_build_pipelines. While it is only listing them, this records the
+// request and returns a placeholder the caller releases as usual.
 renderer_compile_shader :: proc(path: string, entry, target: cstring) -> ^d3d12.IBlob {
-    flags: u32 = 0
-    when ODIN_DEBUG {
-        flags = u32(d3dc.D3DCOMPILE_FLAG.DEBUG | d3dc.D3DCOMPILE_FLAG.SKIP_OPTIMIZATION)
+    r := &g_renderer
+    key := fmt.tprintf("%s|%s|%s", path, entry, target)
+    blob: ^d3d12.IBlob
+    if r.shader_collecting {
+        if key not_in r.shader_blobs do r.shader_blobs[strings.clone(key)] = nil
+        dx_check(d3dc.CreateBlob(4, &blob))
+        return blob
+    }
+    blob = r.shader_blobs[key]
+    assert(blob != nil, "shader was not compiled by renderer_build_pipelines")
+    blob->AddRef()
+    return blob
+}
+
+// Compiles every requested shader on its own thread and returns the first
+// error. Debug builds keep symbols and skip optimization so tools like PIX can
+// step through them.
+renderer_compile_shader_set :: proc() -> (error: string) {
+    r := &g_renderer
+    Job :: struct {
+        key: string,
+        blob, errors: ^d3d12.IBlob,
+        hr: win32.HRESULT,
+    }
+    compile :: proc(job: ^Job) {
+        parts := strings.split(job.key, "|", context.temp_allocator)
+        flags: u32 = 0
+        when ODIN_DEBUG {
+            flags = u32(d3dc.D3DCOMPILE_FLAG.DEBUG | d3dc.D3DCOMPILE_FLAG.SKIP_OPTIMIZATION)
+        }
+        job.hr = d3dc.CompileFromFile(
+            win32.utf8_to_wstring(parts[0]), nil, nil,
+            strings.clone_to_cstring(parts[1], context.temp_allocator),
+            strings.clone_to_cstring(parts[2], context.temp_allocator),
+            flags, 0, &job.blob, &job.errors,
+        )
     }
 
-    blob, errors: ^d3d12.IBlob
-    hr := d3dc.CompileFromFile(
-        win32.utf8_to_wstring(path), nil, nil,
-        entry, target, flags, 0, &blob, &errors,
-    )
-    if errors != nil {
-        fmt.println(entry, "compiler messages:", cstring(errors->GetBufferPointer()))
-        errors->Release()
+    jobs := make([dynamic]Job, 0, len(r.shader_blobs), context.temp_allocator)
+    for key in r.shader_blobs do append(&jobs, Job{key = key})
+    // Sorted, so the error reported is the same every time.
+    slice.sort_by(jobs[:], proc(a, b: Job) -> bool { return a.key < b.key })
+    threads := make([]^thread.Thread, len(jobs), context.temp_allocator)
+    for &job, i in jobs do threads[i] = thread.create_and_start_with_poly_data(&job, compile)
+    thread.join_multiple(..threads)
+    for t in threads do thread.destroy(t)
+
+    // An error in a shared file fails every entry point in it alike: print
+    // each distinct message once.
+    // Messages name files by absolute path; shown relative to the working
+    // directory, they fit the panel.
+    directory, _ := os.get_working_directory(context.temp_allocator)
+    directory_prefix := strings.concatenate({directory, "\\"}, context.temp_allocator)
+    printed := make(map[string]bool, context.temp_allocator)
+    for job in jobs {
+        r.shader_blobs[job.key] = job.blob
+        message: string
+        if job.errors != nil {
+            message = strings.trim_space(string(cstring(job.errors->GetBufferPointer())))
+            message, _ = strings.replace_all(message, directory_prefix, "", context.temp_allocator)
+            if message not_in printed {
+                printed[strings.clone(message, context.temp_allocator)] = true
+                fmt.println(job.key, "compiler messages:", message)
+            }
+        }
+        if job.hr < 0 && error == "" {
+            error = strings.clone(message) if message != "" else fmt.aprintf("%s failed to compile (0x%X).", job.key, u32(job.hr))
+        }
+        if job.errors != nil do job.errors->Release()
     }
-    dx_check(hr)
-    return blob
+    return
+}
+
+// Records a pipeline creation failure (for example a shader using a register
+// the root signature lacks) for renderer_build_pipelines to report.
+renderer_check_pipeline :: proc(hr: win32.HRESULT) {
+    r := &g_renderer
+    if hr >= 0 || r.shader_build_error != "" do return
+    r.shader_build_error = fmt.aprintf("Pipeline creation failed (0x%X); the debug layer output says why.", u32(hr))
+}
+
+// True while pipelines should not be created: the shaders are only being
+// listed, or the build has already failed.
+renderer_skip_pipeline :: proc() -> bool {
+    return g_renderer.shader_collecting || g_renderer.shader_build_error != ""
+}
+
+// Creates every pipeline in renderer_pipeline_slots. The creation code runs
+// twice: first only to list the shaders it needs, which are then compiled in
+// parallel, then for real. Returns the first error ("" on success); pipelines
+// created before a failure are left in their slots.
+renderer_build_pipelines :: proc() -> (error: string) {
+    r := &g_renderer
+    create :: proc() {
+        renderer_create_pipelines()
+        renderer_create_selection_pso()
+        renderer_create_exposure_pipelines()
+    }
+    r.shader_collecting = true
+    create()
+    r.shader_collecting = false
+
+    r.shader_build_error = renderer_compile_shader_set()
+    if r.shader_build_error == "" do create()
+    error = r.shader_build_error
+    r.shader_build_error = ""
+
+    for key, blob in r.shader_blobs {
+        if blob != nil do blob->Release()
+        delete(key)
+    }
+    clear(&r.shader_blobs)
+    return
+}
+
+// Every pipeline state built from shaders/, for hot-reload and shutdown.
+renderer_pipeline_slots :: proc() -> []^^d3d12.IPipelineState {
+    r := &g_renderer
+    slots := make([dynamic]^^d3d12.IPipelineState, context.temp_allocator)
+    for variant in Draw_Variant {
+        append(&slots,
+            &r.shadow_pipeline_states[variant], &r.spot_shadow_pipeline_states[variant],
+            &r.depth_prepass_pipeline_states[variant], &r.hdr_pipeline_states[variant],
+        )
+    }
+    for &pso in r.bloom_pipeline_states do append(&slots, &pso)
+    append(&slots,
+        &r.transparent_front_pipeline_state, &r.transparent_back_pipeline_state,
+        &r.post_pipeline_state, &r.fxaa_pipeline_state, &r.sharpen_pipeline_state,
+        &r.taa_resolve_pipeline_state, &r.sky_pipeline_state,
+        &r.irradiance_pipeline_state, &r.prefilter_pipeline_state,
+        &r.ssao_pipeline_state, &r.ssao_blur_pipeline_state, &r.mip_pipeline,
+        &r.selection_pipeline_state,
+        &r.exposure_histogram_pipeline, &r.exposure_adapt_pipeline,
+    )
+    return slots[:]
+}
+
+// Rebuilds every pipeline from shaders/ and swaps the new set in only if all
+// of it built; otherwise the old pipelines stay and shader_error says why.
+renderer_reload_shaders :: proc() {
+    r := &g_renderer
+    start := time.tick_now()
+    // Earlier frames may still be using the old pipelines.
+    renderer_wait_for_gpu()
+
+    slots := renderer_pipeline_slots()
+    old := make([]^d3d12.IPipelineState, len(slots), context.temp_allocator)
+    for slot, i in slots {
+        old[i] = slot^
+        slot^ = nil
+    }
+    delete(r.shader_error)
+    r.shader_error = renderer_build_pipelines()
+
+    failed := r.shader_error != ""
+    for slot, i in slots {
+        stale := slot^ if failed else old[i]
+        if stale != nil do stale->Release()
+        if failed do slot^ = old[i]
+    }
+    r.shader_reload_count += 1
+    r.shader_reload_ms = f32(time.duration_milliseconds(time.tick_since(start)))
+    if failed {
+        fmt.println("Shader reload failed; keeping the previous shaders.")
+    } else {
+        fmt.printf("Shaders reloaded in %.0f ms.\n", r.shader_reload_ms)
+    }
+}
+
+SHADER_POLL_INTERVAL :: 250 * time.Millisecond
+
+// Sums the write times of shaders/*.hlsl, so editing, adding, or removing a
+// file changes it. `environment` covers only the IBL bake shaders.
+renderer_shader_stamp :: proc() -> (all, environment: u64) {
+    data: win32.WIN32_FIND_DATAW
+    find := win32.FindFirstFileW(win32.L("shaders\\*.hlsl"), &data)
+    if find == win32.INVALID_HANDLE_VALUE do return
+    defer win32.FindClose(find)
+    for {
+        stamp := u64(data.ftLastWriteTime.dwHighDateTime) << 32 | u64(data.ftLastWriteTime.dwLowDateTime)
+        all += stamp
+        name_buffer: [win32.MAX_PATH * 3]u8
+        name := win32.wstring_to_utf8(name_buffer[:], win32.wstring(raw_data(data.cFileName[:])))
+        if strings.equal_fold(name, "irradiance.hlsl") || strings.equal_fold(name, "environment_prefilter.hlsl") {
+            environment += stamp
+        }
+        if !win32.FindNextFileW(find, &data) do break
+    }
+    return
+}
+
+// Called once a frame: reloads shaders after an edit has settled (the stamp
+// held for one poll, so a save in progress is not compiled half-written), and
+// re-bakes the IBL maps when their shaders changed.
+renderer_poll_shaders :: proc() {
+    r := &g_renderer
+    if time.since(r.shader_poll_time) < SHADER_POLL_INTERVAL do return
+    first_poll := r.shader_poll_time == {}
+    r.shader_poll_time = time.now()
+
+    stamp, environment := renderer_shader_stamp()
+    // The first poll records the shaders startup built from.
+    if first_poll {
+        r.shader_stamp, r.shader_polled_stamp, r.environment_shader_stamp = stamp, stamp, environment
+        return
+    }
+    settled := stamp == r.shader_polled_stamp
+    r.shader_polled_stamp = stamp
+    if !settled || stamp == r.shader_stamp do return
+
+    r.shader_stamp = stamp
+    renderer_reload_shaders()
+    if r.shader_error == "" && environment != r.environment_shader_stamp {
+        r.environment_shader_stamp = environment
+        if _, pending := r.environment_pending.?; !pending {
+            r.environment_filtered_asset = 0
+            r.environment_pending = r.environment_settings
+        }
+    }
 }
 
 renderer_init :: proc() {
@@ -887,7 +1111,9 @@ shader_bytecode :: proc(blob: ^d3d12.IBlob) -> d3d12.SHADER_BYTECODE {
 }
 
 renderer_create_pso :: proc(desc: ^d3d12.GRAPHICS_PIPELINE_STATE_DESC, pso: ^^d3d12.IPipelineState) {
-    dx_check(g_renderer.device->CreateGraphicsPipelineState(desc, d3d12.IPipelineState_UUID, (^rawptr)(pso)))
+    r := &g_renderer
+    if renderer_skip_pipeline() do return
+    renderer_check_pipeline(r.device->CreateGraphicsPipelineState(desc, d3d12.IPipelineState_UUID, (^rawptr)(pso)))
 }
 
 // A full-screen pass: `base` (no depth, no input layout) with this pixel
@@ -1069,7 +1295,6 @@ renderer_load_assets :: proc(){
     r := &g_renderer
 
     renderer_create_root_signature()
-    renderer_create_pipelines()
 
     r.meshes = make([]GpuMesh, len(g_assets.meshes))
     for i in 1..<len(g_assets.meshes) {
@@ -1714,30 +1939,20 @@ renderer_destroy :: proc(){
     r.srv_heap->Release()
     r.srv_staging_heap->Release()
 
-    for pso in r.shadow_pipeline_states do pso->Release()
     r.shadow_map->Release()
     r.shadow_dsv_heap->Release()
     r.spot_shadow_map->Release()
     r.spot_shadow_dsv_heap->Release()
     r.point_shadow_map->Release()
     r.point_shadow_dsv_heap->Release()
-    for pso in r.spot_shadow_pipeline_states do pso->Release()
 
     r.hdr_texture->Release()
     r.hdr_rtv_heap->Release()
     r.ldr_texture->Release()
     r.ldr_rtv_heap->Release()
-    r.fxaa_pipeline_state->Release()
-    r.sharpen_pipeline_state->Release()
     renderer_release_taa_targets()
     r.taa_rtv_heap->Release()
     r.velocity_rtv_heap->Release()
-    r.taa_resolve_pipeline_state->Release()
-    for pso in r.hdr_pipeline_states do pso->Release()
-    r.transparent_front_pipeline_state->Release()
-    r.transparent_back_pipeline_state->Release()
-    r.post_pipeline_state->Release()
-    r.selection_pipeline_state->Release()
     r.selection_root_signature->Release()
 
     r.bloom_texture->Release()
@@ -1745,16 +1960,12 @@ renderer_destroy :: proc(){
 
     for target in r.ao_targets do target->Release()
     r.ao_rtv_heap->Release()
-    for pso in r.depth_prepass_pipeline_states do pso->Release()
-    r.ssao_pipeline_state->Release()
-    r.ssao_blur_pipeline_state->Release()
-    r.mip_pipeline->Release()
     renderer_release_auto_exposure()
     r.mip_rtv_heap->Release()
 
-    for pso in r.bloom_pipeline_states {
-        pso->Release()
-    }
+    for slot in renderer_pipeline_slots() do slot^->Release()
+    delete(r.shader_error)
+    delete(r.shader_blobs)
 
     r.post_constant_buffer->Release()
 
@@ -1762,16 +1973,13 @@ renderer_destroy :: proc(){
     r.timestamp_heap->Release()
 
     if r.environment_texture != nil do r.environment_texture->Release()
-    r.sky_pipeline_state->Release()
     r.sky_constant_buffer->Release()
 
     if r.irradiance_texture != nil do r.irradiance_texture->Release()
     if r.irradiance_rtv_heap != nil do r.irradiance_rtv_heap->Release()
-    r.irradiance_pipeline_state->Release()
 
     if r.prefilter_texture != nil do r.prefilter_texture->Release()
     if r.prefilter_rtv_heap != nil do r.prefilter_rtv_heap->Release()
-    r.prefilter_pipeline_state->Release()
     if r.prefilter_constant_buffer != nil do r.prefilter_constant_buffer->Release()
 
     // Everything above should be released by now: list anything still alive

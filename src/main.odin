@@ -18,14 +18,15 @@ main :: proc(){
     if error := scene_file_validate(&g_scene); error != "" do panic(error)
     defer scene_file_destroy()
 
-    renderer_create_selection_pipeline()
+    renderer_create_selection_root_signature()
+    renderer_create_auto_exposure()
+    if error := renderer_build_pipelines(); error != "" do panic(error)
     renderer_load_textures()
     renderer_create_shadow_map()
     renderer_create_hdr_target()
     renderer_create_bloom_targets()
     renderer_create_ssao_targets()
     renderer_create_taa_targets()
-    renderer_create_auto_exposure()
     if error := renderer_set_environment(renderer_default_environment_settings()); error != "" do panic(error)
 
     defer renderer_destroy()
@@ -65,6 +66,7 @@ main :: proc(){
 
         renderer_resize(g_client_width, g_client_height)
         debug_ui_update()
+        renderer_poll_shaders()
         renderer_process_environment_change()
         editor_process_asset_import()
         editor_update_picking(&g_scene)

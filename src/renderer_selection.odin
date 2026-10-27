@@ -15,7 +15,7 @@ SelectionConstants :: struct {
 #assert(size_of(SelectionConstants) == 96)
 SELECTION_ROOT_VALUE_COUNT :: u32(size_of(SelectionConstants) / size_of(f32))
 
-renderer_create_selection_pipeline :: proc() {
+renderer_create_selection_root_signature :: proc() {
     r := &g_renderer
 
     parameter := d3d12.ROOT_PARAMETER{
@@ -48,6 +48,11 @@ renderer_create_selection_pipeline :: proc() {
         d3d12.IRootSignature_UUID,
         (^rawptr)(&r.selection_root_signature),
     ))
+}
+
+// The selection box pipeline; rebuilt by shader hot-reload.
+renderer_create_selection_pso :: proc() {
+    r := &g_renderer
 
     vs := renderer_compile_shader("shaders/selection.hlsl", "VSMain", "vs_5_1")
     defer vs->Release()

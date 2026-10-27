@@ -35,6 +35,20 @@ Additional assets can be registered through the editor's import panel.
 If the default HDR file is unavailable, startup uses ambient-color lighting and
 a solid background instead.
 
+### Shader hot-reload
+
+Saving any file in `shaders/` while the program runs rebuilds every pipeline,
+in about a third of a second (all shaders compile in parallel, at startup too).
+The new set is used only if everything compiled and every pipeline was
+created. Otherwise the previous shaders stay in use, and the first compiler
+error is shown at the top of **Renderer controls** (also printed to the
+console). Fix the file and save again to retry. Editing `irradiance.hlsl` or
+`environment_prefilter.hlsl` also re-bakes the image-based lighting. **Reload
+shaders** forces a full reload, including that re-bake.
+
+Changes outside the shaders, such as a new constant-buffer field or root
+signature slot, still need a rebuild of the program.
+
 ## Importing models
 
 The **Assets...** panel imports OBJ, glTF 2.0 (`.gltf` with its
