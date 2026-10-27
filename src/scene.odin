@@ -33,9 +33,30 @@ PointLight :: struct{
     orbit_angle: f32,
     orbit_speed: f32,
     orbit_enabled: bool,
+    // The light circles this point horizontally, orbit_radius away; its y is
+    // the orbit's height.
+    orbit_center: [3]f32,
     // Distance at which the light has faded out completely. Zero in scenes
     // saved before ranges existed; loading derives one (light_default_range).
     range: f32,
+    // Up to POINT_SHADOW_COUNT of these get a cube shadow map each frame: the
+    // nearest to the camera.
+    cast_shadows: bool,
+}
+
+// Where an orbiting point light is at its current orbit angle.
+orbit_position :: proc(light: PointLight) -> alg.Vector3f32 {
+    return light.orbit_center + {
+        math.cos(light.orbit_angle) * light.orbit_radius,
+        0,
+        math.sin(light.orbit_angle) * light.orbit_radius,
+    }
+}
+
+// The orbit center that puts the light at `position` at its current angle:
+// turning orbit on then does not move the light.
+orbit_center_through :: proc(light: PointLight, position: alg.Vector3f32) -> [3]f32 {
+    return position - (orbit_position(light) - light.orbit_center)
 }
 
 // A cone of light along the entity's local -Y axis: with no rotation it shines
@@ -398,7 +419,9 @@ scene_init :: proc(){
         orbit_radius = 2.0,
         orbit_speed = 0.6,
         orbit_enabled = true,
+        orbit_center = {0, 1.5, 0},
         range = light_default_range(3.0),
+        cast_shadows = true,
     })
     scene_add_mesh_renderer(&g_scene, light_entity, MeshRenderer{
     mesh = assets_mesh("cube"),
@@ -423,7 +446,9 @@ scene_init :: proc(){
         orbit_angle = math.PI,
         orbit_speed = 0.6,
         orbit_enabled = true,
+        orbit_center = {0, 1.5, 0},
         range = light_default_range(3.0),
+        cast_shadows = true,
     })
 
     scene_add_mesh_renderer(&g_scene, second_light_entity, MeshRenderer{
@@ -489,8 +514,7 @@ scene_update :: proc(scene: ^Scene, dt: f32){
             if light.orbit_enabled{
                 light.orbit_angle += light.orbit_speed * dt
 
-                scene.transforms[i].position.x = math.cos(light.orbit_angle) * light.orbit_radius
-                scene.transforms[i].position.z = math.sin(light.orbit_angle) * light.orbit_radius
+                scene.transforms[i].position = orbit_position(light^)
             }
             
             if scene.has_material[i] {

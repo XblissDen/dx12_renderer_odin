@@ -9,8 +9,8 @@ import alg "core:math/linalg"
 SCENE_FILE_PATH :: "scene.json"
 // 7: extra material slots per entity. 8: emission, occlusion, cutouts.
 // 9: blending. 10: auto-exposure. 11: light ranges, spot lights.
-// 12: spot light shadows.
-SCENE_FILE_VERSION :: 12
+// 12: spot light shadows. 13: point light shadows. 14: orbit centers.
+SCENE_FILE_VERSION :: 14
 
 ScenePostSettings :: struct{
     exposure: f32,
@@ -383,6 +383,14 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
             // Saved before lights had a range.
             light := point_light
             if light.range == 0 do light.range = light_default_range(light.intensity)
+            // Before version 13 point lights had no shadows to turn off.
+            if header.version <= 12 do light.cast_shadows = true
+            // Orbits used to circle the world origin at the light's height.
+            if header.version <= 13 {
+                height := f32(0)
+                if transform, has_transform := source.transform.?; has_transform do height = transform.position.y
+                light.orbit_center = {0, height, 0}
+            }
             scene_add_point_light(staged, entity, light)
         }
         if spot_light, ok := source.spot_light.?; ok {

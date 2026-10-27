@@ -31,8 +31,14 @@ SHADOW_NORMAL_OFFSET_TEXELS :: f32(1.0)
 // shadow-casting spot lights nearest the camera.
 SPOT_SHADOW_COUNT :: 4
 SPOT_SHADOW_MAP_SIZE :: 1024
-// Shadow views per frame: the sun's cascades, then the spot slots.
-SHADOW_VIEW_COUNT :: SHADOW_CASCADE_COUNT + SPOT_SHADOW_COUNT
+// Point light shadows: a cube map (six 90-degree faces) per slot.
+POINT_SHADOW_COUNT :: 4
+POINT_SHADOW_MAP_SIZE :: 512
+POINT_SHADOW_FACES :: 6
+// Shadow views per frame: the sun's cascades, the spot slots, then each
+// point slot's six faces.
+SHADOW_VIEW_COUNT :: SHADOW_CASCADE_COUNT + SPOT_SHADOW_COUNT + POINT_SHADOW_COUNT * POINT_SHADOW_FACES
+POINT_SHADOW_FIRST_VIEW :: SHADOW_CASCADE_COUNT + SPOT_SHADOW_COUNT
 // Rasterizer bias for spot shadow casters (D3D units), and the receiver's
 // offset along its normal in shadow-map texels at its distance from the light.
 // Must match SPOT_SHADOW_NORMAL_OFFSET_TEXELS in scene.hlsl.
@@ -49,27 +55,75 @@ SpotShadow :: struct {
     texel_scale: f32,
 }
 
+// The shadow-casting spot (or point) lights, nearest to the camera first:
+// shadow slots go to the first few.
+renderer_shadow_light_order :: proc(scene: ^Scene, camera_position: alg.Vector3f32, spot: bool) -> []int {
+    Candidate :: struct {entity: int, distance: f32}
+    candidates := make([dynamic]Candidate, context.temp_allocator)
+    for i in 0..<scene.entity_count {
+        if !scene.alive[i] || !scene.has_transform[i] do continue
+        casts := scene.has_spot_light[i] && scene.spot_lights[i].cast_shadows if spot else
+                 scene.has_point_light[i] && scene.point_lights[i].cast_shadows
+        if !casts do continue
+        append(&candidates, Candidate{i, alg.length(scene.transforms[i].position - camera_position)})
+    }
+    slice.sort_by(candidates[:], proc(a, b: Candidate) -> bool {return a.distance < b.distance})
+    order := make([]int, len(candidates), context.temp_allocator)
+    for candidate, i in candidates do order[i] = candidate.entity
+    return order
+}
+
 // Gives the spot shadow slots to the shadow-casting spot lights nearest the
 // camera, and records which entity got each slot (-1: unused).
 renderer_select_spot_shadows :: proc(scene: ^Scene, camera_position: alg.Vector3f32) -> (shadows: [SPOT_SHADOW_COUNT]SpotShadow) {
     r := &g_renderer
-    Candidate :: struct {entity: int, distance: f32}
-    candidates := make([dynamic]Candidate, context.temp_allocator)
-    for i in 0..<scene.entity_count {
-        if !scene.alive[i] || !scene.has_transform[i] || !scene.has_spot_light[i] do continue
-        if !scene.spot_lights[i].cast_shadows do continue
-        append(&candidates, Candidate{i, alg.length(scene.transforms[i].position - camera_position)})
-    }
-    slice.sort_by(candidates[:], proc(a, b: Candidate) -> bool {return a.distance < b.distance})
-
+    order := renderer_shadow_light_order(scene, camera_position, spot = true)
     for slot in 0..<SPOT_SHADOW_COUNT {
         shadows[slot].entity = -1
-        if slot < len(candidates) {
-            entity := candidates[slot].entity
+        if slot < len(order) {
+            entity := order[slot]
             shadows[slot] = renderer_fit_spot_shadow(scene.transforms[entity], scene.spot_lights[entity])
             shadows[slot].entity = entity
         }
         r.spot_shadow_entities[slot] = shadows[slot].entity
+    }
+    return
+}
+
+// A point light's cube map: six 90-degree views out to its range, oriented
+// as D3D's cube faces (+X, -X, +Y, -Y, +Z, -Z) so the shader can sample by
+// direction.
+PointShadow :: struct {
+    entity: int,
+    face_view_projection: [POINT_SHADOW_FACES]alg.Matrix4f32,
+    near: f32,
+}
+
+// World size of one cube-face texel per unit of distance along the face's
+// axis (90-degree field of view).
+POINT_SHADOW_TEXEL_SCALE :: f32(2.0 / POINT_SHADOW_MAP_SIZE)
+
+renderer_select_point_shadows :: proc(scene: ^Scene, camera_position: alg.Vector3f32) -> (shadows: [POINT_SHADOW_COUNT]PointShadow) {
+    r := &g_renderer
+    order := renderer_shadow_light_order(scene, camera_position, spot = false)
+    // look_at_lh with these targets and ups gives each face D3D's cube layout.
+    directions := [POINT_SHADOW_FACES]alg.Vector3f32{{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}}
+    ups := [POINT_SHADOW_FACES]alg.Vector3f32{{0, 1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {0, 1, 0}, {0, 1, 0}}
+    for slot in 0..<POINT_SHADOW_COUNT {
+        shadows[slot].entity = -1
+        if slot < len(order) {
+            entity := order[slot]
+            position := scene.transforms[entity].position
+            light := scene.point_lights[entity]
+            shadow := &shadows[slot]
+            shadow.entity = entity
+            shadow.near = max(light.range * 0.001, 0.02)
+            projection := perspective_lh(math.PI / 2, 1, shadow.near, light.range)
+            for face in 0..<POINT_SHADOW_FACES {
+                shadow.face_view_projection[face] = look_at_lh(position, position + directions[face], ups[face]) * projection
+            }
+        }
+        r.point_shadow_entities[slot] = shadows[slot].entity
     }
     return
 }
@@ -225,12 +279,16 @@ renderer_create_shadow_map :: proc() {
     r.spot_shadow_map, r.spot_shadow_dsv_heap = renderer_create_shadow_array(
         SPOT_SHADOW_MAP_SIZE, SPOT_SHADOW_COUNT, r.spot_shadow_srv_index,
     )
+    r.point_shadow_map, r.point_shadow_dsv_heap = renderer_create_shadow_array(
+        POINT_SHADOW_MAP_SIZE, POINT_SHADOW_COUNT * POINT_SHADOW_FACES, r.point_shadow_srv_index, cube = true,
+    )
 }
 
 // A square depth texture array for shadows, left in PIXEL_SHADER_RESOURCE
 // state: one depth view per slice, and a shader view of every slice at
-// `srv_index`.
-renderer_create_shadow_array :: proc(size, slices, srv_index: u32) -> (
+// `srv_index`: an array of 2D maps, or with `cube` of cube maps (six
+// slices each).
+renderer_create_shadow_array :: proc(size, slices, srv_index: u32, cube := false) -> (
     texture: ^d3d12.IResource,
     dsv_heap: ^d3d12.IDescriptorHeap,
 ) {
@@ -292,7 +350,12 @@ renderer_create_shadow_array :: proc(size, slices, srv_index: u32) -> (
         ViewDimension = .TEXTURE2DARRAY,
         Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
     }
-    shadow_srv.Texture2DArray = {MipLevels = 1, ArraySize = slices}
+    if cube {
+        shadow_srv.ViewDimension = .TEXTURECUBEARRAY
+        shadow_srv.TextureCubeArray = {MipLevels = 1, NumCubes = slices / 6}
+    } else {
+        shadow_srv.Texture2DArray = {MipLevels = 1, ArraySize = slices}
+    }
 
     srv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv_handle)
@@ -379,6 +442,33 @@ renderer_render_shadow_pass :: proc(
         view := SHADOW_CASCADE_COUNT + slot
         r.command_list->SetGraphicsRoot32BitConstant(u32(Root_Slot.Shadow_Cascade), u32(view), 0)
         renderer_draw_list(draws, view_draws[view], r.spot_shadow_pipeline_states)
+    }
+    shadow_barrier.Transition.StateBefore = {.DEPTH_WRITE}
+    shadow_barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
+    r.command_list->ResourceBarrier(1, &shadow_barrier)
+
+    // Point lights: six cube faces per used slot, with the spot pipelines.
+    shadow_barrier.Transition.pResource = r.point_shadow_map
+    shadow_barrier.Transition.StateBefore = {.PIXEL_SHADER_RESOURCE}
+    shadow_barrier.Transition.StateAfter = {.DEPTH_WRITE}
+    r.command_list->ResourceBarrier(1, &shadow_barrier)
+    point_viewport := d3d12.VIEWPORT{Width = POINT_SHADOW_MAP_SIZE, Height = POINT_SHADOW_MAP_SIZE, MaxDepth = 1}
+    point_scissor := d3d12.RECT{right = POINT_SHADOW_MAP_SIZE, bottom = POINT_SHADOW_MAP_SIZE}
+    r.command_list->RSSetViewports(1, &point_viewport)
+    r.command_list->RSSetScissorRects(1, &point_scissor)
+    for slot in 0..<POINT_SHADOW_COUNT {
+        if r.point_shadow_entities[slot] < 0 do continue
+        for face in 0..<POINT_SHADOW_FACES {
+            face_index := slot * POINT_SHADOW_FACES + face
+            dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+            r.point_shadow_dsv_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle)
+            dsv_handle.ptr += uint(face_index) * uint(dsv_size)
+            r.command_list->OMSetRenderTargets(0, nil, false, &dsv_handle)
+            r.command_list->ClearDepthStencilView(dsv_handle, {.DEPTH}, 1.0, 0, 0, nil)
+            view := POINT_SHADOW_FIRST_VIEW + face_index
+            r.command_list->SetGraphicsRoot32BitConstant(u32(Root_Slot.Shadow_Cascade), u32(view), 0)
+            renderer_draw_list(draws, view_draws[view], r.spot_shadow_pipeline_states)
+        }
     }
     shadow_barrier.Transition.StateBefore = {.DEPTH_WRITE}
     shadow_barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}

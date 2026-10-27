@@ -30,9 +30,10 @@ EditorField :: enum {
     Point_Intensity,
     Point_Orbit_Enabled,
     Point_Orbit_Radius,
-    Point_Orbit_Height,
+    Point_Orbit_Center,
     Point_Orbit_Speed,
     Point_Range,
+    Point_Cast_Shadows,
 
     Spot_Color,
     Spot_Intensity,
@@ -159,7 +160,7 @@ editor_field_exists :: proc(
              .Material_Occlusion_Map:
             return scene.has_material[index]
 
-        case .Point_Orbit_Height:
+        case .Point_Orbit_Center:
             return scene.has_point_light[index] &&
                    scene.has_transform[index]
 
@@ -168,7 +169,8 @@ editor_field_exists :: proc(
              .Point_Orbit_Enabled,
              .Point_Orbit_Radius,
              .Point_Orbit_Speed,
-             .Point_Range:
+             .Point_Range,
+             .Point_Cast_Shadows:
             return scene.has_point_light[index]
 
         case .Spot_Color,
@@ -247,12 +249,14 @@ editor_value :: proc(
             return editor_bool_value(scene.point_lights[index].orbit_enabled)
         case .Point_Orbit_Radius:
             return {scene.point_lights[index].orbit_radius, 0, 0}
-        case .Point_Orbit_Height:
-            return {scene.transforms[index].position.y, 0, 0}
+        case .Point_Orbit_Center:
+            return scene.point_lights[index].orbit_center
         case .Point_Orbit_Speed:
             return {scene.point_lights[index].orbit_speed, 0, 0}
         case .Point_Range:
             return {scene.point_lights[index].range, 0, 0}
+        case .Point_Cast_Shadows:
+            return editor_bool_value(scene.point_lights[index].cast_shadows)
         case .Spot_Color:
             return scene.spot_lights[index].color
         case .Spot_Intensity:
@@ -339,15 +343,22 @@ editor_apply_value :: proc(
         case .Point_Intensity:
             scene.point_lights[index].intensity = value[0]
         case .Point_Orbit_Enabled:
-            scene.point_lights[index].orbit_enabled = value[0] != 0
+            light := &scene.point_lights[index]
+            // Start the orbit where the light is instead of jumping onto it.
+            if value[0] != 0 && !light.orbit_enabled && scene.has_transform[index] {
+                light.orbit_center = orbit_center_through(light^, scene.transforms[index].position)
+            }
+            light.orbit_enabled = value[0] != 0
         case .Point_Orbit_Radius:
             scene.point_lights[index].orbit_radius = value[0]
-        case .Point_Orbit_Height:
-            scene.transforms[index].position.y = value[0]
+        case .Point_Orbit_Center:
+            scene.point_lights[index].orbit_center = value
         case .Point_Orbit_Speed:
             scene.point_lights[index].orbit_speed = value[0]
         case .Point_Range:
             scene.point_lights[index].range = max(value[0], 0.1)
+        case .Point_Cast_Shadows:
+            scene.point_lights[index].cast_shadows = value[0] != 0
         case .Spot_Color:
             scene.spot_lights[index].color = value
         case .Spot_Intensity:

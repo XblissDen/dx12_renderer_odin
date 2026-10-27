@@ -115,11 +115,14 @@ editor_gizmo_target :: proc(scene: ^Scene) -> (index: int, ok: bool) {
     return index, true
 }
 
-// An orbiting point light's position is driven by its orbit, not the gizmo.
-editor_gizmo_blocked :: proc(scene: ^Scene, index: int) -> bool {
-    return g_editor_gizmo.mode == .Translate &&
-           scene.has_point_light[index] &&
-           scene.point_lights[index].orbit_enabled
+// What the gizmo edits: an orbiting point light's position comes from its
+// orbit, so moving one moves the orbit's center instead (the handles stay
+// on the light).
+editor_gizmo_field :: proc(scene: ^Scene, index: int) -> EditorField {
+    if g_editor_gizmo.mode == .Translate && scene.has_point_light[index] && scene.point_lights[index].orbit_enabled {
+        return .Point_Orbit_Center
+    }
+    return gizmo_field(g_editor_gizmo.mode)
 }
 
 gizmo_project :: proc(view: GizmoView, point: alg.Vector3f32) -> (screen: [2]f32, ok: bool) {
@@ -346,7 +349,7 @@ editor_gizmo_begin :: proc(scene: ^Scene, index: int, view: GizmoView, handle: G
     editor_finish_edit()
     gizmo.active = handle
     gizmo.entity = Entity(index)
-    gizmo.field = gizmo_field(gizmo.mode)
+    gizmo.field = editor_gizmo_field(scene, index)
     gizmo.before = editor_value(scene, index, gizmo.field)
     gizmo.start_transform = transform
     gizmo.start_rotation = transform_rotation_matrix(transform.rotation)
@@ -380,7 +383,9 @@ editor_gizmo_drag :: proc(scene: ^Scene, view: GizmoView, mouse: SceneMouse) {
                 }
                 delta = snapped
             }
-            value = start.position + delta
+            // Relative to the edited field's start: the position, or an
+            // orbiting light's center.
+            value = alg.Vector3f32(gizmo.before) + delta
 
         case gizmo.active == .Center && gizmo.mode == .Scale:
             factor := math.exp((mouse.x - gizmo.start_mouse_x) * GIZMO_UNIFORM_SCALE_RATE)
@@ -410,7 +415,7 @@ editor_gizmo_drag :: proc(scene: ^Scene, view: GizmoView, mouse: SceneMouse) {
             if !ok do return
             distance := s - gizmo.start_param
             if snap do distance = gizmo_snap(distance, gizmo.snap_distance)
-            value = start.position + axis * distance
+            value = alg.Vector3f32(gizmo.before) + axis * distance
 
         case:
             // Scale along one local axis by how far the handle moved along it.
@@ -464,7 +469,7 @@ editor_update_gizmo :: proc(scene: ^Scene) {
         editor_gizmo_end(scene, false)
         return
     }
-    if !has_target || editor_gizmo_blocked(scene, index) {
+    if !has_target {
         return
     }
 

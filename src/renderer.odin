@@ -64,12 +64,15 @@ GpuLight :: struct {
     spot_offset: f32,
     direction: [3]f32, // The cone's axis; unused for point lights.
     spot_scale: f32,
-    // Spot shadow slot (spot_shadow_view_projection, spot shadow map slice),
-    // or -1 for none.
+    // Shadow slot: for a spot light, its spot_shadow_view_projection and
+    // spot shadow map slice; for a point light, its cube in the point shadow
+    // map. -1 for none.
     shadow_index: i32,
     // World size of one shadow-map texel per unit of distance along the axis.
     shadow_texel_scale: f32,
-    _pad: [2]f32,
+    // Point lights: the cube faces' near plane (the far plane is the range).
+    shadow_near: f32,
+    _pad: f32,
 }
 
 GpuMesh :: struct {
@@ -170,10 +173,12 @@ FrameConstants :: struct #align(256) {
     lights: [MAX_LIGHTS]GpuLight,
     // View-projection of each spot shadow slot (GpuLight.shadow_index).
     spot_shadow_view_projection: [SPOT_SHADOW_COUNT]alg.Matrix4f32,
+    // Each point shadow slot's six cube faces.
+    point_shadow_face_view_projection: [POINT_SHADOW_COUNT * POINT_SHADOW_FACES]alg.Matrix4f32,
 }
 
 #assert(SHADOW_CASCADE_COUNT == 4) // Packed as float4 rows in scene.hlsl.
-#assert(size_of(FrameConstants) == 2048)
+#assert(size_of(FrameConstants) == 3584)
 
 // Written per draw (b0).
 ObjectConstants :: struct #align(256) {
@@ -311,6 +316,12 @@ Renderer :: struct {
     spot_shadow_srv_index: u32,
     spot_shadow_entities: [SPOT_SHADOW_COUNT]int,
     spot_shadow_pipeline_states: [Draw_Variant]^d3d12.IPipelineState,
+    // Point light shadows: six slices (cube faces) per slot. They use the
+    // spot pipelines (same bias).
+    point_shadow_map: ^d3d12.IResource,
+    point_shadow_dsv_heap: ^d3d12.IDescriptorHeap,
+    point_shadow_srv_index: u32,
+    point_shadow_entities: [POINT_SHADOW_COUNT]int,
     shadow_pipeline_states: [Draw_Variant]^d3d12.IPipelineState,
 
     hdr_texture: ^d3d12.IResource,
@@ -523,6 +534,7 @@ renderer_init :: proc() {
     r.post_exposure = 1.0
     r.auto_exposure = DEFAULT_AUTO_EXPOSURE
     for &entity in r.spot_shadow_entities do entity = -1
+    for &entity in r.point_shadow_entities do entity = -1
     r.post_threshold = 1.0
     r.post_strength = 0.6
     r.post_tone_mapper = .ACES
@@ -680,6 +692,7 @@ Root_Slot :: enum u32 {
     Mip_Constants,       // b6: root constant, texture mip builder flags
     Exposure_Buffer,     // t16: root SRV, the automatic exposure (auto_exposure.hlsl)
     Spot_Shadows,        // t5: spot light shadow maps (one slice per slot)
+    Point_Shadows,       // t6: point light shadow cube maps (one cube per slot)
 }
 
 // SRV: a root shader-resource view of a buffer, bound by GPU address.
@@ -712,6 +725,7 @@ ROOT_LAYOUT := [Root_Slot]Root_Param{
     .Mip_Constants       = {.Constants, 6, 1, .PIXEL},
     .Exposure_Buffer     = {.SRV, 16, 0, .PIXEL},
     .Spot_Shadows        = {.Table, 5, 1, .PIXEL},
+    .Point_Shadows       = {.Table, 6, 1, .PIXEL},
 }
 
 // Binds a draw's object constants and geometry and draws its submesh range.
@@ -1339,6 +1353,7 @@ renderer_load_textures :: proc(){
 
     r.shadow_srv_index = renderer_alloc_srv()
     r.spot_shadow_srv_index = renderer_alloc_srv()
+    r.point_shadow_srv_index = renderer_alloc_srv()
     r.hdr_srv_index = renderer_alloc_srv()
     r.ldr_srv_index = renderer_alloc_srv()
     r.taa_srv_start = renderer_alloc_srv(2)
@@ -1687,6 +1702,8 @@ renderer_destroy :: proc(){
     r.shadow_dsv_heap->Release()
     r.spot_shadow_map->Release()
     r.spot_shadow_dsv_heap->Release()
+    r.point_shadow_map->Release()
+    r.point_shadow_dsv_heap->Release()
     for pso in r.spot_shadow_pipeline_states do pso->Release()
 
     r.hdr_texture->Release()

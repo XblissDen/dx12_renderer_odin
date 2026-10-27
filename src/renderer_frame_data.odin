@@ -132,6 +132,17 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     spot_shadows := renderer_select_spot_shadows(scene, camera_position)
     spot_shadow_view_projection: [SPOT_SHADOW_COUNT]alg.Matrix4f32
     spot_shadow_frustums: [SPOT_SHADOW_COUNT]Frustum
+    point_shadows := renderer_select_point_shadows(scene, camera_position)
+    point_shadow_face_view_projection: [POINT_SHADOW_COUNT * POINT_SHADOW_FACES]alg.Matrix4f32
+    point_shadow_frustums: [POINT_SHADOW_COUNT * POINT_SHADOW_FACES]Frustum
+    for shadow, slot in point_shadows {
+        if shadow.entity < 0 do continue
+        for face in 0..<POINT_SHADOW_FACES {
+            index := slot * POINT_SHADOW_FACES + face
+            point_shadow_face_view_projection[index] = shadow.face_view_projection[face]
+            point_shadow_frustums[index] = frustum_from_matrix(shadow.face_view_projection[face])
+        }
+    }
     for shadow, slot in spot_shadows {
         if shadow.entity < 0 do continue
         spot_shadow_view_projection[slot] = shadow.view_projection
@@ -155,6 +166,12 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
                 radiance = light.color * light.intensity,
                 spot_offset = 1,
                 shadow_index = -1,
+            }
+            for shadow, slot in point_shadows {
+                if shadow.entity != i do continue
+                gpu_lights[light_count].shadow_index = i32(slot)
+                gpu_lights[light_count].shadow_texel_scale = POINT_SHADOW_TEXEL_SCALE
+                gpu_lights[light_count].shadow_near = shadow.near
             }
             light_count += 1
         } else if scene.has_spot_light[i] {
@@ -347,6 +364,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         ao_show = u32(r.ao_enabled && r.ao_show),
         lights = gpu_lights,
         spot_shadow_view_projection = spot_shadow_view_projection,
+        point_shadow_face_view_projection = point_shadow_face_view_projection,
     }
 
     // Blended draws with their distance from the camera, for sorting.
@@ -383,6 +401,16 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
                 view := SHADOW_CASCADE_COUNT + slot
                 data.shadow_indices[view][data.shadow_draw_count[view]] = u32(draw_index)
                 data.shadow_draw_count[view] += 1
+            }
+            for shadow, slot in point_shadows {
+                if shadow.entity < 0 do continue
+                for face in 0..<POINT_SHADOW_FACES {
+                    index := slot * POINT_SHADOW_FACES + face
+                    if r.frustum_culling_enabled && !frustum_intersects_bounds(point_shadow_frustums[index], bounds) do continue
+                    view := POINT_SHADOW_FIRST_VIEW + index
+                    data.shadow_indices[view][data.shadow_draw_count[view]] = u32(draw_index)
+                    data.shadow_draw_count[view] += 1
+                }
             }
         }
     }

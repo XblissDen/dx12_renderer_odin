@@ -189,7 +189,7 @@ in the same frame. The "Post + UI" timing includes tone mapping and the UI draw.
   started (defaults: 0.25 units, 15°, 0.1, or 10% for uniform scale); holding
   **Ctrl** during a drag flips it. Right-click during a drag cancels it; each
   drag is one undo step. The modes, space, snapping and step sizes are in the
-  Inspector. Orbiting point lights cannot be moved.
+  Inspector. Moving an orbiting point light moves its orbit (the Orbit center).
 - **Lights**: **Add Point Light** and **Add Spot Light** (Scene panel) place a
   white light three units in front of the camera, shown by a small unlit marker
   in the light's color: a cube for point lights, a pyramid for spot lights.
@@ -202,6 +202,11 @@ in the same frame. The "Post + UI" timing includes tone mapping and the UI draw.
     base: straight down until rotated (Rotation, or the rotate gizmo). Full
     brightness inside **Inner angle**, fading smoothly to none at **Outer angle**
     (half-angles, up to 89°).
+  - **Orbit** (point lights): the light circles its **Orbit center**
+    horizontally at **Orbit radius**; the center's y is the orbit's height.
+    Turning orbit on sets the center so the light stays where it is, and the
+    move gizmo moves the whole orbit. Orbiting lights from scenes before
+    version 14 circle the origin at their saved height, as they used to.
   - Lights can be duplicated and deleted like models, with undo; a duplicated
     orbiting light starts 45° further along its orbit. The shader takes at most
     16 point and spot lights together, and adding, duplicating or undoing past
@@ -213,9 +218,17 @@ in the same frame. The "Post + UI" timing includes tone mapping and the UI draw.
     plane, culled to that view. Cutout casters work as for the sun. Sampling
     uses the sun's 5×5 tent filter; acne is handled by a slope-scaled depth bias
     on the casters plus a 1.5-texel normal offset at the receiver. The Inspector
-    says whether a light got a shadow this frame. Point lights do not cast
-    shadows yet, and unlit light markers never do. Spot lights from version 11
-    scenes load with shadows on.
+    says whether a light got a shadow this frame. Unlit light markers never cast
+    shadows. Spot lights from version 11 scenes load with shadows on.
+  - **Point light shadows** work the same way with cube maps: each frame the 4
+    shadow-casting point lights nearest the camera get six 512² faces (90°
+    views out to the range, in D3D's cube layout, each culled to its own view).
+    The shader picks the face by direction, puts the receiver's distance along
+    the dominant axis into that face's depth, and averages a 3×3 tent of
+    filtered comparisons one texel apart. Each shadowed point light redraws its
+    casters six times per frame; in the default scene both lights together add
+    about 0.03 ms. Point lights from scenes before version 13 load with shadows
+    on.
 - **L**: release/capture the mouse. Release it to interact with the panel;
   capture it for the existing WASD/mouse camera controls.
 - **F1**: hide/show the panel.

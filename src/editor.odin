@@ -252,6 +252,10 @@ editor_draw_point_light_controls :: proc(scene: ^Scene, index: int) {
     editor_color(scene, index, .Point_Color, "Light color")
     editor_slider(scene, index, .Point_Intensity, "Intensity", 0.0, 20.0)
     editor_drag_number(scene, index, .Point_Range, "Range", 0.05, 0.1, 1000.0)
+    editor_checkbox(scene, index, .Point_Cast_Shadows, "Cast shadows")
+    if light.cast_shadows {
+        editor_shadow_status(index, g_renderer.point_shadow_entities[:], "point lights")
+    }
     editor_checkbox(scene, index, .Point_Orbit_Enabled, "Orbit enabled")
 
     if light.orbit_enabled {
@@ -259,9 +263,7 @@ editor_draw_point_light_controls :: proc(scene: ^Scene, index: int) {
             scene, index, .Point_Orbit_Radius, "Orbit radius", 0.05, 0.0, 20.0,
         )
 
-        editor_drag_number(
-            scene, index, .Point_Orbit_Height, "Orbit height", 0.05, 0.0, 0.0,
-        )
+        editor_drag_vector(scene, index, .Point_Orbit_Center, "Orbit center", 0.05)
 
         editor_drag_number(
             scene, index, .Point_Orbit_Speed, "Orbit (degrees/s)",
@@ -269,8 +271,18 @@ editor_draw_point_light_controls :: proc(scene: ^Scene, index: int) {
             degrees = true,
         )
 
-        debug_ui_text("Disable orbit to edit Position manually.")
+        debug_ui_text("The orbit sets Position; the move gizmo (W)")
+        debug_ui_text("moves the whole orbit (its center).")
     }
+}
+
+// Whether a shadow-casting light got one of the shadow slots this frame.
+editor_shadow_status :: proc(index: int, slots: []int, kind: string) {
+    has_slot := false
+    for entity in slots do has_slot ||= entity == index
+    text_buffer: [96]u8
+    debug_ui_text("Shadow: on" if has_slot else fmt.bprintf(text_buffer[:],
+        "Shadow: off (only the %d nearest %s get one)", len(slots), kind))
 }
 
 editor_draw_spot_light_controls :: proc(scene: ^Scene, index: int) {
@@ -284,11 +296,7 @@ editor_draw_spot_light_controls :: proc(scene: ^Scene, index: int) {
     editor_drag_number(scene, index, .Spot_Outer_Angle, "Outer angle", 0.5, 1.0, 89.0, degrees = true)
     editor_checkbox(scene, index, .Spot_Cast_Shadows, "Cast shadows")
     if scene.spot_lights[index].cast_shadows {
-        has_slot := false
-        for entity in g_renderer.spot_shadow_entities do has_slot ||= entity == index
-        text_buffer: [96]u8
-        debug_ui_text("Shadow: on" if has_slot else fmt.bprintf(text_buffer[:],
-            "Shadow: off (only the %d nearest shadowed spots get one)", SPOT_SHADOW_COUNT))
+        editor_shadow_status(index, g_renderer.spot_shadow_entities[:], "spot lights")
     }
     debug_ui_text("Aim it with Rotation or the rotate gizmo (E):")
     debug_ui_text("it shines along the marker's base (local -Y).")

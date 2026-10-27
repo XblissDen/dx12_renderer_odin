@@ -171,6 +171,7 @@ editor_add_point_light :: proc(scene: ^Scene) {
         color = {1, 1, 1},
         intensity = intensity,
         range = light_default_range(intensity),
+        cast_shadows = true,
         orbit_radius = 2,
         orbit_speed = 0.6,
     }, nil)

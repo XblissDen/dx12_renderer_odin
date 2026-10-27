@@ -177,6 +177,8 @@ debug_ui_update :: proc() {
         stats := r.culling_stats
         spot_shadow_count := 0
         for entity in r.spot_shadow_entities do if entity >= 0 do spot_shadow_count += 1
+        point_shadow_count := 0
+        for entity in r.point_shadow_entities do if entity >= 0 do point_shadow_count += 1
         debug_ui_text(fmt.bprintf(
             text_buffer[:],
             "Scene meshes: %d/%d | Culled: %d",
@@ -187,11 +189,12 @@ debug_ui_update :: proc() {
 
         debug_ui_text(fmt.bprintf(
             text_buffer[:],
-            "Shadow draws: %d (%d casters; %d cascades, %d spot)",
+            "Shadow draws: %d (%d casters; %d cascades, %d spot, %d point)",
             stats.shadow_visible,
             stats.shadow_total,
             SHADOW_CASCADE_COUNT,
             spot_shadow_count,
+            point_shadow_count,
         ))
 
         pass_names := [GPU_PASS_COUNT]string{
