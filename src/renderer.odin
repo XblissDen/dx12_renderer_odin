@@ -49,6 +49,7 @@ GPU_Pass :: enum u32{
     TAA,
     Auto_Exposure,
     SSR,
+    Light_Clusters,
 }
 
 Vertex :: struct {
@@ -138,6 +139,7 @@ FrameConstants :: struct #align(256) {
     cascade_view_projection: [SHADOW_CASCADE_COUNT]alg.Matrix4f32,
 
     view_position: [3]f32,
+    // Point and spot lights in the light buffer (those in view).
     light_count: u32,
 
     sun_direction: [3]f32,
@@ -186,7 +188,15 @@ FrameConstants :: struct #align(256) {
     ssr_frame: u32,
     _ssr_pad: [2]f32,
 
-    lights: [MAX_LIGHTS]GpuLight,
+    // Clustered lighting (renderer_lights.odin): the depth slice of view
+    // depth z is log2(z) * cluster_depth_scale + cluster_depth_bias.
+    cluster_screen_size: [2]f32,
+    cluster_depth_scale: f32,
+    cluster_depth_bias: f32,
+    // Nonzero shows each pixel's cluster light count instead of lighting.
+    light_show_clusters: u32,
+    _cluster_pad: [3]f32,
+
     // View-projection of each spot shadow slot (GpuLight.shadow_index).
     spot_shadow_view_projection: [SPOT_SHADOW_COUNT]alg.Matrix4f32,
     // Each point shadow slot's six cube faces.
@@ -194,7 +204,7 @@ FrameConstants :: struct #align(256) {
 }
 
 #assert(SHADOW_CASCADE_COUNT == 4) // Packed as float4 rows in scene.hlsl.
-#assert(size_of(FrameConstants) == 3584)
+#assert(size_of(FrameConstants) == 2560)
 
 // Written per draw (b0).
 ObjectConstants :: struct #align(256) {
@@ -460,6 +470,17 @@ Renderer :: struct {
     // Last frame's scene color holds an image of this size to reflect.
     ssr_history_valid: bool,
 
+    // Clustered lighting (renderer_lights.odin): per-frame-slot light buffers
+    // (mapped), each cluster's light list, and the pass that builds them.
+    light_buffer: ^d3d12.IResource,
+    light_mapped_data: [^]GpuLight,
+    cluster_buffer: ^d3d12.IResource,
+    cluster_root_signature: ^d3d12.IRootSignature,
+    cluster_pipeline_state: ^d3d12.IPipelineState,
+    light_show_clusters: bool,
+    // Point and spot lights in view this frame, and in the scene (display only).
+    visible_light_count, scene_light_count: int,
+
     // Material texture mips are rendered on the GPU (texture_mips.odin), with
     // scratch views for building one texture at a time.
     mip_pipeline: ^d3d12.IPipelineState,
@@ -665,6 +686,7 @@ renderer_build_pipelines :: proc() -> (error: string) {
         renderer_create_pipelines()
         renderer_create_selection_pso()
         renderer_create_exposure_pipelines()
+        renderer_create_light_cluster_pipeline()
     }
     r.shader_collecting = true
     create()
@@ -700,6 +722,7 @@ renderer_pipeline_slots :: proc() -> []^^d3d12.IPipelineState {
         &r.taa_resolve_pipeline_state, &r.sky_pipeline_state,
         &r.irradiance_pipeline_state, &r.prefilter_pipeline_state,
         &r.ssao_pipeline_state, &r.ssao_blur_pipeline_state, &r.ssr_pipeline_state, &r.mip_pipeline,
+        &r.cluster_pipeline_state,
         &r.selection_pipeline_state,
         &r.exposure_histogram_pipeline, &r.exposure_adapt_pipeline,
     )
@@ -967,6 +990,8 @@ Root_Slot :: enum u32 {
     Point_Shadows,       // t6: point light shadow cube maps (one cube per slot)
     Surface,             // t7: view-space normal and roughness from the prepass
     Reflections,         // t17: screen-space reflections for the lit pass
+    Lights,              // t18: root SRV, this frame's visible point and spot lights
+    Cluster_Lights,      // t19: root SRV, each light cluster's light list
 }
 
 // SRV: a root shader-resource view of a buffer, bound by GPU address.
@@ -1002,6 +1027,8 @@ ROOT_LAYOUT := [Root_Slot]Root_Param{
     .Point_Shadows       = {.Table, 6, 1, .PIXEL},
     .Surface             = {.Table, 7, 1, .PIXEL},
     .Reflections         = {.Table, 17, 1, .PIXEL},
+    .Lights              = {.SRV, 18, 0, .PIXEL},
+    .Cluster_Lights      = {.SRV, 19, 0, .PIXEL},
 }
 
 // Binds a draw's object constants and geometry and draws its submesh range.
@@ -1869,6 +1896,7 @@ renderer_render_frame :: proc(scene: ^Scene) {
     renderer_render_depth_prepass(draws, visible)
     renderer_render_ssao()
     renderer_render_ssr()
+    renderer_build_light_clusters()
     transparent := frame.transparent_indices[:frame.transparent_draw_count]
     renderer_render_scene_pass(draws, visible, transparent)
 
@@ -2001,6 +2029,7 @@ renderer_destroy :: proc(){
     r.taa_rtv_heap->Release()
     r.velocity_rtv_heap->Release()
     renderer_release_ssr_targets()
+    renderer_release_light_clusters()
     r.ssr_rtv_heap->Release()
     r.selection_root_signature->Release()
 

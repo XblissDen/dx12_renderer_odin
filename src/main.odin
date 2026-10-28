@@ -20,6 +20,7 @@ main :: proc(){
 
     renderer_create_selection_root_signature()
     renderer_create_auto_exposure()
+    renderer_create_light_clusters()
     if error := renderer_build_pipelines(); error != "" do panic(error)
     renderer_load_textures()
     renderer_create_shadow_map()

@@ -206,7 +206,7 @@ debug_ui_update :: proc() {
         pass_names := [GPU_PASS_COUNT]string{
             "Shadow", "Scene", "Bloom prefilter", "Bloom downsample",
             "Bloom upsample", "Post + UI", "Depth prepass", "SSAO + blur", "FXAA / sharpen", "TAA resolve",
-            "Auto exposure", "SSR",
+            "Auto exposure", "SSR", "Light clusters",
         }
         if ui_begin_table("GPU timings") {
             ui_table_column("GPU pass")
@@ -319,6 +319,14 @@ debug_ui_shadow_controls :: proc() {
         ui_slider_float("SSR max roughness", &r.ssr_max_roughness, MIN_SSR_MAX_ROUGHNESS, MAX_SSR_MAX_ROUGHNESS)
         ui_checkbox("Show reflections only", &r.ssr_show)
     }
+
+    ui_separator()
+    text_buffer: [96]u8
+    debug_ui_text(fmt.bprintf(
+        text_buffer[:], "Point and spot lights: %d in view of %d (clustered)",
+        r.visible_light_count, r.scene_light_count,
+    ))
+    ui_checkbox("Show light clusters", &r.light_show_clusters)
 }
 
 debug_ui_environment_controls :: proc() {

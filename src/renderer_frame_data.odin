@@ -161,42 +161,47 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         spot_shadow_frustums[slot] = frustum_from_matrix(shadow.view_projection)
     }
 
-    gpu_lights: [MAX_LIGHTS]GpuLight
+    // Point and spot lights whose range reaches the view, straight into this
+    // frame's light buffer (write-combined memory: each written once, whole).
+    frame_lights := renderer_frame_lights()
     light_count := 0
+    r.scene_light_count = 0
 
     for i in 0..<scene.entity_count {
         if !scene.alive[i] || !scene.has_transform[i] {
             continue
         }
+        if !scene.has_point_light[i] && !scene.has_spot_light[i] {
+            continue
+        }
+        r.scene_light_count += 1
 
+        light: GpuLight
         if scene.has_point_light[i] {
-            assert(light_count < MAX_LIGHTS)
-            light := scene.point_lights[i]
-            gpu_lights[light_count] = GpuLight{
+            point := scene.point_lights[i]
+            light = GpuLight{
                 position = scene.transforms[i].position,
-                range = light.range,
-                radiance = light.color * light.intensity,
+                range = point.range,
+                radiance = point.color * point.intensity,
                 spot_offset = 1,
                 shadow_index = -1,
             }
             for shadow, slot in point_shadows {
                 if shadow.entity != i do continue
-                gpu_lights[light_count].shadow_index = i32(slot)
-                gpu_lights[light_count].shadow_texel_scale = POINT_SHADOW_TEXEL_SCALE
-                gpu_lights[light_count].shadow_near = shadow.near
+                light.shadow_index = i32(slot)
+                light.shadow_texel_scale = POINT_SHADOW_TEXEL_SCALE
+                light.shadow_near = shadow.near
             }
-            light_count += 1
-        } else if scene.has_spot_light[i] {
-            assert(light_count < MAX_LIGHTS)
-            light := scene.spot_lights[i]
+        } else {
+            spot := scene.spot_lights[i]
             // Full brightness inside the inner cone, none outside the outer.
-            cos_inner := math.cos(light.inner_angle)
-            cos_outer := math.cos(light.outer_angle)
+            cos_inner := math.cos(spot.inner_angle)
+            cos_outer := math.cos(spot.outer_angle)
             scale := 1 / max(cos_inner - cos_outer, 0.0001)
-            gpu_lights[light_count] = GpuLight{
+            light = GpuLight{
                 position = scene.transforms[i].position,
-                range = light.range,
-                radiance = light.color * light.intensity,
+                range = spot.range,
+                radiance = spot.color * spot.intensity,
                 direction = spot_light_direction(scene.transforms[i]),
                 spot_scale = scale,
                 spot_offset = -cos_outer * scale,
@@ -204,12 +209,25 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
             }
             for shadow, slot in spot_shadows {
                 if shadow.entity != i do continue
-                gpu_lights[light_count].shadow_index = i32(slot)
-                gpu_lights[light_count].shadow_texel_scale = shadow.texel_scale
+                light.shadow_index = i32(slot)
+                light.shadow_texel_scale = shadow.texel_scale
             }
-            light_count += 1
         }
+
+        // The range sphere's box against the camera frustum.
+        range_bounds := WorldBounds{
+            center = light.position,
+            half_axes = {{light.range, 0, 0}, {0, light.range, 0}, {0, 0, light.range}},
+            valid = true,
+        }
+        if r.frustum_culling_enabled && !frustum_intersects_bounds(camera_frustum, range_bounds) {
+            continue
+        }
+        assert(light_count < MAX_LIGHTS)
+        frame_lights[light_count] = light
+        light_count += 1
     }
+    r.visible_light_count = light_count
 
     sun: DirectionalLight
     sun_found := false
@@ -345,6 +363,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         cascade_texel_depth[i] = cascade.texel_depth
     }
 
+    cluster_depth_scale, cluster_depth_bias := light_cluster_depth_params(CAMERA_NEAR_CLIP, camera_far_clip(camera))
     r.frame_cb_mapped_data[r.frame_slot] = FrameConstants{
         view = view,
         projection = rendered_proj,
@@ -380,7 +399,10 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         ssr_enabled = u32(renderer_ssr_active()),
         ssr_stochastic = u32(r.post_anti_aliasing == .TAA),
         ssr_frame = u32(r.frame_counter),
-        lights = gpu_lights,
+        cluster_screen_size = {f32(r.width), f32(r.height)},
+        cluster_depth_scale = cluster_depth_scale,
+        cluster_depth_bias = cluster_depth_bias,
+        light_show_clusters = u32(r.light_show_clusters),
         spot_shadow_view_projection = spot_shadow_view_projection,
         point_shadow_face_view_projection = point_shadow_face_view_projection,
     }

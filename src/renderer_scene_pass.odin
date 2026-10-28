@@ -60,6 +60,8 @@ renderer_render_scene_pass :: proc(draws: []Draw, draw_indices, transparent_indi
     // Geometry
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
     renderer_bind_cbv(.Frame_Constants, renderer_frame_cb_address())
+    renderer_bind_buffer_srv(.Lights, renderer_light_buffer_address())
+    renderer_bind_buffer_srv(.Cluster_Lights, r.cluster_buffer->GetGPUVirtualAddress())
 
     renderer_draw_list(draws, draw_indices, r.hdr_pipeline_states)
 

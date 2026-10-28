@@ -267,10 +267,25 @@ in the same frame. The "Post + UI" timing includes tone mapping and the UI draw.
     move gizmo moves the whole orbit. Orbiting lights from scenes before
     version 14 circle the origin at their saved height, as they used to.
   - Lights can be duplicated and deleted like models, with undo; a duplicated
-    orbiting light starts 45° further along its orbit. The shader takes at most
-    16 point and spot lights together, and adding, duplicating or undoing past
-    that is refused with a note. The sun cannot be deleted: the renderer always
-    uses exactly one directional light.
+    orbiting light starts 45° further along its orbit. A scene can have up to
+    1024 point and spot lights together (as many as entities); past that,
+    adding, duplicating or undoing is refused with a note. The sun cannot be
+    deleted: the renderer always uses exactly one directional light.
+  - **Clustered lighting** (`src/renderer_lights.odin`): each frame, the point
+    and spot lights whose range reaches the view go into a light buffer. A
+    compute pass splits the view into 16×9 screen tiles times 24 depth slices
+    (each slice deeper than the one before, by a constant ratio from the near
+    plane to the far clip). For each of these 3456 clusters it lists the lights
+    whose range sphere touches the cluster's box, with spot lights also tested
+    against their outer cone. The lit and blended passes shade each pixel with
+    only its cluster's lights. With 240 lights in the default scene the lit
+    pass takes 0.64 ms instead of 3.5 ms looping over all of them, with the
+    same image; building the clusters takes about 0.1 ms. A cluster holds at
+    most 127 lights, and any beyond that are left out there. **Show light
+    clusters** (Renderer controls, under SSR) colors each pixel by its
+    cluster's light count: black none, then blue (1), green (4), yellow (16),
+    red (64), and white for a full cluster. The panel also shows how many
+    lights are in view.
   - **Spot light shadows**: each frame the 4 spot lights nearest the camera with
     **Cast shadows** on (the default) get a 1024² shadow map, rendered from the
     light with the outer cone as its field of view and the range as its far

@@ -4,7 +4,7 @@ import alg "core:math/linalg"
 import "core:math"
 
 MAX_ENTITIES :: 1024
-MAX_LIGHTS :: 16
+MAX_LIGHTS :: 1024 // Point and spot lights; as many as entities.
 // Material slots one entity can use: one per submesh material of its model
 // (Sponza needs 25). Slot 0 lives in Scene.materials, the rest in MaterialSlots.
 MAX_MODEL_MATERIALS :: 32

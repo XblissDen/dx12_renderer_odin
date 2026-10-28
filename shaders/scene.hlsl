@@ -1,4 +1,12 @@
-#define MAX_LIGHTS 16
+// Clustered lighting; must match renderer_lights.odin. The view is split into
+// a grid of cells, 16x9 across the screen and 24 slices in depth (spaced
+// logarithmically), and each cell lists the lights that reach it.
+#define LIGHT_CLUSTER_X 16
+#define LIGHT_CLUSTER_Y 9
+#define LIGHT_CLUSTER_Z 24
+// Each cell: its light count, then up to this many light indices.
+#define MAX_LIGHTS_PER_CLUSTER 127
+#define LIGHT_CLUSTER_STRIDE (MAX_LIGHTS_PER_CLUSTER + 1)
 #define SHADOW_CASCADE_COUNT 4
 // Must match SHADOW_NORMAL_OFFSET_TEXELS in renderer_shadow.odin.
 #define SHADOW_NORMAL_OFFSET_TEXELS 1.0f
@@ -104,10 +112,56 @@ cbuffer FrameConstants : register(b4)
     uint  ssr_frame;
     float2 _ssr_pad;
 
-    GpuLight lights[MAX_LIGHTS];
+    // Clustered lighting: the depth slice of view depth z is
+    // log2(z) * cluster_depth_scale + cluster_depth_bias.
+    float2 cluster_screen_size;
+    float  cluster_depth_scale;
+    float  cluster_depth_bias;
+    // Nonzero shows each pixel's cluster light count instead of lighting.
+    uint   light_show_clusters;
+    float3 _cluster_pad;
+
     float4x4 spot_shadow_view_projection[SPOT_SHADOW_COUNT];
     float4x4 point_shadow_face_view_projection[POINT_SHADOW_COUNT * POINT_SHADOW_FACES];
 };
+
+// The visible point and spot lights (light_count of them), and each light
+// cluster's count and light indices, built by CSBuildLightClusters.
+StructuredBuffer<GpuLight> g_lights : register(t18);
+StructuredBuffer<uint> g_cluster_lights : register(t19);
+
+// The first element of the cluster holding this pixel (SV_Position.xy) at
+// this view depth.
+uint LightClusterBase(float2 pixel, float view_depth)
+{
+    uint2 tile = min(
+        uint2(pixel / cluster_screen_size * float2(LIGHT_CLUSTER_X, LIGHT_CLUSTER_Y)),
+        uint2(LIGHT_CLUSTER_X - 1, LIGHT_CLUSTER_Y - 1)
+    );
+    // Before the first slice (closer than the near plane) counts as the first.
+    float slice = log2(max(view_depth, 0.0001f)) * cluster_depth_scale + cluster_depth_bias;
+    uint z = uint(clamp(slice, 0.0f, float(LIGHT_CLUSTER_Z - 1)));
+    return ((z * LIGHT_CLUSTER_Y + tile.y) * LIGHT_CLUSTER_X + tile.x) * LIGHT_CLUSTER_STRIDE;
+}
+
+// Light cluster view: black for none, then blue, green, yellow, red as the
+// count rises, and white for a full cluster (lights past it are dropped).
+float3 ClusterHeatColor(uint count)
+{
+    static const float3 heat[5] = {
+        float3(0.0f, 0.0f, 0.0f), float3(0.0f, 0.2f, 1.0f), float3(0.0f, 1.0f, 0.2f),
+        float3(1.0f, 1.0f, 0.0f), float3(1.0f, 0.0f, 0.0f),
+    };
+    float3 color = float3(1.0f, 1.0f, 1.0f);
+    if (count < MAX_LIGHTS_PER_CLUSTER)
+    {
+        // Steps at 1, 4, 16 and 64 lights.
+        float level = count == 0u ? 0.0f : 1.0f + log2(float(count)) * 0.5f;
+        uint low = min(uint(level), 3u);
+        color = lerp(heat[low], heat[low + 1u], saturate(level - float(low)));
+    }
+    return color;
+}
 
 // Which cascade the shadow pass is drawing.
 cbuffer ShadowCascade : register(b5)
@@ -769,9 +823,12 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
         sun_radiance
     );
 
-    for (uint i = 0; i < light_count; ++i)
+    // Only the lights listed for this pixel's cluster can reach it.
+    uint cluster_base = LightClusterBase(input.position.xy, input.view_depth);
+    uint cluster_light_count = g_cluster_lights[cluster_base];
+    for (uint i = 0; i < cluster_light_count; ++i)
     {
-        GpuLight light = lights[i];
+        GpuLight light = g_lights[g_cluster_lights[cluster_base + 1u + i]];
         float3 to_light = light.position - input.world_pos;
         float distance_squared = dot(to_light, to_light);
         float3 L = to_light * rsqrt(max(distance_squared, 0.0001f));
@@ -826,6 +883,10 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
     {
         // Linear occlusion in [0, 1]; post-processing tone maps it like any color.
         result = ambient_occlusion;
+    }
+    if (light_show_clusters != 0u)
+    {
+        result = ClusterHeatColor(cluster_light_count);
     }
 
     return float4(result, transparent ? saturate(albedo_sample.a * opacity) : 1.0f);
@@ -1132,4 +1193,86 @@ float4 PSSsr(FullscreenInput input) : SV_TARGET
         result = TraceReflection(pixel, float2(width, height), normalize(surface.xyz), surface.w);
     }
     return result;
+}
+
+// ---------------------------------------------------------------------------
+// Light clusters: one thread per cluster (a group per depth slice) tests every
+// visible light against the cluster's view-space box and lists those that
+// reach it. The lit and blended passes then loop over their cluster's list.
+
+RWStructuredBuffer<uint> g_cluster_lights_out : register(u0);
+
+// View-space point at view depth z on the screen at `ndc` (y up), with the
+// projection's TAA jitter undone like ViewPositionAt.
+float3 ViewPointAtNdc(float2 ndc, float z)
+{
+    return float3(
+        (ndc.x - projection[2][0]) * z / projection[0][0],
+        (ndc.y - projection[2][1]) * z / projection[1][1],
+        z
+    );
+}
+
+// Whether a sphere misses a spot light's cone (Bart Wronski, "Cull that
+// cone!"); `cos_angle`/`sin_angle` describe the outer angle. Positions and
+// the axis are in view space.
+bool SphereOutsideCone(float3 center, float radius, float3 apex, float3 axis, float range, float cos_angle, float sin_angle)
+{
+    float3 to_center = center - apex;
+    float along = dot(to_center, axis);
+    float across = sqrt(max(dot(to_center, to_center) - along * along, 0.0f));
+    float distance_to_cone = cos_angle * across - along * sin_angle;
+    return distance_to_cone > radius || along > range + radius || along < -radius;
+}
+
+[numthreads(LIGHT_CLUSTER_X, LIGHT_CLUSTER_Y, 1)]
+void CSBuildLightClusters(uint3 id : SV_DispatchThreadID)
+{
+    // The cluster's corners: its tile at the slice's near and far depth.
+    float near_z = exp2((float(id.z) - cluster_depth_bias) / cluster_depth_scale);
+    float far_z = exp2((float(id.z) + 1.0f - cluster_depth_bias) / cluster_depth_scale);
+    float2 tile_size = 2.0f / float2(LIGHT_CLUSTER_X, LIGHT_CLUSTER_Y);
+    float2 ndc_min = float2(-1.0f + float(id.x) * tile_size.x, 1.0f - float(id.y + 1u) * tile_size.y);
+    float2 ndc_max = ndc_min + tile_size;
+
+    float3 box_min = ViewPointAtNdc(ndc_min, near_z);
+    float3 box_max = box_min;
+    [unroll]
+    for (uint corner = 0u; corner < 8u; ++corner)
+    {
+        float2 ndc = float2((corner & 1u) ? ndc_max.x : ndc_min.x, (corner & 2u) ? ndc_max.y : ndc_min.y);
+        float3 p = ViewPointAtNdc(ndc, (corner & 4u) ? far_z : near_z);
+        box_min = min(box_min, p);
+        box_max = max(box_max, p);
+    }
+    float3 box_center = 0.5f * (box_min + box_max);
+    float box_radius = length(box_max - box_center);
+
+    uint base = ((id.z * LIGHT_CLUSTER_Y + id.y) * LIGHT_CLUSTER_X + id.x) * LIGHT_CLUSTER_STRIDE;
+    uint count = 0u;
+    for (uint i = 0u; i < light_count && count < MAX_LIGHTS_PER_CLUSTER; ++i)
+    {
+        GpuLight light = g_lights[i];
+        float3 center = mul(float4(light.position, 1.0f), view).xyz;
+        // The light's range sphere against the box.
+        float3 nearest = clamp(center, box_min, box_max);
+        float3 offset = nearest - center;
+        bool reaches = dot(offset, offset) <= light.range * light.range;
+        if (reaches && light.spot_scale > 0.0f)
+        {
+            // cone = saturate(cos * scale + offset) is zero at the outer angle.
+            float cos_outer = clamp(-light.spot_offset / light.spot_scale, -1.0f, 1.0f);
+            float3 axis = mul(light.direction, (float3x3)view);
+            reaches = !SphereOutsideCone(
+                box_center, box_radius, center, axis, light.range,
+                cos_outer, sqrt(1.0f - cos_outer * cos_outer)
+            );
+        }
+        if (reaches)
+        {
+            g_cluster_lights_out[base + 1u + count] = i;
+            ++count;
+        }
+    }
+    g_cluster_lights_out[base] = count;
 }
