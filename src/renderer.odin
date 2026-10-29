@@ -1349,6 +1349,22 @@ renderer_create_pipelines :: proc() {
         LogicOp = .NOOP,
         RenderTargetWriteMask = u8(d3d12.COLOR_WRITE_ENABLE_ALL),
     }
+    // Their motion vectors, into the prepass's velocity target: the shader's
+    // alpha (0 or 1) chooses between its motion and what is there.
+    transparent_desc.NumRenderTargets = 2
+    transparent_desc.RTVFormats[1] = .R16G16_FLOAT
+    transparent_desc.BlendState.IndependentBlendEnable = true
+    transparent_desc.BlendState.RenderTarget[1] = {
+        BlendEnable = true,
+        SrcBlend = .SRC_ALPHA,
+        DestBlend = .INV_SRC_ALPHA,
+        BlendOp = .ADD,
+        SrcBlendAlpha = .ZERO,
+        DestBlendAlpha = .ONE,
+        BlendOpAlpha = .ADD,
+        LogicOp = .NOOP,
+        RenderTargetWriteMask = u8(d3d12.COLOR_WRITE_ENABLE_MASK{.RED, .GREEN}),
+    }
     transparent_desc.DepthStencilState.DepthFunc = .LESS_EQUAL
     transparent_desc.DepthStencilState.DepthWriteMask = .ZERO
     renderer_create_pso(&transparent_desc, &r.transparent_front_pipeline_state)

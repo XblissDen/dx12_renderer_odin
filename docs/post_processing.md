@@ -40,13 +40,23 @@ position and blends it into an accumulated history (`src/renderer_taa.odin`,
   motion vectors. Where a pixel's whole 3 × 3 neighbourhood is sky, its motion
   comes from camera rotation alone: its far-plane point is reprojected with
   last frame's rotation-only camera (the sky is infinitely far, so moving the
-  camera does not move it).
+  camera does not move it). Glass in front of the sky writes no depth, so its
+  pixels look like sky here; if glass wrote a motion vector there (nonzero),
+  that wins.
+- **Glass**: blended surfaces are drawn after the prepass, so the motion
+  vectors under them belong to whatever is behind. While they draw, the
+  velocity target is bound as a second render target: each glass pixel
+  computes its own motion from this frame's and last frame's clip positions,
+  and blending replaces the existing motion where the glass's coverage
+  (albedo alpha × opacity) is at least 0.5. Thinner glass keeps the motion
+  of what is seen through it, which then dominates the pixel.
 - **Restarts**: pixels that come from outside the screen, the first frame
   after a resize, and switching TAA on all use the current frame alone.
 
 TAA runs before bloom and tone mapping, so those see a stable image; it also
-smooths SSAO noise and averages SSR's stochastic rays. Blended surfaces have no
-motion vectors, so moving glass can smear slightly.
+smooths SSAO noise and averages SSR's stochastic rays. A pixel has one motion
+vector, so where glass and what is behind it move differently, the layer that
+did not win still smears slightly.
 
 ### Sharpening
 

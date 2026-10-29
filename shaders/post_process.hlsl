@@ -579,12 +579,15 @@ float4 PSTaaResolve(VSOutput input) : SV_TARGET
     float3 box_min = mean - TAA_CLIP_SIGMA * sigma;
     float3 box_max = mean + TAA_CLIP_SIGMA * sigma;
 
-    // Nothing was drawn anywhere around this pixel: it is sky, which the
-    // prepass leaves motionless. Its motion comes from camera rotation alone.
+    // Nothing opaque was drawn anywhere around this pixel: it is sky, which
+    // the prepass leaves motionless, so its motion comes from camera rotation
+    // alone. Glass in front of the sky writes no depth but does write its
+    // motion (nonzero once anything moves), which then wins.
     float2 velocity = g_velocity.Load(int3(closest_pixel, 0));
     if (closest_depth >= 1.0f)
     {
-        velocity = SkyVelocity(input.uv);
+        float2 glass_velocity = g_velocity.Load(int3(pixel, 0));
+        velocity = any(glass_velocity != 0.0f) ? glass_velocity : SkyVelocity(input.uv);
     }
     float2 history_uv = input.uv - velocity;
     if (any(history_uv < 0.0f) || any(history_uv > 1.0f))

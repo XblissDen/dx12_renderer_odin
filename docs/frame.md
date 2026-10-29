@@ -115,8 +115,9 @@ The prepass writes two color targets alongside depth:
   same values with the same function. SSR reads it; it is cleared to roughness
   1 where nothing is drawn.
 
-Blended surfaces are not in the prepass: they write no depth, so SSAO, SSR and
-TAA's motion vectors see what is behind them.
+Blended surfaces are not in the prepass: they write no depth, so SSAO and SSR
+see what is behind them. They write their own motion vectors later, in the lit
+pass, where they are mostly opaque ([TAA](post_processing.md#taa)).
 
 ## Root signature
 

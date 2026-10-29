@@ -65,16 +65,35 @@ renderer_render_scene_pass :: proc(draws: []Draw, draw_indices, transparent_indi
 
     renderer_draw_list(draws, draw_indices, r.hdr_pipeline_states)
 
-    // Blended surfaces over the result, farthest first.
-    for draw_index in transparent_indices {
-        draw := &draws[draw_index]
-        r.command_list->SetGraphicsRootDescriptorTable(u32(Root_Slot.Material), draw.material_table)
-        if draw.variant == .Double_Sided || draw.variant == .Masked_Double_Sided {
-            r.command_list->SetPipelineState(r.transparent_back_pipeline_state)
+    // Blended surfaces over the result, farthest first. They also write their
+    // motion into the prepass's velocity target where they are mostly
+    // opaque, so TAA follows moving glass instead of what is behind it.
+    if len(transparent_indices) > 0 {
+        velocity_barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
+        velocity_barrier.Transition = {
+            pResource = r.velocity_texture,
+            StateBefore = {.PIXEL_SHADER_RESOURCE},
+            StateAfter = {.RENDER_TARGET},
+            Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+        }
+        r.command_list->ResourceBarrier(1, &velocity_barrier)
+        rtvs := [2]d3d12.CPU_DESCRIPTOR_HANDLE{hdr_rtv, renderer_velocity_rtv()}
+        r.command_list->OMSetRenderTargets(len(rtvs), &rtvs[0], false, &dsv_handle)
+
+        for draw_index in transparent_indices {
+            draw := &draws[draw_index]
+            r.command_list->SetGraphicsRootDescriptorTable(u32(Root_Slot.Material), draw.material_table)
+            if draw.variant == .Double_Sided || draw.variant == .Masked_Double_Sided {
+                r.command_list->SetPipelineState(r.transparent_back_pipeline_state)
+                renderer_draw(draws, draw_index)
+            }
+            r.command_list->SetPipelineState(r.transparent_front_pipeline_state)
             renderer_draw(draws, draw_index)
         }
-        r.command_list->SetPipelineState(r.transparent_front_pipeline_state)
-        renderer_draw(draws, draw_index)
+
+        velocity_barrier.Transition.StateBefore = {.RENDER_TARGET}
+        velocity_barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
+        r.command_list->ResourceBarrier(1, &velocity_barrier)
     }
 
     // Fog over everything, glass included (at the depth behind the glass).

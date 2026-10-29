@@ -229,6 +229,10 @@ struct PSInput
     float2 texcoord     : TEXCOORD1;
     float  view_depth   : TEXCOORD2;
     float4 tangent : TEXCOORD3;
+    // Unjittered, this frame and last: blended surfaces write their own
+    // motion vectors (PSTransparent).
+    float4 current_clip  : TEXCOORD4;
+    float4 previous_clip : TEXCOORD5;
 };
 
 // Shared by VSMain and VSDepth so both produce bit-identical depth: the lit
@@ -279,13 +283,19 @@ VelocityInput VSDepth(VSInput input)
     return output;
 }
 
-// Screen motion since last frame, in UV units (y down). TAA subtracts it to
-// find where this pixel's surface was in the history.
+// Screen motion since last frame, in UV units (y down), from a surface's
+// unjittered clip position this frame and last. TAA subtracts it to find
+// where this pixel's surface was in the history.
+float2 ScreenMotion(float4 current_clip, float4 previous_clip)
+{
+    float2 current = current_clip.xy / current_clip.w;
+    float2 previous = previous_clip.xy / previous_clip.w;
+    return (current - previous) * float2(0.5f, -0.5f);
+}
+
 float2 Velocity(VelocityInput input)
 {
-    float2 current = input.current_clip.xy / input.current_clip.w;
-    float2 previous = input.previous_clip.xy / input.previous_clip.w;
-    return (current - previous) * float2(0.5f, -0.5f);
+    return ScreenMotion(input.current_clip, input.previous_clip);
 }
 
 PSInput VSMain(VSInput input)
@@ -304,6 +314,8 @@ PSInput VSMain(VSInput input)
         mul(input.tangent.xyz, (float3x3)model),
         input.tangent.w
     );
+    output.current_clip = mul(world_pos, view_projection);
+    output.previous_clip = mul(mul(float4(input.position, 1.0f), previous_model), previous_view_projection);
 
     return output;
 }
@@ -917,11 +929,27 @@ float4 PSMain(PSInput input, bool is_front_face : SV_IsFrontFace) : SV_TARGET
     return ShadeSurface(input, is_front_face, false);
 }
 
-// Blended materials, drawn over the opaque image (alpha blending).
-float4 PSTransparent(PSInput input, bool is_front_face : SV_IsFrontFace) : SV_TARGET
+// A blended surface takes over the pixel's motion vector where it covers at
+// least this much; thinner glass leaves the motion of what is seen through it.
+#define TRANSPARENT_MOTION_COVERAGE 0.5f
+
+struct TransparentOutput
 {
-    if (unlit != 0) return UnlitColor();
-    return ShadeSurface(input, is_front_face, true);
+    float4 color  : SV_TARGET0; // Blended by alpha.
+    // Motion in xy; alpha 1 replaces the pixel's motion, 0 keeps it.
+    float4 motion : SV_TARGET1;
+};
+
+// Blended materials, drawn over the opaque image (alpha blending).
+TransparentOutput PSTransparent(PSInput input, bool is_front_face : SV_IsFrontFace)
+{
+    TransparentOutput output;
+    output.color = unlit != 0 ? UnlitColor() : ShadeSurface(input, is_front_face, true);
+    output.motion = float4(
+        ScreenMotion(input.current_clip, input.previous_clip), 0.0f,
+        output.color.a >= TRANSPARENT_MOTION_COVERAGE ? 1.0f : 0.0f
+    );
+    return output;
 }
 
 // ---------------------------------------------------------------------------
