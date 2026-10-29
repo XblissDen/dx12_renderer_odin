@@ -60,6 +60,8 @@ SceneFile :: struct {
     auto_exposure: Maybe(AutoExposureSettings),
     // Absent in files saved before SSR; they load with the defaults.
     reflections: Maybe(SceneReflectionSettings),
+    // Absent in files saved before volumetric fog; they load with it off.
+    fog: Maybe(FogSettings),
 }
 
 SceneAmbientOcclusionSettings :: struct {
@@ -317,6 +319,7 @@ scene_save_to_file :: proc(scene: ^Scene, path: string) -> (ok: bool, message: s
             thickness = g_renderer.ssr_thickness,
             max_roughness = g_renderer.ssr_max_roughness,
         },
+        fog = g_renderer.fog,
     }
 
     data, encode_error := json.marshal(file, json.Marshal_Options{
@@ -476,6 +479,14 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
        !(reflections.max_roughness >= MIN_SSR_MAX_ROUGHNESS && reflections.max_roughness <= MAX_SSR_MAX_ROUGHNESS) {
         return false, "Invalid reflection settings."
     }
+    fog, has_fog := file.fog.(FogSettings)
+    if !has_fog {
+        fog = renderer_default_fog_settings()
+        fog.enabled = false
+    }
+    if !fog_settings_valid(fog) {
+        return false, "Invalid fog settings."
+    }
     environment, has_environment := file.environment.(EnvironmentSettings)
     defaults := renderer_default_environment_settings()
     if !has_environment {
@@ -534,6 +545,7 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
     g_renderer.ssr_max_distance = reflections.max_distance
     g_renderer.ssr_thickness = reflections.thickness
     g_renderer.ssr_max_roughness = reflections.max_roughness
+    g_renderer.fog = fog
 
     commited = true
     return true, "Scene loaded."

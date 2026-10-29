@@ -30,7 +30,7 @@ textures and draws onto the back buffer after tone mapping and anti-aliasing,
 so text stays sharp.
 
 - **Renderer controls**: shader reload status, exposure, bloom, tone mapping,
-  anti-aliasing, the environment, shadows, SSAO, SSR, light clusters,
+  anti-aliasing, the environment, shadows, SSAO, SSR, light clusters, fog,
   statistics, and GPU timings per pass. **Show ImGui demo** opens ImGui's
   own demo window.
 - **Scene**: add models and lights, undo and redo, duplicate, delete, focus,
@@ -147,7 +147,7 @@ shade and cast shadows.
 
 **Save Scene** and **Load Scene** write and read `scene.json`
 (`src/scene_file.odin`): every live entity with its components, plus the
-renderer settings (post-processing, environment, shadows, SSAO, SSR, auto
+renderer settings (post-processing, environment, shadows, SSAO, SSR, fog, auto
 exposure). Assets are referenced by catalog ID.
 
 - **Validation**: a file is checked completely before anything changes. Every
@@ -158,7 +158,7 @@ exposure). Assets are referenced by catalog ID.
 - **Versions**: the format is at version 15. Newer settings are optional
   sections or fields, and a file without one gets a default. Where a feature
   changed how existing scenes look, the default keeps the old look: Reinhard
-  tone mapping, FXAA, no sharpening, auto exposure off, light ranges matching
-  the old falloff, and orbits around the origin. Older lights load with
-  shadows on. Versions 1–5, which stored the component arrays directly, are
-  converted on load.
+  tone mapping, FXAA, no sharpening, auto exposure off, no volumetric fog,
+  light ranges matching the old falloff, and orbits around the origin. Older
+  lights load with shadows on. Versions 1–5, which stored the component arrays
+  directly, are converted on load.

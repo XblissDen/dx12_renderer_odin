@@ -43,7 +43,8 @@ therefore two frames old. Presentation uses vsync.
 | SSAO | Ambient occlusion from depth, then a depth-aware blur | [Lighting](lighting.md#ambient-occlusion-ssao) |
 | SSR | Reflections traced through depth, read from last frame's image | [Lighting](lighting.md#screen-space-reflections-ssr) |
 | Light clusters | Compute pass listing the lights that reach each view cluster | [Lighting](lighting.md#clustered-lighting) |
-| Scene | Sky, then lit opaque surfaces, then blended surfaces back to front, into the HDR target | [Lighting](lighting.md) |
+| Volumetric fog | Compute passes lighting the fog's cells and integrating them front to back | [Lighting](lighting.md#volumetric-fog) |
+| Scene | Sky, then lit opaque surfaces, then blended surfaces back to front, then the fog, into the HDR target | [Lighting](lighting.md) |
 | TAA | Blends the frame into the reprojected history, in HDR | [Post-processing](post_processing.md#taa) |
 | Auto exposure | Luminance histogram and exposure adaptation (compute) | [Post-processing](post_processing.md#auto-exposure) |
 | Bloom | Threshold, downsample chain, upsample chain | [Post-processing](post_processing.md#bloom) |
@@ -75,7 +76,7 @@ GPU data every frame:
 - **Frame constants** (`FrameConstants`, one 256-byte-aligned block): camera
   matrices (jittered for TAA, and unjittered for motion vectors, this frame
   and last), the sun, environment and ambient settings, shadow matrices and
-  cascade data, SSAO, SSR and light-cluster settings, and the debug view
+  cascade data, SSAO, SSR, light-cluster and fog settings, and the debug view
   flags.
 - **Lights**: the point and spot lights in view, written straight into this
   frame's slice of the light buffer (see [Clustered
@@ -143,7 +144,7 @@ Static samplers: linear wrap (s0), shadow comparison with a white border (s1),
 16× anisotropic for materials (s2), panoramas wrapping horizontally but
 clamped at the poles (s3), and clamp-to-edge for screen-space lookups (s4).
 
-Compute passes (auto exposure, light clusters) and the selection box have their
+Compute passes (auto exposure, light clusters, fog) and the selection box have their
 own small root signatures.
 
 ## GPU timings

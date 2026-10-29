@@ -206,7 +206,7 @@ debug_ui_update :: proc() {
         pass_names := [GPU_PASS_COUNT]string{
             "Shadow", "Scene", "Bloom prefilter", "Bloom downsample",
             "Bloom upsample", "Post + UI", "Depth prepass", "SSAO + blur", "FXAA / sharpen", "TAA resolve",
-            "Auto exposure", "SSR", "Light clusters",
+            "Auto exposure", "SSR", "Light clusters", "Volumetric fog",
         }
         if ui_begin_table("GPU timings") {
             ui_table_column("GPU pass")
@@ -327,6 +327,19 @@ debug_ui_shadow_controls :: proc() {
         r.visible_light_count, r.scene_light_count,
     ))
     ui_checkbox("Show light clusters", &r.light_show_clusters)
+
+    ui_separator()
+    fog := &r.fog
+    ui_checkbox("Volumetric fog", &fog.enabled)
+    if fog.enabled {
+        ui_slider_float("Fog density", &fog.density, 0, MAX_FOG_DENSITY)
+        ui_slider_float("Fog height", &fog.height, MIN_FOG_HEIGHT, MAX_FOG_HEIGHT)
+        ui_slider_float("Fog height falloff", &fog.height_falloff, 0, MAX_FOG_HEIGHT_FALLOFF)
+        ui_color_edit3("Fog color", &fog.color)
+        ui_slider_float("Fog anisotropy", &fog.anisotropy, -MAX_FOG_ANISOTROPY, MAX_FOG_ANISOTROPY)
+        ui_slider_float("Fog sky light", &fog.ambient, 0, MAX_FOG_AMBIENT)
+        ui_slider_float("Fog distance", &fog.distance, MIN_FOG_DISTANCE, MAX_FOG_DISTANCE)
+    }
 }
 
 debug_ui_environment_controls :: proc() {

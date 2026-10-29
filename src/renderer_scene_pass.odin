@@ -77,6 +77,10 @@ renderer_render_scene_pass :: proc(draws: []Draw, draw_indices, transparent_indi
         renderer_draw(draws, draw_index)
     }
 
+    // Fog over everything, glass included (at the depth behind the glass).
+    r.command_list->OMSetRenderTargets(1, &hdr_rtv, false, nil)
+    renderer_apply_fog()
+
     // Scene render target becomes a shader input.
     hdr_barrier.Transition.StateBefore = {.RENDER_TARGET}
     hdr_barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}

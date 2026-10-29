@@ -363,6 +363,13 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         cascade_texel_depth[i] = cascade.texel_depth
     }
 
+    // Sky light reaching the fog: the panorama's average radiance, or the
+    // ambient color, the same light the IBL gives surfaces.
+    fog_ambient := r.environment_settings.ambient_color * r.environment_settings.ambient_intensity
+    if r.environment_settings.ambient_mode == .HDRI {
+        fog_ambient = r.environment_average_radiance * r.environment_settings.intensity
+    }
+    fog_ambient *= r.fog.ambient
     cluster_depth_scale, cluster_depth_bias := light_cluster_depth_params(CAMERA_NEAR_CLIP, camera_far_clip(camera))
     r.frame_cb_mapped_data[r.frame_slot] = FrameConstants{
         view = view,
@@ -403,6 +410,16 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         cluster_depth_scale = cluster_depth_scale,
         cluster_depth_bias = cluster_depth_bias,
         light_show_clusters = u32(r.light_show_clusters),
+        fog_albedo = r.fog.color,
+        fog_density = r.fog.density,
+        fog_ambient = fog_ambient,
+        fog_height = r.fog.height,
+        fog_height_falloff = r.fog.height_falloff,
+        fog_anisotropy = r.fog.anisotropy,
+        fog_max_distance = r.fog.distance,
+        // Last frame's volume maps onto this one only at the same distance.
+        fog_history_valid = u32(r.fog_history_ready && r.fog_history_distance == r.fog.distance),
+        fog_frame = u32(r.frame_counter),
         spot_shadow_view_projection = spot_shadow_view_projection,
         point_shadow_face_view_projection = point_shadow_face_view_projection,
     }

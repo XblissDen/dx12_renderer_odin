@@ -203,6 +203,52 @@ the pixel covers, not from UV derivatives. Derivatives go wrong where the
 panorama's U wraps around and near the poles, both of which would show the
 smallest mip.
 
+## Volumetric fog
+
+Fog that scatters light: haze in the distance, glow around lights, and shafts
+where shadows cut through sunlight or a spot light's cone
+(`src/renderer_fog.odin`, `CSFogInject`, `CSFogIntegrate` and `PSFogApply` in
+`scene.hlsl`). It costs about 0.15 ms.
+
+1. **Cells**: the view out to **Fog distance** (default 64) is divided into
+   160 × 90 × 64 cells aligned with the screen ("froxels"), stored in 3D
+   textures. Cell depth grows with the square of the slice index, so cells are
+   thin near the camera and deep in the distance. The grid does not depend on
+   the window size.
+2. **Inject** (compute): each cell computes its density and the light it
+   scatters towards the camera:
+   - Density is **Fog density** (extinction per unit) at or below **Fog
+     height**, falling off exponentially above it by **Fog height falloff**.
+   - The sun, through its shadow cascades (one comparison per cell), and every
+     point and spot light in the cell's light cluster, with their shadow maps.
+     Each is weighted by the Henyey-Greenstein phase function with **Fog
+     anisotropy** g. Positive g scatters forward, so fog glows towards a
+     light in front of the camera.
+   - Sky light, which reaches the fog evenly from every direction: the
+     panorama's average radiance (computed when its maps are baked, without the
+     sun when that was extracted), or the ambient color, times **Fog sky
+     light**.
+   - The result, scattered light times **Fog color**, is stored with the
+     extinction.
+3. **Temporal blend**: each frame, a cell samples at a different depth within
+   itself, and the result is blended 10% into the cell's value from last frame,
+   found by reprojecting the cell's center with last frame's camera. This
+   averages out banding between slices, without relying on TAA. History
+   restarts when fog is turned on or the fog distance changes.
+4. **Integrate** (compute): each column of cells is marched front to back. Each
+   cell stores the light scattered towards the camera up to its far end and the
+   transmittance from the camera to there, integrated over the cell's
+   thickness along the ray as in Frostbite (Hillaire, 2015).
+5. **Apply**: after the lit and blended passes, a full-screen pass looks up
+   each pixel's depth in the integrated volume (trilinear) and blends:
+   `color × transmittance + scattered`. Sky pixels get the fog out to the fog
+   distance.
+
+Limitations: sky light in the fog is not occluded, so enclosed spaces get the
+same sky glow as open ones; lower **Fog sky light** indoors. Blended surfaces
+are fogged at the depth of what is behind them. SSR reflects last frame's image
+with its fog already applied.
+
 ## Ambient occlusion (SSAO)
 
 SSAO darkens ambient light in creases and where objects meet, from the

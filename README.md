@@ -10,7 +10,8 @@ written in Odin on DirectX 12, with a Dear ImGui interface.
   panoramas, with the panorama's sun extracted as a shadowed light.
 - **Shadows**: four cascaded sun shadow maps, plus shadow maps for the four
   nearest spot lights and cube maps for the four nearest point lights.
-- **Screen-space effects**: ambient occlusion (SSAO) and reflections (SSR).
+- **Screen-space and volumetric effects**: ambient occlusion (SSAO),
+  reflections (SSR), and volumetric fog with light shafts.
 - **Post-processing**: TAA with sharpening or FXAA, auto exposure, bloom, and
   ACES, AgX or Reinhard tone mapping.
 - **Assets**: OBJ and glTF 2.0 import with materials (normal, roughness and

@@ -121,6 +121,19 @@ cbuffer FrameConstants : register(b4)
     uint   light_show_clusters;
     float3 _cluster_pad;
 
+    // Volumetric fog (renderer_fog.odin). Density is extinction per unit at
+    // or below fog_height, falling off exponentially above it.
+    float3 fog_albedo;
+    float  fog_density;
+    float3 fog_ambient; // Radiance reaching the fog evenly from every direction.
+    float  fog_height;
+    float  fog_height_falloff;
+    float  fog_anisotropy; // Henyey-Greenstein g.
+    float  fog_max_distance;
+    uint   fog_history_valid;
+    uint   fog_frame;
+    float3 _fog_pad;
+
     float4x4 spot_shadow_view_projection[SPOT_SHADOW_COUNT];
     float4x4 point_shadow_face_view_projection[POINT_SHADOW_COUNT * POINT_SHADOW_FACES];
 };
@@ -1275,4 +1288,206 @@ void CSBuildLightClusters(uint3 id : SV_DispatchThreadID)
         }
     }
     g_cluster_lights_out[base] = count;
+}
+
+// ---------------------------------------------------------------------------
+// Volumetric fog: a grid of view-aligned cells (froxels) out to
+// fog_max_distance. CSFogInject computes each cell's density and the light it
+// scatters towards the camera, blended with last frame's result;
+// CSFogIntegrate accumulates scattering and transmittance front to back; and
+// PSFogApply blends the result over the lit image. Must match renderer_fog.odin.
+
+#define FOG_X 160
+#define FOG_Y 90
+#define FOG_Z 64
+// Share of the new frame when blending with the reprojected history.
+#define FOG_HISTORY_BLEND 0.1f
+
+// Inject: last frame's cells. Integrate: this frame's. Apply: the integrated
+// volume.
+Texture3D<float4> g_fog_volume : register(t0);
+RWTexture3D<float4> g_fog_output : register(u0);
+
+// Cell depth is quadratic in the slice coordinate w (0 to 1), so cells are
+// thin near the camera, where detail shows, and deep in the distance.
+float FogSliceDepth(float w)
+{
+    return fog_max_distance * w * w;
+}
+
+float FogSliceCoordinate(float view_depth)
+{
+    return sqrt(saturate(view_depth / fog_max_distance));
+}
+
+// Share of light scattered by angle theta from its direction of travel.
+float HenyeyGreenstein(float cos_theta, float g)
+{
+    float g2 = g * g;
+    return (1.0f - g2) / (4.0f * PI * pow(max(1.0f + g2 - 2.0f * g * cos_theta, 0.0001f), 1.5f));
+}
+
+float FogDensity(float3 world_pos)
+{
+    return fog_density * exp(-fog_height_falloff * max(world_pos.y - fog_height, 0.0f));
+}
+
+// Sun visibility from the shadow cascades: one comparison tap, since the fog
+// is soft and the history averages the cells' jittered positions.
+float FogSunVisibility(float3 world_pos, float view_depth, float view_distance)
+{
+    uint cascade = SHADOW_CASCADE_COUNT;
+    [unroll]
+    for (uint c = SHADOW_CASCADE_COUNT; c > 0u; --c)
+    {
+        if (view_depth < cascade_split_depth[c - 1u]) cascade = c - 1u;
+    }
+    float visibility = 1.0f;
+    if (cascade < SHADOW_CASCADE_COUNT)
+    {
+        float4 clip = mul(float4(world_pos, 1.0f), cascade_view_projection[cascade]);
+        float3 ndc = clip.xyz / clip.w;
+        float2 uv = float2(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f);
+        if (all(uv >= 0.0f) && all(uv <= 1.0f) && ndc.z <= 1.0f)
+        {
+            float bias = shadow_bias_constant * cascade_texel_depth[cascade];
+            visibility = g_shadow_map.SampleCmpLevelZero(
+                g_shadow_sampler, float3(uv, float(cascade)), ndc.z - bias
+            );
+        }
+    }
+    // Fades out like the lit pass's sun shadows.
+    float fade = saturate((view_distance - shadow_fade_start) / max(shadow_fade_end - shadow_fade_start, 0.0001f));
+    return lerp(visibility, 1.0f, fade);
+}
+
+// The world position at slice coordinate w in the column of `cell`.
+float3 FogCellWorldPosition(uint2 cell, float w, out float view_depth, out float view_distance)
+{
+    float2 uv = (float2(cell) + 0.5f) / float2(FOG_X, FOG_Y);
+    view_depth = max(FogSliceDepth(w), ViewDepthFromDevice(0.0f));
+    float3 view_pos = ViewPointAtNdc(float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f), view_depth);
+    view_distance = length(view_pos);
+    // The view matrix is orthonormal: its transpose rotates back to world.
+    return view_position + mul((float3x3)view, view_pos);
+}
+
+[numthreads(8, 8, 1)]
+void CSFogInject(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id >= uint3(FOG_X, FOG_Y, FOG_Z))) return;
+
+    // Sample at a different depth within the cell each frame; the history
+    // blend averages them, so thin shadows do not band between slices.
+    float jitter = 0.5f;
+    if (fog_history_valid != 0u)
+    {
+        jitter = frac(InterleavedGradientNoise(float2(id.xy) + float(id.z) * 7.13f) + float(fog_frame % 64u) * 0.618034f);
+    }
+    float view_depth, view_distance;
+    float3 world_pos = FogCellWorldPosition(id.xy, (float(id.z) + jitter) / FOG_Z, view_depth, view_distance);
+    float3 to_camera = normalize(view_position - world_pos);
+    float density = FogDensity(world_pos);
+
+    // Sky light arrives evenly from all directions, so its phase integrates to 1.
+    float3 light = fog_ambient;
+
+    float3 sun_L = normalize(-sun_direction);
+    light += sun_color * sun_intensity *
+             FogSunVisibility(world_pos, view_depth, view_distance) *
+             HenyeyGreenstein(dot(-sun_L, to_camera), fog_anisotropy);
+
+    // Point and spot lights through the light clusters, with their shadows.
+    float2 cluster_pixel = (float2(id.xy) + 0.5f) / float2(FOG_X, FOG_Y) * cluster_screen_size;
+    uint cluster_base = LightClusterBase(cluster_pixel, view_depth);
+    uint cluster_light_count = g_cluster_lights[cluster_base];
+    for (uint i = 0u; i < cluster_light_count; ++i)
+    {
+        GpuLight local = g_lights[g_cluster_lights[cluster_base + 1u + i]];
+        float3 to_light = local.position - world_pos;
+        float distance_squared = dot(to_light, to_light);
+        float3 L = to_light * rsqrt(max(distance_squared, 0.0001f));
+        float distance_ratio_squared = distance_squared / (local.range * local.range);
+        float window = saturate(1.0f - distance_ratio_squared * distance_ratio_squared);
+        float attenuation = window * window / (1.0f + distance_squared);
+        float cone = saturate(dot(-L, local.direction) * local.spot_scale + local.spot_offset);
+        float shadow = 1.0f;
+        [branch]
+        if (attenuation * cone > 0.0f)
+        {
+            shadow = local.spot_scale > 0.0f
+                ? SpotShadowVisibility(local, world_pos, float3(0.0f, 0.0f, 0.0f))
+                : PointShadowVisibility(local, world_pos, float3(0.0f, 0.0f, 0.0f));
+        }
+        light += local.radiance * attenuation * cone * cone * shadow *
+                 HenyeyGreenstein(dot(-L, to_camera), fog_anisotropy);
+    }
+
+    // Light scattered towards the camera per unit length, and extinction.
+    float4 result = float4(fog_albedo * density * light, density);
+
+    // Blend with where this cell's center was in last frame's volume.
+    if (fog_history_valid != 0u)
+    {
+        float center_depth, center_distance;
+        float3 center = FogCellWorldPosition(id.xy, (float(id.z) + 0.5f) / FOG_Z, center_depth, center_distance);
+        float4 previous_clip = mul(float4(center, 1.0f), previous_view_projection);
+        if (previous_clip.w > 0.0f)
+        {
+            float3 previous = float3(ClipToUv(previous_clip), FogSliceCoordinate(previous_clip.w));
+            if (all(previous >= 0.0f) && all(previous <= 1.0f))
+            {
+                float4 history = g_fog_volume.SampleLevel(g_clamp_sampler, previous, 0);
+                result = lerp(history, result, FOG_HISTORY_BLEND);
+            }
+        }
+    }
+    g_fog_output[id] = result;
+}
+
+// Marches each column of cells front to back. Each cell stores the light
+// scattered towards the camera and the transmittance from the camera to its
+// far end.
+[numthreads(8, 8, 1)]
+void CSFogIntegrate(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id.xy >= uint2(FOG_X, FOG_Y))) return;
+
+    // Distance along this column's ray per unit of view depth.
+    float2 uv = (float2(id.xy) + 0.5f) / float2(FOG_X, FOG_Y);
+    float ray_scale = length(ViewPointAtNdc(float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f), 1.0f));
+
+    float3 scattered = 0.0f;
+    float transmittance = 1.0f;
+    float previous_depth = 0.0f;
+    for (uint z = 0u; z < FOG_Z; ++z)
+    {
+        float depth = FogSliceDepth(float(z + 1u) / FOG_Z);
+        float thickness = (depth - previous_depth) * ray_scale;
+        previous_depth = depth;
+
+        float4 cell = g_fog_volume.Load(int4(id.xy, z, 0));
+        float extinction = max(cell.a, 0.000001f);
+        float cell_transmittance = exp(-extinction * thickness);
+        // Scattering integrated over the cell, dimmed by the cell itself
+        // (Hillaire, "Physically Based and Unified Volumetric Rendering in
+        // Frostbite", 2015), then by everything in front of it.
+        scattered += transmittance * (cell.rgb - cell.rgb * cell_transmittance) / extinction;
+        transmittance *= cell_transmittance;
+        g_fog_output[uint3(id.xy, z)] = float4(scattered, transmittance);
+    }
+}
+
+// Blends the fog in front of each pixel over the lit image: the pipeline
+// computes fog.rgb + scene * fog.a.
+float4 PSFogApply(FullscreenInput input) : SV_TARGET
+{
+    float view_depth = ViewDepthFromDevice(g_depth.Load(int3(input.position.xy, 0)));
+    float w = FogSliceCoordinate(view_depth);
+    // Cell z holds the fog up to its far end, its texel center plus half a
+    // cell. Closer than the first cell's end, fade in from no fog.
+    float4 fog = g_fog_volume.SampleLevel(
+        g_clamp_sampler, float3(input.uv, max(w - 0.5f / FOG_Z, 0.5f / FOG_Z)), 0
+    );
+    return lerp(float4(0.0f, 0.0f, 0.0f, 1.0f), fog, saturate(w * FOG_Z));
 }

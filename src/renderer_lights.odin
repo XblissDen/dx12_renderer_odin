@@ -125,7 +125,8 @@ renderer_build_light_clusters :: proc() {
     r.command_list->Dispatch(1, 1, LIGHT_CLUSTER_Z)
 
     barrier.Transition.StateBefore = {.UNORDERED_ACCESS}
-    barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
+    // Read by the lit pass and the fog's compute pass.
+    barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE, .NON_PIXEL_SHADER_RESOURCE}
     r.command_list->ResourceBarrier(1, &barrier)
     renderer_end_gpu_pass(.Light_Clusters)
 }

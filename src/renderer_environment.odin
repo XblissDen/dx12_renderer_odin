@@ -171,6 +171,22 @@ hdri_row_solid_angle :: proc(y, width, height: int) -> f64 {
     return (2 * math.PI / f64(width)) * (math.PI / f64(height)) * math.sin(theta)
 }
 
+// The panorama's radiance averaged over the sphere (rows weighted by their
+// solid angle): the light something receives from every direction equally.
+hdri_average_radiance :: proc(pixels: []f32, width, height: int) -> [3]f32 {
+    sum: [3]f64
+    for y in 0..<height {
+        row: [3]f64
+        for x in 0..<width {
+            i := (y * width + x) * 4
+            for c in 0..<3 do row[c] += f64(pixels[i + c])
+        }
+        weight := hdri_row_solid_angle(y, width, height)
+        for c in 0..<3 do sum[c] += row[c] * weight
+    }
+    return {f32(sum[0] / (4 * math.PI)), f32(sum[1] / (4 * math.PI)), f32(sum[2] / (4 * math.PI))}
+}
+
 // The HDRI sun as a world-space directional light, when it drives the scene.
 renderer_hdri_sun :: proc() -> (light: DirectionalLight, ok: bool) {
     r := &g_renderer
@@ -311,6 +327,8 @@ renderer_load_environment :: proc(path: string, load_sky, bake, remove_sun: bool
         if error != "" do return error
         source_srv_index = r.environment_bake_srv_index
     }
+
+    r.environment_average_radiance = hdri_average_radiance(pixels, int(width), int(height))
 
     if r.irradiance_texture == nil do renderer_create_irradiance_map()
     if r.prefilter_texture == nil do renderer_create_prefiltered_environment()

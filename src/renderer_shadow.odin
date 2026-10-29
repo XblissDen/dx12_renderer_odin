@@ -46,6 +46,10 @@ SPOT_SHADOW_DEPTH_BIAS :: 0
 SPOT_SHADOW_SLOPE_BIAS :: f32(2.0)
 SPOT_SHADOW_NORMAL_OFFSET_TEXELS :: f32(1.5)
 
+// Between shadow passes the maps are read by the lit pass and by the
+// volumetric fog's compute pass.
+SHADOW_READ_STATE :: d3d12.RESOURCE_STATES{.PIXEL_SHADER_RESOURCE, .NON_PIXEL_SHADER_RESOURCE}
+
 // The spot light's view of its cone: the cone's outer angle is the field of
 // view and its range the far plane.
 SpotShadow :: struct {
@@ -284,7 +288,7 @@ renderer_create_shadow_map :: proc() {
     )
 }
 
-// A square depth texture array for shadows, left in PIXEL_SHADER_RESOURCE
+// A square depth texture array for shadows, left in SHADOW_READ_STATE
 // state: one depth view per slice, and a shader view of every slice at
 // `srv_index`: an array of 2D maps, or with `cube` of cube maps (six
 // slices each).
@@ -313,7 +317,7 @@ renderer_create_shadow_array :: proc(size, slices, srv_index: u32, cube := false
         &heap_props,
         {},
         &shadow_desc,
-        {.PIXEL_SHADER_RESOURCE},
+        SHADOW_READ_STATE,
         &clear_value,
         d3d12.IResource_UUID,
         (^rawptr)(&texture),
@@ -375,7 +379,7 @@ renderer_render_shadow_pass :: proc(
     shadow_barrier := d3d12.RESOURCE_BARRIER {Type = .TRANSITION}
     shadow_barrier.Transition = {
         pResource = r.shadow_map,
-        StateBefore = {.PIXEL_SHADER_RESOURCE},
+        StateBefore = SHADOW_READ_STATE,
         StateAfter = {.DEPTH_WRITE},
         Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
     }
@@ -419,13 +423,13 @@ renderer_render_shadow_pass :: proc(
     }
 
     shadow_barrier.Transition.StateBefore = {.DEPTH_WRITE}
-    shadow_barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
+    shadow_barrier.Transition.StateAfter = SHADOW_READ_STATE
     r.command_list->ResourceBarrier(1, &shadow_barrier)
 
     // Spot lights: one slice per used slot, drawn with the bias pipelines.
     // VSShadow reads view SHADOW_CASCADE_COUNT + slot.
     shadow_barrier.Transition.pResource = r.spot_shadow_map
-    shadow_barrier.Transition.StateBefore = {.PIXEL_SHADER_RESOURCE}
+    shadow_barrier.Transition.StateBefore = SHADOW_READ_STATE
     shadow_barrier.Transition.StateAfter = {.DEPTH_WRITE}
     r.command_list->ResourceBarrier(1, &shadow_barrier)
     spot_viewport := d3d12.VIEWPORT{Width = SPOT_SHADOW_MAP_SIZE, Height = SPOT_SHADOW_MAP_SIZE, MaxDepth = 1}
@@ -444,12 +448,12 @@ renderer_render_shadow_pass :: proc(
         renderer_draw_list(draws, view_draws[view], r.spot_shadow_pipeline_states)
     }
     shadow_barrier.Transition.StateBefore = {.DEPTH_WRITE}
-    shadow_barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
+    shadow_barrier.Transition.StateAfter = SHADOW_READ_STATE
     r.command_list->ResourceBarrier(1, &shadow_barrier)
 
     // Point lights: six cube faces per used slot, with the spot pipelines.
     shadow_barrier.Transition.pResource = r.point_shadow_map
-    shadow_barrier.Transition.StateBefore = {.PIXEL_SHADER_RESOURCE}
+    shadow_barrier.Transition.StateBefore = SHADOW_READ_STATE
     shadow_barrier.Transition.StateAfter = {.DEPTH_WRITE}
     r.command_list->ResourceBarrier(1, &shadow_barrier)
     point_viewport := d3d12.VIEWPORT{Width = POINT_SHADOW_MAP_SIZE, Height = POINT_SHADOW_MAP_SIZE, MaxDepth = 1}
@@ -471,7 +475,7 @@ renderer_render_shadow_pass :: proc(
         }
     }
     shadow_barrier.Transition.StateBefore = {.DEPTH_WRITE}
-    shadow_barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
+    shadow_barrier.Transition.StateAfter = SHADOW_READ_STATE
     r.command_list->ResourceBarrier(1, &shadow_barrier)
 
     renderer_end_gpu_pass(.Shadow)

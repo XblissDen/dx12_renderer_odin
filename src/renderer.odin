@@ -50,6 +50,7 @@ GPU_Pass :: enum u32{
     Auto_Exposure,
     SSR,
     Light_Clusters,
+    Fog,
 }
 
 Vertex :: struct {
@@ -197,6 +198,21 @@ FrameConstants :: struct #align(256) {
     light_show_clusters: u32,
     _cluster_pad: [3]f32,
 
+    // Volumetric fog (renderer_fog.odin). Density is extinction per unit at
+    // or below fog_height, falling off exponentially above it.
+    fog_albedo: [3]f32,
+    fog_density: f32,
+    // Radiance reaching the fog evenly from every direction.
+    fog_ambient: [3]f32,
+    fog_height: f32,
+    fog_height_falloff: f32,
+    // Henyey-Greenstein g.
+    fog_anisotropy: f32,
+    fog_max_distance: f32,
+    fog_history_valid: u32,
+    fog_frame: u32,
+    _fog_pad: [3]f32,
+
     // View-projection of each spot shadow slot (GpuLight.shadow_index).
     spot_shadow_view_projection: [SPOT_SHADOW_COUNT]alg.Matrix4f32,
     // Each point shadow slot's six cube faces.
@@ -204,7 +220,7 @@ FrameConstants :: struct #align(256) {
 }
 
 #assert(SHADOW_CASCADE_COUNT == 4) // Packed as float4 rows in scene.hlsl.
-#assert(size_of(FrameConstants) == 2560)
+#assert(size_of(FrameConstants) == 2816)
 
 // Written per draw (b0).
 ObjectConstants :: struct #align(256) {
@@ -481,6 +497,18 @@ Renderer :: struct {
     // Point and spot lights in view this frame, and in the scene (display only).
     visible_light_count, scene_light_count: int,
 
+    // Volumetric fog (renderer_fog.odin): the settings, the cell volumes (two
+    // written in turn, then the integrated one) with their SRVs and UAVs, and
+    // whether the volume last written can serve as history at this distance.
+    fog: FogSettings,
+    fog_volumes: [FOG_VOLUME_COUNT]^d3d12.IResource,
+    fog_srv_start, fog_uav_start: u32,
+    fog_root_signature: ^d3d12.IRootSignature,
+    fog_inject_pipeline_state, fog_integrate_pipeline_state, fog_apply_pipeline_state: ^d3d12.IPipelineState,
+    fog_write_index: int,
+    fog_history_ready: bool,
+    fog_history_distance: f32,
+
     // Material texture mips are rendered on the GPU (texture_mips.odin), with
     // scratch views for building one texture at a time.
     mip_pipeline: ^d3d12.IPipelineState,
@@ -507,6 +535,9 @@ Renderer :: struct {
     environment_filtered_without_sun: bool,
     // The sun measured in the most recently decoded panorama.
     environment_sun: HdriSun,
+    // Average radiance over the sphere of the panorama the IBL maps were baked
+    // from (without its sun when that was extracted); lights the fog.
+    environment_average_radiance: [3]f32,
     environment_sun_asset: EnvironmentHandle,
     sky_pipeline_state: ^d3d12.IPipelineState,
 
@@ -687,6 +718,7 @@ renderer_build_pipelines :: proc() -> (error: string) {
         renderer_create_selection_pso()
         renderer_create_exposure_pipelines()
         renderer_create_light_cluster_pipeline()
+        renderer_create_fog_pipelines()
     }
     r.shader_collecting = true
     create()
@@ -723,6 +755,7 @@ renderer_pipeline_slots :: proc() -> []^^d3d12.IPipelineState {
         &r.irradiance_pipeline_state, &r.prefilter_pipeline_state,
         &r.ssao_pipeline_state, &r.ssao_blur_pipeline_state, &r.ssr_pipeline_state, &r.mip_pipeline,
         &r.cluster_pipeline_state,
+        &r.fog_inject_pipeline_state, &r.fog_integrate_pipeline_state, &r.fog_apply_pipeline_state,
         &r.selection_pipeline_state,
         &r.exposure_histogram_pipeline, &r.exposure_adapt_pipeline,
     )
@@ -842,6 +875,8 @@ renderer_init :: proc() {
     r.ssr_max_distance = DEFAULT_SSR_MAX_DISTANCE
     r.ssr_thickness = DEFAULT_SSR_THICKNESS
     r.ssr_max_roughness = DEFAULT_SSR_MAX_ROUGHNESS
+
+    r.fog = renderer_default_fog_settings()
 
     r.frustum_culling_enabled = true
 
@@ -1353,6 +1388,20 @@ renderer_create_pipelines :: proc() {
     renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSSsao", .R8_UNORM, &r.ssao_pipeline_state)
     renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSSsaoBlur", .R8_UNORM, &r.ssao_blur_pipeline_state)
     renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSSsr", SSR_FORMAT, &r.ssr_pipeline_state)
+    // Fog over the lit image: fog.rgb + scene * fog.a, keeping the scene's alpha.
+    fog_apply := fullscreen
+    fog_apply.BlendState.RenderTarget[0] = {
+        BlendEnable = true,
+        SrcBlend = .ONE,
+        DestBlend = .SRC_ALPHA,
+        BlendOp = .ADD,
+        SrcBlendAlpha = .ZERO,
+        DestBlendAlpha = .ONE,
+        BlendOpAlpha = .ADD,
+        LogicOp = .NOOP,
+        RenderTargetWriteMask = u8(d3d12.COLOR_WRITE_ENABLE_ALL),
+    }
+    renderer_create_fullscreen_pso(fog_apply, "shaders/scene.hlsl", "PSFogApply", .R16G16B16A16_FLOAT, &r.fog_apply_pipeline_state)
 
     renderer_create_fullscreen_pso(fullscreen, "shaders/texture_mips.hlsl", "PSDownsample", .R8G8B8A8_UNORM, &r.mip_pipeline)
 }
@@ -1897,6 +1946,7 @@ renderer_render_frame :: proc(scene: ^Scene) {
     renderer_render_ssao()
     renderer_render_ssr()
     renderer_build_light_clusters()
+    renderer_render_fog()
     transparent := frame.transparent_indices[:frame.transparent_draw_count]
     renderer_render_scene_pass(draws, visible, transparent)
 
@@ -2030,6 +2080,7 @@ renderer_destroy :: proc(){
     r.velocity_rtv_heap->Release()
     renderer_release_ssr_targets()
     renderer_release_light_clusters()
+    renderer_release_fog()
     r.ssr_rtv_heap->Release()
     r.selection_root_signature->Release()
 
