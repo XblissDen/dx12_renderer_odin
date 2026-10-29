@@ -55,7 +55,7 @@ dx12_renderer.exe
 | --- | --- |
 | **L** | Capture or release the mouse |
 | Mouse, **W A S D**, **Space / Shift** | Look, move, move up / down (mouse captured) |
-| Click, Ctrl+click, Shift+click | Select an object; add or remove; add (mouse released) |
+| Click, Ctrl+click, Shift+click | Select an object (again: the one behind); add or remove; add (mouse released) |
 | **W / E / R**, **Q** | Gizmo move, rotate, scale; world or local axes (mouse released) |
 | **1–6** | Exposure, bloom threshold, bloom strength |
 | **F1** | Hide or show the panels |

@@ -73,7 +73,16 @@ cursor (`src/editor_picking.odin`):
    faces count only on double-sided materials. Blended surfaces such as glass
    are picked like any other.
 
-Clicking empty background clears the selection. The shader filters alpha and
+Clicking empty background clears the selection.
+
+**Cycling**: picking collects every entity the ray hits, sorted by its
+nearest hit. A plain click within 4 pixels of the last plain click, while the
+selection is still just what that click picked, selects the next entity
+behind it instead, wrapping back to the nearest after the farthest. This
+reaches objects inside or behind others. Moving away, a Ctrl or Shift click,
+or any other change to the selection starts again from the nearest.
+
+The shader filters alpha and
 adjusts it per mip level while picking reads the nearest full-size texel, so at
 cutout edges the two can differ by a texel.
 
@@ -85,7 +94,7 @@ Inspector shows the primary, and the gizmo sits on it.
 
 | Input | In the viewport | In the entity list |
 | --- | --- | --- |
-| Click | Select only this (empty background: nothing) | Select only this |
+| Click | Select only this (empty background: nothing); again at the same spot: the next one behind | Select only this |
 | **Ctrl**+click | Add, or remove if already selected | Add or remove |
 | **Shift**+click | Add | Select the range from the last plain or Ctrl click |
 | **Ctrl+A** (mouse released) | Select everything in the list | |

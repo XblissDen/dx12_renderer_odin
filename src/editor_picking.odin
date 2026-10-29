@@ -2,6 +2,7 @@ package main
 
 import "core:math"
 import alg "core:math/linalg"
+import "core:slice"
 import win32 "core:sys/windows"
 
 EditorRay :: struct {
@@ -129,9 +130,14 @@ editor_cutout_solid :: proc(material: ^Material, texcoord: [2]f32) -> bool {
     return f32(alpha.values[y * int(alpha.width) + x]) / 255 >= material.alpha_cutoff
 }
 
-editor_pick_mesh :: proc(scene: ^Scene, ray: EditorRay) -> Entity{
-    selected := Entity(-1)
-    nearest_distance := ray.far_t
+EditorPickHit :: struct {
+    entity: Entity,
+    distance: f32,
+}
+
+// Every entity the ray hits, nearest first, each at its nearest hit.
+editor_pick_meshes :: proc(scene: ^Scene, ray: EditorRay) -> [dynamic]EditorPickHit {
+    hits := make([dynamic]EditorPickHit, context.temp_allocator)
 
     for i in 0..<scene.entity_count{
         // Match the renderer's drawable-entity requirements.
@@ -148,6 +154,8 @@ editor_pick_mesh :: proc(scene: ^Scene, ray: EditorRay) -> Entity{
         local_ray := editor_ray_to_local(ray, transform)
         asset := scene.mesh_renderers[i].mesh
         mesh := g_assets.meshes[asset].data
+        nearest_distance := ray.far_t
+        found := false
 
         // Per submesh: each has its own material's sidedness and cutout.
         for submesh in mesh.submeshes {
@@ -161,20 +169,33 @@ editor_pick_mesh :: proc(scene: ^Scene, ray: EditorRay) -> Entity{
                 distance, u, v, hit := editor_ray_triangle(
                     local_ray, va.position, vb.position, vc.position, material.double_sided,
                 )
-                if !hit || (selected != Entity(-1) && distance >= nearest_distance) {
+                if !hit || (found && distance >= nearest_distance) {
                     continue
                 }
                 texcoord := va.texcoord * (1 - u - v) + vb.texcoord * u + vc.texcoord * v
                 if !editor_cutout_solid(material, texcoord) do continue
 
                 nearest_distance = distance
-                selected = Entity(i)
+                found = true
             }
         }
+
+        if found do append(&hits, EditorPickHit{Entity(i), nearest_distance})
     }
 
-    return selected
+    slice.sort_by(hits[:], proc(a, b: EditorPickHit) -> bool { return a.distance < b.distance })
+    return hits
 }
+
+// Where the last plain click landed and what it selected.
+EditorPickCycle :: struct {
+    x, y: f32,
+    entity: Entity,
+}
+g_editor_pick_cycle := EditorPickCycle{entity = Entity(-1)}
+
+// How far (in pixels) a click may land from the last one and still cycle.
+PICK_CYCLE_PIXELS :: f32(4)
 
 editor_update_picking :: proc(scene: ^Scene) {
     if g_cursor_locked || !g_debug_ui_ready || editor_gizmo_has_mouse() {
@@ -193,14 +214,33 @@ editor_update_picking :: proc(scene: ^Scene) {
 
     editor_finish_edit()
 
+    hits := editor_pick_meshes(scene, ray)
+    picked := hits[0].entity if len(hits) > 0 else Entity(-1)
+
     // Ctrl+click adds or removes, Shift+click adds; a plain click selects
     // only what was hit, and on empty background clears the selection.
-    picked := editor_pick_mesh(scene, ray)
     if key_down(win32.VK_CONTROL) {
         if picked >= 0 do editor_toggle_selection(picked)
     } else if key_down(win32.VK_SHIFT) {
         if picked >= 0 do editor_add_to_selection(picked)
     } else {
+        // Clicking again at the same spot cycles through what is under it:
+        // the nearest object, then the one behind it, and so on, wrapping
+        // around. Only while the selection is still what the last click picked.
+        last := g_editor_pick_cycle
+        repeated := abs(mouse_x - last.x) <= PICK_CYCLE_PIXELS && abs(mouse_y - last.y) <= PICK_CYCLE_PIXELS &&
+                    editor_selection_count() == 1 && g_editor_selected == last.entity
+        if repeated {
+            for hit, i in hits {
+                if hit.entity == last.entity {
+                    picked = hits[(i + 1) % len(hits)].entity
+                    break
+                }
+            }
+        }
         editor_select(picked)
+        g_editor_pick_cycle = {mouse_x, mouse_y, picked}
+        return
     }
+    g_editor_pick_cycle.entity = Entity(-1)
 }
