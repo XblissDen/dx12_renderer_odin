@@ -50,7 +50,7 @@ README](../README.md) covers building and running.
 | `src/renderer_taa.odin` | TAA targets and resolve |
 | `src/renderer_post.odin` | HDR/LDR targets, bloom, auto exposure |
 | `src/renderer_environment.odin` | HDR panoramas, sun extraction, IBL baking |
-| `src/renderer_selection.odin` | Selection box |
+| `src/renderer_selection.odin` | Selection boxes |
 | `src/texture_mips.odin` | GPU mip generation |
 | `src/assets.odin`, `src/gltf.odin`, `src/mesh.odin` | Asset catalog, glTF and OBJ loading |
 | `src/scene.odin`, `src/scene_file.odin` | Entities and components; saving and loading scenes |
@@ -60,4 +60,4 @@ README](../README.md) covers building and running.
 | `shaders/post_process.hlsl` | Full-screen triangle, bloom, TAA, tone mapping, FXAA, sharpening |
 | `shaders/auto_exposure.hlsl` | Luminance histogram and exposure adaptation |
 | `shaders/sky.hlsl`, `irradiance.hlsl`, `environment_prefilter.hlsl` | Sky and IBL baking |
-| `shaders/texture_mips.hlsl`, `selection.hlsl` | Mip generation; selection box |
+| `shaders/texture_mips.hlsl`, `selection.hlsl` | Mip generation; selection boxes |

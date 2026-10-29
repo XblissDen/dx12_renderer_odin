@@ -7,7 +7,7 @@ import d3d12 "vendor:directx/d3d12"
 SelectionConstants :: struct {
     model_view_projection: alg.Matrix4f32,
     bounds_min: alg.Vector3f32,
-    _pad0: f32,
+    primary: f32, // 1 for the primary selection.
     bounds_max: alg.Vector3f32,
     _pad1: f32,
 }
@@ -20,7 +20,8 @@ renderer_create_selection_root_signature :: proc() {
 
     parameter := d3d12.ROOT_PARAMETER{
         ParameterType = ._32BIT_CONSTANTS,
-        ShaderVisibility = .VERTEX,
+        // The pixel shader reads `primary` for the box color.
+        ShaderVisibility = .ALL,
     }
     parameter.Constants = {
         ShaderRegister = 0,
@@ -93,10 +94,10 @@ renderer_create_selection_pso :: proc() {
     renderer_create_pso(&desc, &r.selection_pipeline_state)
 }
 
+// A box around each selected entity; the primary one is brighter.
 renderer_render_selection :: proc(scene: ^Scene) {
-    bounds, transform, ok := editor_selection_bounds(scene)
     camera_index := camera_find_active(scene)
-    if !ok || camera_index < 0 {
+    if camera_index < 0 || editor_selection_count() == 0 {
         return
     }
 
@@ -104,21 +105,6 @@ renderer_render_selection :: proc(scene: ^Scene) {
     camera := &scene.cameras[camera_index]
     view := camera_view_matrix(camera, scene.transforms[camera_index].position)
     projection := camera_projection(camera, f32(r.width) / f32(r.height))
-
-    model := transform_matrix(transform)
-
-    // Slightly expand the box so its lines do not fight the mesh surface.
-    padding := max(
-        alg.length(bounds.maximum - bounds.minimum) * 0.005,
-        f32(0.001),
-    )
-    expansion := alg.Vector3f32{padding, padding, padding}
-
-    constants := SelectionConstants{
-        model_view_projection = alg.transpose(model) * view * projection,
-        bounds_min = bounds.minimum - expansion,
-        bounds_max = bounds.maximum + expansion,
-    }
 
     rtv: d3d12.CPU_DESCRIPTOR_HANDLE
     r.rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv)
@@ -129,9 +115,28 @@ renderer_render_selection :: proc(scene: ^Scene) {
 
     r.command_list->SetGraphicsRootSignature(r.selection_root_signature)
     r.command_list->SetPipelineState(r.selection_pipeline_state)
-    r.command_list->SetGraphicsRoot32BitConstants(
-        0, SELECTION_ROOT_VALUE_COUNT, &constants, 0,
-    )
     r.command_list->IASetPrimitiveTopology(.LINELIST)
-    r.command_list->DrawInstanced(24, 1, 0, 0)
+
+    for selected, index in g_editor_selection {
+        if !selected do continue
+        bounds, transform := editor_entity_bounds(scene, Entity(index)) or_continue
+
+        // Slightly expand the box so its lines do not fight the mesh surface.
+        padding := max(
+            alg.length(bounds.maximum - bounds.minimum) * 0.005,
+            f32(0.001),
+        )
+        expansion := alg.Vector3f32{padding, padding, padding}
+
+        constants := SelectionConstants{
+            model_view_projection = alg.transpose(transform_matrix(transform)) * view * projection,
+            bounds_min = bounds.minimum - expansion,
+            primary = 1 if Entity(index) == g_editor_selected else 0,
+            bounds_max = bounds.maximum + expansion,
+        }
+        r.command_list->SetGraphicsRoot32BitConstants(
+            0, SELECTION_ROOT_VALUE_COUNT, &constants, 0,
+        )
+        r.command_list->DrawInstanced(24, 1, 0, 0)
+    }
 }

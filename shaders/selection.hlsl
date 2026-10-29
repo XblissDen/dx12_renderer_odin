@@ -2,7 +2,7 @@ cbuffer SelectionConstants : register(b0)
 {
     float4x4 model_view_projection;
     float3 bounds_min;
-    float _pad0;
+    float primary; // 1 for the primary selection.
     float3 bounds_max;
     float _pad1;
 };
@@ -25,7 +25,9 @@ float4 VSMain(uint vertex_id : SV_VertexID) : SV_POSITION
     return mul(float4(position, 1.0f), model_view_projection);
 }
 
+// Orange for the primary selection (the Inspector and gizmo's), darker for
+// the rest.
 float4 PSMain() : SV_TARGET
 {
-    return float4(1.0f, 0.65f, 0.08f, 1.0f);
+    return primary != 0.0f ? float4(1.0f, 0.65f, 0.08f, 1.0f) : float4(0.55f, 0.3f, 0.05f, 1.0f);
 }

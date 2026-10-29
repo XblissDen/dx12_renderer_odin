@@ -17,7 +17,7 @@ written in Odin on DirectX 12, with a Dear ImGui interface.
 - **Assets**: OBJ and glTF 2.0 import with materials (normal, roughness and
   metallic, emissive and occlusion maps; cutout, blended and double-sided
   materials); textures with mips built on the GPU.
-- **Editor**: picking, move/rotate/scale gizmos, an Inspector, undo and redo,
+- **Editor**: picking and multiple selection, move/rotate/scale gizmos, an Inspector, undo and redo,
   and saving and loading scenes.
 - **Workflow**: shader hot-reload, and GPU timings for every pass.
 
@@ -55,7 +55,7 @@ dx12_renderer.exe
 | --- | --- |
 | **L** | Capture or release the mouse |
 | Mouse, **W A S D**, **Space / Shift** | Look, move, move up / down (mouse captured) |
-| Click | Select an object (mouse released) |
+| Click, Ctrl+click, Shift+click | Select an object; add or remove; add (mouse released) |
 | **W / E / R**, **Q** | Gizmo move, rotate, scale; world or local axes (mouse released) |
 | **1–6** | Exposure, bloom threshold, bloom strength |
 | **F1** | Hide or show the panels |

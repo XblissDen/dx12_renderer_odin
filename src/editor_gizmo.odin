@@ -31,7 +31,8 @@ EditorGizmo :: struct {
     snap_angle_degrees: f32,
     snap_scale: f32,         // Added to (or, for uniform scale, multiplied into) the scale.
 
-    // Drag state, captured when a handle is pressed.
+    // Drag state, captured when a handle is pressed. The handles sit on the
+    // primary selection (`entity`); the rest of the selection follows it.
     entity: Entity,
     field: EditorField,
     before: [3]f32,
@@ -42,6 +43,17 @@ EditorGizmo :: struct {
     start_param: f32,
     start_point: alg.Vector3f32,
     start_mouse_x: f32,
+    // Every entity the drag moves, the primary first.
+    targets: [dynamic]GizmoTarget,
+}
+
+// An entity a drag moves, as it was when the drag started.
+GizmoTarget :: struct {
+    entity: Entity,
+    transform: Transform,
+    // Position, or an orbiting light's orbit center (see editor_position_field).
+    position_field: EditorField,
+    position_value: [3]f32,
 }
 
 g_editor_gizmo := EditorGizmo{
@@ -115,14 +127,45 @@ editor_gizmo_target :: proc(scene: ^Scene) -> (index: int, ok: bool) {
     return index, true
 }
 
-// What the gizmo edits: an orbiting point light's position comes from its
-// orbit, so moving one moves the orbit's center instead (the handles stay
+// What moving an entity edits: an orbiting point light's position comes from
+// its orbit, so moving one moves the orbit's center instead (the handles stay
 // on the light).
-editor_gizmo_field :: proc(scene: ^Scene, index: int) -> EditorField {
-    if g_editor_gizmo.mode == .Translate && scene.has_point_light[index] && scene.point_lights[index].orbit_enabled {
+editor_position_field :: proc(scene: ^Scene, index: int) -> EditorField {
+    if scene.has_point_light[index] && scene.point_lights[index].orbit_enabled {
         return .Point_Orbit_Center
     }
+    return .Position
+}
+
+editor_gizmo_field :: proc(scene: ^Scene, index: int) -> EditorField {
+    if g_editor_gizmo.mode == .Translate do return editor_position_field(scene, index)
     return gizmo_field(g_editor_gizmo.mode)
+}
+
+// The fields a drag in the current mode changes on a target. Other entities
+// move around the primary when rotated or scaled, so their position changes too.
+gizmo_target_fields :: proc(target: GizmoTarget) -> (fields: [2]EditorField, count: int) {
+    switch g_editor_gizmo.mode {
+        case .Translate: return {target.position_field, {}}, 1
+        case .Rotate: return {.Rotation, target.position_field}, 2
+        case .Scale: return {.Scale, target.position_field}, 2
+    }
+    return {}, 0
+}
+
+gizmo_target_before :: proc(target: GizmoTarget, field: EditorField) -> [3]f32 {
+    #partial switch field {
+        case .Rotation: return target.transform.rotation
+        case .Scale: return target.transform.scale
+    }
+    return target.position_value
+}
+
+// Moves a target so its entity ends up at `position` (an orbiting light's
+// orbit center moves by as much).
+gizmo_move_target :: proc(scene: ^Scene, target: GizmoTarget, position: alg.Vector3f32) {
+    offset := position - target.transform.position
+    editor_apply_value(scene, target.entity, target.position_field, alg.Vector3f32(target.position_value) + offset)
 }
 
 gizmo_project :: proc(view: GizmoView, point: alg.Vector3f32) -> (screen: [2]f32, ok: bool) {
@@ -354,6 +397,25 @@ editor_gizmo_begin :: proc(scene: ^Scene, index: int, view: GizmoView, handle: G
     gizmo.start_transform = transform
     gizmo.start_rotation = transform_rotation_matrix(transform.rotation)
     gizmo.start_axes = view.axes
+
+    clear(&gizmo.targets)
+    append(&gizmo.targets, gizmo_target(scene, index))
+    for selected, other in g_editor_selection {
+        if !selected || other == index do continue
+        // The sun's transform does nothing (and its scale is zero).
+        if !scene.has_transform[other] || scene.has_camera[other] || scene.has_directional_light[other] do continue
+        append(&gizmo.targets, gizmo_target(scene, other))
+    }
+}
+
+gizmo_target :: proc(scene: ^Scene, index: int) -> GizmoTarget {
+    field := editor_position_field(scene, index)
+    return {
+        entity = Entity(index),
+        transform = scene.transforms[index],
+        position_field = field,
+        position_value = editor_value(scene, index, field),
+    }
 }
 
 editor_gizmo_drag :: proc(scene: ^Scene, view: GizmoView, mouse: SceneMouse) {
@@ -367,6 +429,8 @@ editor_gizmo_drag :: proc(scene: ^Scene, view: GizmoView, mouse: SceneMouse) {
     axis_index := int(gizmo.active) - int(GizmoHandle.X)
     snap := gizmo.snap != key_down(win32.VK_CONTROL)
     value: [3]f32
+    // The primary's change, which the rest of the selection follows.
+    turn := alg.MATRIX4F32_IDENTITY
 
     // Snapping counts steps from where the drag started (increments, not a
     // grid), so the same steps work in world and local space.
@@ -406,8 +470,8 @@ editor_gizmo_drag :: proc(scene: ^Scene, view: GizmoView, mouse: SceneMouse) {
             )
             if snap do angle = gizmo_snap(angle, math.to_radians(gizmo.snap_angle_degrees))
             // Rotating about a local axis (R applied to e_i) equals R * rotate(e_i).
-            rotation := alg.matrix4_rotate_f32(angle, axis) * gizmo.start_rotation
-            value = transform_rotation_from_matrix(rotation)
+            turn = alg.matrix4_rotate_f32(angle, axis)
+            value = transform_rotation_from_matrix(turn * gizmo.start_rotation)
 
         case gizmo.mode == .Translate:
             axis := gizmo.start_axes[axis_index]
@@ -431,6 +495,33 @@ editor_gizmo_drag :: proc(scene: ^Scene, view: GizmoView, mouse: SceneMouse) {
     }
 
     editor_apply_value(scene, gizmo.entity, gizmo.field, value)
+
+    // The others: moved by the same amount, or turned and scaled around the
+    // primary (its position is the pivot), each also turning or scaling
+    // about its own origin.
+    pivot := start.position
+    for target in gizmo.targets[1:] {
+        offset := target.transform.position - pivot
+        switch gizmo.mode {
+            case .Translate:
+                gizmo_move_target(scene, target, target.transform.position + (alg.Vector3f32(value) - alg.Vector3f32(gizmo.before)))
+            case .Rotate:
+                rotation := turn * transform_rotation_matrix(target.transform.rotation)
+                editor_apply_value(scene, target.entity, .Rotation, transform_rotation_from_matrix(rotation))
+                turned := alg.mul(turn, alg.Vector4f32{offset.x, offset.y, offset.z, 0})
+                gizmo_move_target(scene, target, pivot + turned.xyz)
+            case .Scale:
+                // Along the primary's local axes; each entity scales its own
+                // local axes by the same factors.
+                factor := alg.Vector3f32(value) / start.scale
+                editor_apply_value(scene, target.entity, .Scale, target.transform.scale * factor)
+                scaled := pivot
+                for axis, i in gizmo.start_axes {
+                    scaled += axis * alg.dot(offset, axis) * factor[i]
+                }
+                gizmo_move_target(scene, target, scaled)
+        }
+    }
 }
 
 editor_gizmo_end :: proc(scene: ^Scene, cancel: bool) {
@@ -439,18 +530,25 @@ editor_gizmo_end :: proc(scene: ^Scene, cancel: bool) {
         return
     }
 
-    index := int(gizmo.entity)
-    if cancel {
-        editor_apply_value(scene, gizmo.entity, gizmo.field, gizmo.before)
-    } else if editor_field_exists(scene, index, gizmo.field) {
-        editor_push_command(EditorCommand{
-            kind = .Edit_Field,
-            entity = gizmo.entity,
-            field = gizmo.field,
-            before = gizmo.before,
-            after = editor_value(scene, index, gizmo.field),
-        })
+    // One undo step for the whole selection.
+    edits := make([dynamic]EditorFieldEdit, context.temp_allocator)
+    for target in gizmo.targets {
+        fields, count := gizmo_target_fields(target)
+        for field in fields[:count] {
+            before := gizmo_target_before(target, field)
+            if cancel {
+                editor_apply_value(scene, target.entity, field, before)
+            } else if editor_field_exists(scene, int(target.entity), field) {
+                append(&edits, EditorFieldEdit{
+                    entity = target.entity,
+                    field = field,
+                    before = before,
+                    after = editor_value(scene, int(target.entity), field),
+                })
+            }
+        }
     }
+    editor_push_field_edits(edits[:], gizmo.entity)
     gizmo.active = .None
 }
 

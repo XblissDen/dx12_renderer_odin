@@ -220,6 +220,8 @@ wparam: win32.WPARAM, lparam: win32.LPARAM) -> win32.LRESULT{
                         case win32.WPARAM('R'): g_editor_gizmo.mode = .Scale
                         case win32.WPARAM('Q'):
                             g_editor_gizmo.space = .Local if g_editor_gizmo.space == .World else .World
+                        case win32.WPARAM('A'):
+                            if key_down(win32.VK_CONTROL) do editor_select_all(&g_scene)
                     }
                 }
             }

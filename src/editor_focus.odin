@@ -3,16 +3,18 @@ package main
 import "core:math"
 import alg "core:math/linalg"
 
-editor_selection_bounds :: proc(scene: ^Scene) -> (
+// An entity's local mesh bounds and transform, for the selection box and
+// focusing; not ok for entities without a drawable mesh.
+editor_entity_bounds :: proc(scene: ^Scene, entity: Entity) -> (
     bounds: MeshBounds,
     transform: Transform,
     ok: bool,
 ) {
-    if !scene_entity_is_alive(scene, g_editor_selected) {
+    if !scene_entity_is_alive(scene, entity) {
         return {}, {}, false
     }
 
-    index := int(g_editor_selected)
+    index := int(entity)
     if !scene.has_transform[index] || !scene.has_mesh_renderer[index] ||
        !scene.has_material[index] ||
        !transform_scale_valid(scene.transforms[index].scale) {
@@ -23,8 +25,44 @@ editor_selection_bounds :: proc(scene: ^Scene) -> (
     return bounds, scene.transforms[index], bounds.valid
 }
 
+// A sphere around every selected entity with a mesh.
+editor_selection_sphere :: proc(scene: ^Scene) -> (center: alg.Vector3f32, radius: f32, ok: bool) {
+    // A sphere per entity: around its local box, scaled by the largest axis,
+    // so it also encloses every rotated and non-uniformly scaled version.
+    spheres := make([dynamic][4]f32, context.temp_allocator)
+    box_min := alg.Vector3f32(max(f32))
+    box_max := alg.Vector3f32(-max(f32))
+    for selected, index in g_editor_selection {
+        if !selected do continue
+        bounds, transform := editor_entity_bounds(scene, Entity(index)) or_continue
+
+        local_center := (bounds.minimum + bounds.maximum) * 0.5
+        center4 := alg.mul(transform_matrix(transform), alg.Vector4f32{
+            local_center.x, local_center.y, local_center.z, 1,
+        })
+        sphere_center := alg.Vector3f32{center4.x, center4.y, center4.z}
+        largest_scale := max(transform.scale.x, transform.scale.y, transform.scale.z)
+        sphere_radius := alg.length(bounds.maximum - bounds.minimum) * largest_scale * 0.5
+
+        append(&spheres, [4]f32{sphere_center.x, sphere_center.y, sphere_center.z, sphere_radius})
+        box_min = alg.min(box_min, sphere_center - sphere_radius)
+        box_max = alg.max(box_max, sphere_center + sphere_radius)
+    }
+    if len(spheres) == 0 {
+        return {}, 0, false
+    }
+
+    // Centered on the box around all of them; not the smallest such sphere,
+    // but close for a few objects.
+    center = (box_min + box_max) * 0.5
+    for sphere in spheres {
+        radius = max(radius, alg.length(sphere.xyz - center) + sphere.w)
+    }
+    return center, max(radius, 0.05), true
+}
+
 editor_focus_selected :: proc(scene: ^Scene) {
-    bounds, transform, ok := editor_selection_bounds(scene)
+    center, radius, ok := editor_selection_sphere(scene)
     camera_index := camera_find_active(scene)
     r := &g_renderer
 
@@ -33,20 +71,6 @@ editor_focus_selected :: proc(scene: ^Scene) {
     }
 
     editor_finish_edit()
-
-    local_center := (bounds.minimum + bounds.maximum) * 0.5
-    center4 := alg.mul(transform_matrix(transform), alg.Vector4f32{
-        local_center.x, local_center.y, local_center.z, 1,
-    })
-    center := alg.Vector3f32{center4.x, center4.y, center4.z}
-
-    // A sphere enclosing the local box, scaled by the largest axis, also
-    // encloses every rotated and non-uniformly scaled version.
-    largest_scale := max(transform.scale.x, transform.scale.y, transform.scale.z)
-    radius := max(
-        alg.length(bounds.maximum - bounds.minimum) * largest_scale * 0.5,
-        f32(0.05),
-    )
 
     aspect := f32(r.width) / f32(r.height)
     vertical_half_fov := CAMERA_FOV_Y * 0.5

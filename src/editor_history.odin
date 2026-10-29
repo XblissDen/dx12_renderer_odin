@@ -60,6 +60,17 @@ EditorCommandKind :: enum {
     Create_Mesh,
     Delete_Mesh,
     Edit_Asset,
+    // One step made of several: field edits of several entities (a gizmo
+    // drag on a multiple selection), or several creations or deletions.
+    Edit_Fields,
+    Group,
+}
+
+// One field change within an Edit_Fields command.
+EditorFieldEdit :: struct {
+    entity: Entity,
+    field: EditorField,
+    before, after: [3]f32,
 }
 
 EditorAssetValue :: struct {
@@ -106,6 +117,11 @@ EditorCommand :: struct {
     // Material slot for material fields (see g_editor_material_slot).
     material_slot: int,
     source_entity: Entity,
+
+    // Heap-allocated parts of Edit_Fields and Group commands, freed when the
+    // command leaves the history. `entity` is then the primary selection.
+    edits: []EditorFieldEdit,
+    group: []EditorCommand,
 }
 
 g_editor_history: [MAX_EDITOR_HISTORY]EditorCommand
@@ -397,9 +413,11 @@ editor_push_command :: proc(command: EditorCommand) {
     if command.kind == .Edit_Asset && command.asset_before == command.asset_after do return
 
     // An edit after undo starts a new branch and discards the redo commands.
+    for i in g_editor_history_cursor..<g_editor_history_count do editor_free_command(&g_editor_history[i])
     g_editor_history_count = g_editor_history_cursor
 
     if g_editor_history_count == MAX_EDITOR_HISTORY {
+        editor_free_command(&g_editor_history[0])
         for i in 1..<g_editor_history_count {
             g_editor_history[i - 1] = g_editor_history[i]
         }
@@ -409,6 +427,41 @@ editor_push_command :: proc(command: EditorCommand) {
     g_editor_history[g_editor_history_count] = command
     g_editor_history_count += 1
     g_editor_history_cursor = g_editor_history_count
+}
+
+editor_free_command :: proc(command: ^EditorCommand) {
+    delete(command.edits)
+    delete(command.group)
+    command.edits = nil
+    command.group = nil
+}
+
+// Pushes several creations or deletions as one undo step; `primary` becomes
+// the primary selection when the step is undone or redone.
+editor_push_commands :: proc(commands: []EditorCommand, primary: Entity) {
+    switch len(commands) {
+        case 0:
+        case 1: editor_push_command(commands[0])
+        case:
+            group := make([]EditorCommand, len(commands))
+            copy(group, commands)
+            editor_push_command(EditorCommand{kind = .Group, entity = primary, group = group})
+    }
+}
+
+// Pushes field edits of several entities as one undo step, leaving out those
+// that did not change.
+editor_push_field_edits :: proc(edits: []EditorFieldEdit, primary: Entity) {
+    changed := make([dynamic]EditorFieldEdit, 0, len(edits))
+    for edit in edits do if edit.before != edit.after do append(&changed, edit)
+    if len(changed) <= 1 {
+        for edit in changed {
+            editor_push_command(EditorCommand{kind = .Edit_Field, entity = edit.entity, field = edit.field, before = edit.before, after = edit.after})
+        }
+        delete(changed)
+        return
+    }
+    editor_push_command(EditorCommand{kind = .Edit_Fields, entity = primary, edits = changed[:]})
 }
 
 editor_finish_edit :: proc() {
@@ -491,17 +544,20 @@ editor_slot_referenced_by_history :: proc(slot: int) -> bool {
     for i in 0..<g_editor_history_cursor {
         command := g_editor_history[i]
 
-        if int(command.entity) == slot {
-            return true
-        }
-
-        // Undoing a duplicate selects its original source, too.
-        if command.kind == .Create_Mesh &&
-           int(command.source_entity) == slot {
+        if editor_command_references(command, slot) {
             return true
         }
     }
 
+    return false
+}
+
+editor_command_references :: proc(command: EditorCommand, slot: int) -> bool {
+    if int(command.entity) == slot do return true
+    // Undoing a duplicate selects its original source, too.
+    if command.kind == .Create_Mesh && int(command.source_entity) == slot do return true
+    for edit in command.edits do if int(edit.entity) == slot do return true
+    for part in command.group do if editor_command_references(part, slot) do return true
     return false
 }
 
@@ -513,39 +569,9 @@ editor_undo :: proc(scene: ^Scene) {
     }
 
     command := g_editor_history[g_editor_history_cursor - 1]
-    g_editor_material_slot = command.material_slot
-    g_editor_material_entity = int(command.entity)
-    applied := false
-
-    switch command.kind {
-        case .Edit_Asset:
-            applied = editor_apply_asset(scene, int(command.entity), command.field, command.asset_before)
-            if applied do g_editor_selected = command.entity
-        case .Edit_Field:
-            applied = editor_apply_value(
-                scene, command.entity, command.field, command.before,
-            )
-            if applied {
-                g_editor_selected = command.entity
-            }
-
-        case .Create_Mesh:
-            applied = editor_remove_created_mesh(scene, command.entity)
-            if applied {
-                g_editor_selected = command.source_entity
-            }
-
-        case .Delete_Mesh:
-            applied = editor_restore_deleted_mesh(
-                scene, command.entity, command.mesh_snapshot,
-            )
-            if applied {
-                g_editor_selected = command.entity
-            }
-    }
-
-    if applied {
+    if editor_apply_command(scene, command, redo = false) {
         g_editor_history_cursor -= 1
+        editor_select_command(command, redo = false)
     }
 }
 
@@ -557,35 +583,71 @@ editor_redo :: proc(scene: ^Scene) {
     }
 
     command := g_editor_history[g_editor_history_cursor]
+    if editor_apply_command(scene, command, redo = true) {
+        g_editor_history_cursor += 1
+        editor_select_command(command, redo = true)
+    }
+}
+
+// Undoes (or redoes) one history step. A group is all or nothing: when a
+// part fails (a light past the limit), the parts already done are reverted.
+editor_apply_command :: proc(scene: ^Scene, command: EditorCommand, redo: bool) -> bool {
     g_editor_material_slot = command.material_slot
     g_editor_material_entity = int(command.entity)
-    applied := false
 
     switch command.kind {
         case .Edit_Asset:
-            applied = editor_apply_asset(scene, int(command.entity), command.field, command.asset_after)
+            return editor_apply_asset(scene, int(command.entity), command.field, command.asset_after if redo else command.asset_before)
         case .Edit_Field:
-            applied = editor_apply_value(
-                scene, command.entity, command.field, command.after,
-            )
-
+            return editor_apply_value(scene, command.entity, command.field, command.after if redo else command.before)
+        case .Edit_Fields:
+            // The edited entities all exist whenever this step is next in line.
+            count := len(command.edits)
+            for k in 0..<count {
+                edit := command.edits[k if redo else count - 1 - k]
+                editor_apply_value(scene, edit.entity, edit.field, edit.after if redo else edit.before)
+            }
+            return true
         case .Create_Mesh:
-            applied = editor_restore_created_mesh(
-                scene, command.entity, command.mesh_snapshot,
-            )
-
+            if redo do return editor_restore_created_mesh(scene, command.entity, command.mesh_snapshot)
+            return editor_remove_created_mesh(scene, command.entity)
         case .Delete_Mesh:
-            applied = editor_delete_mesh(scene, command.entity)
+            if redo do return editor_delete_mesh(scene, command.entity)
+            return editor_restore_deleted_mesh(scene, command.entity, command.mesh_snapshot)
+        case .Group:
+            count := len(command.group)
+            for k in 0..<count {
+                if editor_apply_command(scene, command.group[k if redo else count - 1 - k], redo) do continue
+                for j := k - 1; j >= 0; j -= 1 {
+                    editor_apply_command(scene, command.group[j if redo else count - 1 - j], !redo)
+                }
+                return false
+            }
+            return true
     }
+    return false
+}
 
-    if applied {
-        g_editor_history_cursor += 1
+// Selects what an undone or redone step touched: the edited entities, an
+// undone duplicate's source, or nothing after a redone deletion.
+editor_select_command :: proc(command: EditorCommand, redo: bool) {
+    editor_clear_selection()
+    editor_add_command_selection(command, redo)
+    primary := command.entity
+    // An undone group of duplicates: the primary copy's source.
+    for part in command.group {
+        if !redo && part.kind == .Create_Mesh && part.entity == command.entity do primary = part.source_entity
+    }
+    if editor_is_selected(primary) do g_editor_selected = primary
+}
 
-        if command.kind == .Delete_Mesh {
-            g_editor_selected = Entity(-1)
-        } else {
-            g_editor_selected = command.entity
-        }
+editor_add_command_selection :: proc(command: EditorCommand, redo: bool) {
+    switch command.kind {
+        case .Edit_Asset, .Edit_Field: editor_add_to_selection(command.entity)
+        case .Edit_Fields: for edit in command.edits do editor_add_to_selection(edit.entity)
+        case .Create_Mesh: editor_add_to_selection(command.entity if redo else command.source_entity)
+        case .Delete_Mesh: if !redo do editor_add_to_selection(command.entity)
+        case .Group: for part in command.group do editor_add_command_selection(part, redo)
     }
 }
 
@@ -619,6 +681,7 @@ editor_commit_value :: proc(
 }
 
 editor_clear_history :: proc() {
+    for i in 0..<g_editor_history_count do editor_free_command(&g_editor_history[i])
     g_editor_history_count = 0
     g_editor_history_cursor = 0
     g_editor_pending_active = false

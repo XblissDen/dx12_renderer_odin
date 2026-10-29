@@ -2,6 +2,7 @@ package main
 
 import "core:math"
 import alg "core:math/linalg"
+import win32 "core:sys/windows"
 
 EditorRay :: struct {
     origin, direction: alg.Vector3f32,
@@ -192,6 +193,14 @@ editor_update_picking :: proc(scene: ^Scene) {
 
     editor_finish_edit()
 
-    // A click on empty background clears selection.
-    g_editor_selected = editor_pick_mesh(scene, ray)
+    // Ctrl+click adds or removes, Shift+click adds; a plain click selects
+    // only what was hit, and on empty background clears the selection.
+    picked := editor_pick_mesh(scene, ray)
+    if key_down(win32.VK_CONTROL) {
+        if picked >= 0 do editor_toggle_selection(picked)
+    } else if key_down(win32.VK_SHIFT) {
+        if picked >= 0 do editor_add_to_selection(picked)
+    } else {
+        editor_select(picked)
+    }
 }

@@ -35,8 +35,8 @@ so text stays sharp.
   own demo window.
 - **Scene**: add models and lights, undo and redo, duplicate, delete, focus,
   save and load, and the entity list.
-- **Inspector**: the selected entity's transform, material slot, light
-  settings, and the gizmo's options.
+- **Inspector**: the primary selected entity's transform, material slot,
+  light settings, and the gizmo's options.
 - **Assets...**: import and remove models and textures ([Assets](assets.md)).
 
 ## Camera and shortcuts
@@ -54,6 +54,7 @@ plane at least 100.
 | **1–6** | Exposure (or auto-exposure compensation), bloom threshold, bloom strength |
 | **W / E / R** (released) | Gizmo: move, rotate, scale |
 | **Q** (released) | Gizmo: world or local axes |
+| **Ctrl+A** (released) | Select every listed entity |
 | **Esc** | Quit |
 
 While the mouse is captured, ImGui gets no mouse or keyboard input. Keys typed
@@ -76,17 +77,54 @@ Clicking empty background clears the selection. The shader filters alpha and
 adjusts it per mip level while picking reads the nearest full-size texel, so at
 cutout edges the two can differ by a texel.
 
-The selection is drawn as a box around the entity's local bounds, slightly
-enlarged so its lines do not fight the surface, depth-tested against the
-scene, after anti-aliasing. **Focus Selected** keeps the camera's direction
-and moves it back from the selection's center until a sphere around the
-selection fits in the view, with a little margin; the far plane grows if
-needed.
+### Selecting several
+
+The selection is a set of entities (`g_editor_selection` in `src/editor.odin`)
+plus a *primary* one (`g_editor_selected`), the most recently added. The
+Inspector shows the primary, and the gizmo sits on it.
+
+| Input | In the viewport | In the entity list |
+| --- | --- | --- |
+| Click | Select only this (empty background: nothing) | Select only this |
+| **Ctrl**+click | Add, or remove if already selected | Add or remove |
+| **Shift**+click | Add | Select the range from the last plain or Ctrl click |
+| **Ctrl+A** (mouse released) | Select everything in the list | |
+
+Removing the primary makes the first remaining selected entity primary.
+
+- **Inspector**: fields edit the primary only; with several selected it says
+  so.
+- **Gizmo**: the rest of the selection follows the primary. Move adds the
+  same offset to all. Rotate turns all of them by the same rotation: the
+  others orbit the primary's position and also turn about their own origins.
+  Scale multiplies every entity's own scale by the same factors, and moves
+  the others away from (or towards) the primary along the gizmo's axes.
+  Orbiting lights follow by moving their orbit center. The sun and camera do
+  not follow.
+- **Duplicate Selected** copies every selected model and light and selects
+  the copies; **Delete Selected** deletes them. The sun and camera are
+  skipped, and stay selected after a delete.
+- **Undo**: a gizmo drag, a duplicate or a delete on several entities is one
+  undo step (`Edit_Fields` or `Group` in `src/editor_history.odin`). Undo and
+  redo select what the step touched again. A group is all or nothing: if one
+  part cannot be redone (a light past the limit), the parts already done are
+  reverted.
+
+Each selected entity with a mesh gets a box around its local bounds: orange
+for the primary, darker for the rest. The boxes are slightly enlarged so
+their lines do not fight the surface, depth-tested against the scene, and
+drawn after anti-aliasing. **Focus Selected** keeps the camera's direction
+and moves it back until a sphere around everything selected fits in the view,
+with a little margin; the far plane grows if needed. The sphere is centered
+on the box around each entity's own bounding sphere, so it is close to, but
+not always, the smallest one.
 
 ## Gizmos
 
-The gizmo (`src/editor_gizmo.odin`) draws handles on the selected entity, and a
-click on a handle starts a drag instead of changing the selection.
+The gizmo (`src/editor_gizmo.odin`) draws handles on the primary selected
+entity, and a click on a handle starts a drag instead of changing the
+selection. The rest of the selection follows ([Selecting
+several](#selecting-several)).
 
 - **Move** (W): drag an arrow to move along that axis (the closest point
   between the axis and the mouse ray), or the center square to move in the

@@ -8,7 +8,7 @@ editor_find_available_mesh_slot :: proc(scene: ^Scene) -> int {
         if scene.alive[i] {
             continue
         }
-        if g_editor_selected == Entity(i) {
+        if editor_is_selected(Entity(i)) {
             continue
         }
         if editor_slot_referenced_by_history(i) {
@@ -106,61 +106,81 @@ editor_remove_created_mesh :: proc(scene: ^Scene, entity: Entity) -> bool {
     return true
 }
 
-// Creates an entity from a snapshot as one undoable step and selects it.
-editor_create_entity :: proc(scene: ^Scene, snapshot: EditorMeshSnapshot, source: Entity) -> bool {
+// Creates an entity from a snapshot; the caller pushes the returned command.
+editor_create_entity_command :: proc(scene: ^Scene, snapshot: EditorMeshSnapshot, source: Entity) -> (EditorCommand, bool) {
     slot := editor_find_available_mesh_slot(scene)
     if slot < 0 {
         g_editor_file_status = "No reusable entity slots are available."
-        return false
+        return {}, false
     }
     created := Entity(slot)
     if !editor_restore_created_mesh(scene, created, snapshot) {
-        return false
+        return {}, false
     }
-    editor_push_command(EditorCommand{
+    return EditorCommand{
         kind = .Create_Mesh,
         entity = created,
         mesh_snapshot = snapshot,
         source_entity = source,
-    })
-    g_editor_selected = created
+    }, true
+}
+
+// Creates an entity from a snapshot as one undoable step and selects it.
+editor_create_entity :: proc(scene: ^Scene, snapshot: EditorMeshSnapshot, source: Entity) -> bool {
+    command := editor_create_entity_command(scene, snapshot, source) or_return
+    editor_push_command(command)
+    editor_select(command.entity)
     return true
 }
 
+// Copies every selected model and light (not the sun or camera) as one
+// undoable step, and selects the copies.
 editor_duplicate_selected :: proc(scene: ^Scene) {
     editor_finish_edit()
 
-    source := g_editor_selected
-    if !editor_can_delete_mesh(scene, source) {
-        return
+    commands := make([dynamic]EditorCommand, context.temp_allocator)
+    primary := Entity(-1)
+    for selected, index in g_editor_selection {
+        source := Entity(index)
+        if !selected || !editor_can_delete_mesh(scene, source) {
+            continue
+        }
+
+        source_name := scene.names[index]
+        if len(source_name) == 0 {
+            source_name = "Mesh"
+        }
+
+        formatted_name := fmt.aprintf("%s (copy)", source_name)
+        defer delete(formatted_name)
+
+        owned_name, name_ok := scene_store_owned_name(formatted_name)
+        if !name_ok {
+            g_editor_file_status = "Could not allocate duplicate name."
+            break
+        }
+
+        snapshot := editor_mesh_snapshot(scene, index)
+        snapshot.name = owned_name
+
+        // Make the copy easier to distinguish from its source. An orbiting
+        // light's position follows its orbit, so start it further along instead.
+        snapshot.transform.position.x += 1.5
+        if light, ok := &snapshot.point_light.?; ok && light.orbit_enabled {
+            light.orbit_angle += math.PI / 4
+        }
+
+        // Stops at the entity or light limit; the copies made so far stay.
+        command := editor_create_entity_command(scene, snapshot, source) or_break
+        append(&commands, command)
+        if source == g_editor_selected || primary < 0 do primary = command.entity
     }
 
-    index := int(source)
-    source_name := scene.names[index]
-    if len(source_name) == 0 {
-        source_name = "Mesh"
-    }
-
-    formatted_name := fmt.aprintf("%s (copy)", source_name)
-    defer delete(formatted_name)
-
-    owned_name, name_ok := scene_store_owned_name(formatted_name)
-    if !name_ok {
-        g_editor_file_status = "Could not allocate duplicate name."
-        return
-    }
-
-    snapshot := editor_mesh_snapshot(scene, index)
-    snapshot.name = owned_name
-
-    // Make the copy easier to distinguish from its source. An orbiting
-    // light's position follows its orbit, so start it further along instead.
-    snapshot.transform.position.x += 1.5
-    if light, ok := &snapshot.point_light.?; ok && light.orbit_enabled {
-        light.orbit_angle += math.PI / 4
-    }
-
-    editor_create_entity(scene, snapshot, source)
+    editor_push_commands(commands[:], primary)
+    if len(commands) == 0 do return
+    editor_clear_selection()
+    for command in commands do editor_add_to_selection(command.entity)
+    g_editor_selected = primary
 }
 
 // A white point light (marker: a small cube) three units in front of the
@@ -281,25 +301,32 @@ editor_restore_deleted_mesh :: proc(
     return true
 }
 
+// Deletes every selected model and light as one undoable step. The sun and
+// camera cannot be deleted and stay selected.
 editor_delete_selected :: proc(scene: ^Scene) {
     editor_finish_edit()
 
-    entity := g_editor_selected
-    if !editor_can_delete_mesh(scene, entity) {
-        return
+    primary := g_editor_selected
+    commands := make([dynamic]EditorCommand, context.temp_allocator)
+    for selected, index in g_editor_selection {
+        entity := Entity(index)
+        if !selected || !editor_can_delete_mesh(scene, entity) {
+            continue
+        }
+
+        snapshot := editor_mesh_snapshot(scene, index)
+        if !editor_delete_mesh(scene, entity) {
+            continue
+        }
+
+        append(&commands, EditorCommand{
+            kind = .Delete_Mesh,
+            entity = entity,
+            mesh_snapshot = snapshot,
+        })
+        g_editor_selection[index] = false
     }
 
-    snapshot := editor_mesh_snapshot(scene, int(entity))
-
-    if !editor_delete_mesh(scene, entity) {
-        return
-    }
-
-    editor_push_command(EditorCommand{
-        kind = .Delete_Mesh,
-        entity = entity,
-        mesh_snapshot = snapshot,
-    })
-
-    g_editor_selected = Entity(-1)
+    editor_push_commands(commands[:], primary)
+    editor_prune_selection(scene)
 }

@@ -2,13 +2,110 @@ package main
 
 import "core:fmt"
 import "core:math"
+import win32 "core:sys/windows"
 
+// The selection can hold any number of entities. g_editor_selected is the
+// primary one, which the Inspector shows and the gizmo sits on; it is always
+// selected itself, or -1 when nothing is.
 g_editor_selected: Entity = Entity(-1)
+g_editor_selection: [MAX_ENTITIES]bool
+// Where a Shift+click range in the entity list starts.
+g_editor_selection_anchor: Entity = Entity(-1)
 // The entity whose material slot g_editor_material_slot refers to.
 g_editor_material_entity := -1
 g_editor_file_status: string
 
+editor_is_selected :: proc(entity: Entity) -> bool {
+    return int(entity) >= 0 && int(entity) < MAX_ENTITIES && g_editor_selection[int(entity)]
+}
+
+editor_clear_selection :: proc() {
+    g_editor_selection = {}
+    g_editor_selected = Entity(-1)
+}
+
+// Selects only `entity` (nothing, for -1).
+editor_select :: proc(entity: Entity) {
+    editor_clear_selection()
+    editor_add_to_selection(entity)
+}
+
+// Adds `entity` to the selection as the primary.
+editor_add_to_selection :: proc(entity: Entity) {
+    if int(entity) < 0 || int(entity) >= MAX_ENTITIES do return
+    g_editor_selection[int(entity)] = true
+    g_editor_selected = entity
+    g_editor_selection_anchor = entity
+}
+
+// Ctrl+click: adds an entity, or removes one already selected.
+editor_toggle_selection :: proc(entity: Entity) {
+    if !editor_is_selected(entity) {
+        editor_add_to_selection(entity)
+        return
+    }
+    g_editor_selection[int(entity)] = false
+    g_editor_selection_anchor = entity
+    if g_editor_selected == entity do g_editor_selected = editor_first_selected()
+}
+
+editor_first_selected :: proc() -> Entity {
+    for selected, i in g_editor_selection do if selected do return Entity(i)
+    return Entity(-1)
+}
+
+editor_selection_count :: proc() -> int {
+    count := 0
+    for selected in g_editor_selection do if selected do count += 1
+    return count
+}
+
+// Drops entities that no longer exist (deleted, or their creation undone),
+// moving the primary to another selected entity if it was one of them.
+editor_prune_selection :: proc(scene: ^Scene) {
+    for i in 0..<MAX_ENTITIES {
+        if g_editor_selection[i] && !scene_entity_is_alive(scene, Entity(i)) do g_editor_selection[i] = false
+    }
+    if !editor_is_selected(g_editor_selected) do g_editor_selected = editor_first_selected()
+}
+
+// The entities the Scene panel lists: models and lights (not the camera).
+editor_listed :: proc(scene: ^Scene, index: int) -> bool {
+    return scene.alive[index] && (scene.has_mesh_renderer[index] || scene.has_directional_light[index] ||
+        scene.has_point_light[index] || scene.has_spot_light[index])
+}
+
+// Shift+click in the list: everything listed from the anchor to `entity`.
+editor_select_range :: proc(scene: ^Scene, entity: Entity) {
+    anchor := g_editor_selection_anchor
+    if !scene_entity_is_alive(scene, anchor) {
+        editor_select(entity)
+        return
+    }
+    g_editor_selection = {}
+    for i in min(int(anchor), int(entity))..=max(int(anchor), int(entity)) {
+        if editor_listed(scene, i) do g_editor_selection[i] = true
+    }
+    g_editor_selected = entity
+}
+
+// Ctrl+A: every listed entity, keeping the primary if there is one.
+editor_select_all :: proc(scene: ^Scene) {
+    editor_finish_edit()
+    for i in 0..<scene.entity_count {
+        if editor_listed(scene, i) do g_editor_selection[i] = true
+    }
+    if !editor_is_selected(g_editor_selected) do g_editor_selected = editor_first_selected()
+}
+
+// Whether any selected entity passes `test`, for enabling buttons.
+editor_any_selected :: proc(scene: ^Scene, test: proc(scene: ^Scene, entity: Entity) -> bool) -> bool {
+    for selected, i in g_editor_selection do if selected && test(scene, Entity(i)) do return true
+    return false
+}
+
 editor_draw_scene :: proc(scene: ^Scene){
+    editor_prune_selection(scene)
     ui_next_window(16, 462, 300, 360)
 
     if ui_begin_panel("Scene"){
@@ -54,7 +151,7 @@ editor_draw_scene :: proc(scene: ^Scene){
         ))
 
         ui_begin_disabled(
-            !editor_can_duplicate_mesh(scene, g_editor_selected),
+            !editor_any_selected(scene, editor_can_duplicate_mesh),
         )
 
         if ui_button("Duplicate Selected") {
@@ -68,7 +165,7 @@ editor_draw_scene :: proc(scene: ^Scene){
         }
 
         ui_begin_disabled(
-            !editor_can_delete_mesh(scene, g_editor_selected),
+            !editor_any_selected(scene, editor_can_delete_mesh),
         )
 
         if ui_button("Delete Selected") {
@@ -79,7 +176,7 @@ editor_draw_scene :: proc(scene: ^Scene){
 
         ui_separator()
 
-        _, _, can_focus := editor_selection_bounds(scene)
+        _, _, can_focus := editor_selection_sphere(scene)
         ui_begin_disabled(!can_focus)
         if ui_button("Focus Selected") {
             editor_focus_selected(scene)
@@ -103,7 +200,7 @@ editor_draw_scene :: proc(scene: ^Scene){
 
             if ok{
                 editor_clear_history()
-                g_editor_selected = Entity(-1)
+                editor_clear_selection()
                 renderer_update_post_title()
             }
         }
@@ -116,14 +213,11 @@ editor_draw_scene :: proc(scene: ^Scene){
 
         ui_separator()
 
+        debug_ui_text("Ctrl+click toggles, Shift+click a range.")
         label_buffer: [128]u8
 
         for i in 0..<scene.entity_count{
-            if !scene.alive[i] {
-                continue
-            }
-
-            if !scene.has_mesh_renderer[i] && !scene.has_directional_light[i] && !scene.has_point_light[i] && !scene.has_spot_light[i] {
+            if !editor_listed(scene, i) {
                 continue
             }
 
@@ -136,9 +230,15 @@ editor_draw_scene :: proc(scene: ^Scene){
             label := fmt.bprintf(label_buffer[:127], "%s###entity_%d", name, i,)
             label_buffer[len(label)] = 0
 
-            if ui_selectable(cstring(raw_data(label_buffer[:])), g_editor_selected == Entity(i)){
+            if ui_selectable(cstring(raw_data(label_buffer[:])), editor_is_selected(Entity(i))){
                 editor_finish_edit()
-                g_editor_selected = Entity(i)
+                if key_down(win32.VK_CONTROL) {
+                    editor_toggle_selection(Entity(i))
+                } else if key_down(win32.VK_SHIFT) {
+                    editor_select_range(scene, Entity(i))
+                } else {
+                    editor_select(Entity(i))
+                }
             }
         }
     }
@@ -339,6 +439,10 @@ editor_draw_inspector :: proc(scene: ^Scene) {
                 scene.names[index],
                 index,
             ))
+            if count := editor_selection_count(); count > 1 {
+                debug_ui_text(fmt.bprintf(text_buffer[:], "%d selected. Fields edit only this one;", count))
+                debug_ui_text("the gizmo moves, rotates and scales them all.")
+            }
             debug_ui_text("Drag values; Ctrl+click to type.")
             ui_separator()
 
