@@ -22,6 +22,7 @@ foreign imgui_lib {
     ui_draw_line :: proc(x0, y0, x1, y1: f32, color: u32, thickness: f32) ---
     ui_draw_triangle :: proc(x0, y0, x1, y1, x2, y2: f32, color: u32) ---
     ui_draw_rect :: proc(x0, y0, x1, y1: f32, color: u32) ---
+    ui_draw_circle :: proc(x, y, radius: f32, color: u32, thickness: f32) ---
     ui_radio_button :: proc(label: cstring, active: bool) -> bool ---
     ui_same_line :: proc() ---
     ui_begin_frame :: proc(cursor_locked: bool) ---
@@ -232,6 +233,8 @@ debug_ui_update :: proc() {
     editor_draw_scene(&g_scene)
     editor_draw_inspector(&g_scene)
     editor_draw_import_panel()
+    // Before the gizmo, which then draws over the icons.
+    editor_draw_icons(&g_scene)
     editor_update_gizmo(&g_scene)
 
     if g_debug_ui_demo {

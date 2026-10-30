@@ -19,7 +19,8 @@ written in Odin on DirectX 12, with a Dear ImGui interface.
   materials); textures with mips built on the GPU.
 - **Editor**: picking and multiple selection, parent/child hierarchies
   (glTF models come in as their node trees),
-  move/rotate/scale gizmos, an Inspector, undo and redo, and saving and
+  move/rotate/scale gizmos, viewport icons and debug lines (light ranges,
+  bounds), an Inspector, undo and redo, and saving and
   loading scenes.
 - **Workflow**: shader hot-reload, and GPU timings for every pass.
 

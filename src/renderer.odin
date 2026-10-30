@@ -563,6 +563,11 @@ Renderer :: struct {
     selection_mask: ^d3d12.IResource,
     selection_rtv_heap: ^d3d12.IDescriptorHeap,
     selection_srv_index: u32,
+    // Debug lines: in front of the scene [0] and behind it [1], and each
+    // frame slot's vertices.
+    debug_line_pipeline_states: [2]^d3d12.IPipelineState,
+    debug_line_buffer: ^d3d12.IResource,
+    debug_line_mapped: [^]DebugLineVertex,
 
     // Shader hot-reload. Stamps sum the write times of shaders/*.hlsl: as
     // loaded, as last polled, and for the IBL bake shaders as last baked.
@@ -763,6 +768,7 @@ renderer_pipeline_slots :: proc() -> []^^d3d12.IPipelineState {
         &r.cluster_pipeline_state,
         &r.fog_inject_pipeline_state, &r.fog_integrate_pipeline_state, &r.fog_apply_pipeline_state,
         &r.selection_pipeline_state, &r.selection_outline_pipeline_state,
+        &r.debug_line_pipeline_states[0], &r.debug_line_pipeline_states[1],
         &r.exposure_histogram_pipeline, &r.exposure_adapt_pipeline,
     )
     return slots[:]
@@ -2109,6 +2115,7 @@ renderer_destroy :: proc(){
     r.selection_root_signature->Release()
     r.selection_mask->Release()
     r.selection_rtv_heap->Release()
+    r.debug_line_buffer->Release()
 
     r.bloom_texture->Release()
     r.bloom_rtv_heap->Release()

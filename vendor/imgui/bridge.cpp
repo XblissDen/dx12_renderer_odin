@@ -297,6 +297,15 @@ void dx12_ui_draw_rect(float x0, float y0, float x1, float y1, std::uint32_t col
     ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), color);
 }
 
+// Filled when thickness is zero, otherwise a ring of that thickness.
+void dx12_ui_draw_circle(float x, float y, float radius, std::uint32_t color, float thickness) {
+    ImDrawList* list = ImGui::GetBackgroundDrawList();
+    if (thickness <= 0.0f)
+        list->AddCircleFilled(ImVec2(x, y), radius, color);
+    else
+        list->AddCircle(ImVec2(x, y), radius, color, 0, thickness);
+}
+
 bool dx12_ui_radio_button(const char* label, bool active) {
     return ImGui::RadioButton(label, active);
 }

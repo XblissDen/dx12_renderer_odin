@@ -213,7 +213,9 @@ editor_update_picking :: proc(scene: ^Scene) {
 
     editor_finish_edit()
 
-    hits := editor_pick_meshes(scene, ray)
+    // Icons first: they are drawn over the scene.
+    hits := editor_pick_icons(scene, {mouse_x, mouse_y})
+    append(&hits, ..editor_pick_meshes(scene, ray)[:])
     picked := hits[0].entity if len(hits) > 0 else Entity(-1)
 
     // Ctrl+click adds or removes, Shift+click adds; a plain click selects

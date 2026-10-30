@@ -5,14 +5,16 @@ import alg "core:math/linalg"
 import d3d12 "vendor:directx/d3d12"
 import dxgi "vendor:directx/dxgi"
 
-// The selection outline (shaders/selection.hlsl). A mask pass draws each
-// selected group (a selected entity with its descendants) into an integer
-// target as the group's id, without depth testing; an outline pass then
-// colors the pixels just outside each group's silhouette on the back buffer.
+// The selection outline and debug lines (shaders/selection.hlsl), drawn on
+// the back buffer after anti-aliasing. For the outline, a mask pass draws
+// each selected group (a selected entity with its descendants) into an
+// integer target as the group's id, without depth testing; an outline pass
+// then colors the pixels just outside each group's silhouette.
 SelectionConstants :: struct {
     model_view_projection: alg.Matrix4f32,
-    group: u32, // 1 for the primary selection's group.
-    _pad: [3]f32,
+    // 1 for the primary selection's group. Debug lines: 1 for the hidden pass.
+    group: u32,
+    camera_position: [3]f32, // Debug lines only.
 }
 
 // Odin aligns matrices to 32 bytes, so the struct (and the root constants)
@@ -20,6 +22,14 @@ SelectionConstants :: struct {
 #assert(size_of(SelectionConstants) == 96)
 SELECTION_ROOT_VALUE_COUNT :: u32(size_of(SelectionConstants) / size_of(f32))
 SELECTION_MASK_FORMAT :: dxgi.FORMAT.R16_UINT
+
+// Vertices of the debug lines one frame can draw, two per line.
+MAX_DEBUG_LINE_VERTICES :: 1 << 17
+
+DebugLineVertex :: struct {
+    position: [3]f32,
+    color: u32, // R8G8B8A8, as gizmo_color packs it.
+}
 
 renderer_create_selection_root_signature :: proc() {
     r := &g_renderer
@@ -69,6 +79,10 @@ renderer_create_selection_pso :: proc() {
     defer outline_vs->Release()
     outline_ps := renderer_compile_shader("shaders/selection.hlsl", "PSOutline", "ps_5_1")
     defer outline_ps->Release()
+    line_vs := renderer_compile_shader("shaders/selection.hlsl", "VSLine", "vs_5_1")
+    defer line_vs->Release()
+    line_ps := renderer_compile_shader("shaders/selection.hlsl", "PSLine", "ps_5_1")
+    defer line_ps->Release()
 
     // Only the position of Vertex.
     input_layout := [1]d3d12.INPUT_ELEMENT_DESC{
@@ -98,6 +112,89 @@ renderer_create_selection_pso :: proc() {
     desc.InputLayout = {}
     desc.RTVFormats[0] = .R8G8B8A8_UNORM
     renderer_create_pso(&desc, &r.selection_outline_pipeline_state)
+
+    // Debug lines, blended over the image and tested against the scene's
+    // depth without writing it: one pipeline for the parts in front of the
+    // scene, one for the parts behind it.
+    line_layout := [2]d3d12.INPUT_ELEMENT_DESC{
+        {SemanticName = "POSITION", Format = .R32G32B32_FLOAT, AlignedByteOffset = 0, InputSlotClass = .PER_VERTEX_DATA},
+        {SemanticName = "COLOR", Format = .R8G8B8A8_UNORM, AlignedByteOffset = 12, InputSlotClass = .PER_VERTEX_DATA},
+    }
+    desc.VS = shader_bytecode(line_vs)
+    desc.PS = shader_bytecode(line_ps)
+    desc.InputLayout = {pInputElementDescs = &line_layout[0], NumElements = len(line_layout)}
+    desc.RasterizerState.AntialiasedLineEnable = true
+    desc.BlendState.RenderTarget[0] = {
+        BlendEnable = true,
+        SrcBlend = .SRC_ALPHA,
+        DestBlend = .INV_SRC_ALPHA,
+        BlendOp = .ADD,
+        SrcBlendAlpha = .ONE,
+        DestBlendAlpha = .INV_SRC_ALPHA,
+        BlendOpAlpha = .ADD,
+        LogicOp = .NOOP,
+        RenderTargetWriteMask = u8(d3d12.COLOR_WRITE_ENABLE_ALL),
+    }
+    desc.DepthStencilState = {DepthEnable = true, DepthWriteMask = .ZERO, DepthFunc = .LESS_EQUAL}
+    desc.DSVFormat = .D32_FLOAT
+    desc.PrimitiveTopologyType = .LINE
+    renderer_create_pso(&desc, &r.debug_line_pipeline_states[0])
+    desc.DepthStencilState.DepthFunc = .GREATER
+    renderer_create_pso(&desc, &r.debug_line_pipeline_states[1])
+}
+
+// Each frame slot's share of the debug line vertices; once at startup.
+renderer_create_debug_lines :: proc() {
+    r := &g_renderer
+    mapped: rawptr
+    r.debug_line_buffer, mapped = renderer_create_mapped_upload_buffer(
+        u64(FRAME_COUNT * MAX_DEBUG_LINE_VERTICES * size_of(DebugLineVertex)),
+    )
+    r.debug_line_mapped = ([^]DebugLineVertex)(mapped)
+}
+
+// Draws the editor's debug lines (editor_debug_lines) on the back buffer:
+// faintly where the scene hides them, then fully where it does not.
+renderer_render_debug_lines :: proc(scene: ^Scene, back_buffer: d3d12.CPU_DESCRIPTOR_HANDLE) {
+    camera_index := camera_find_active(scene)
+    if camera_index < 0 do return
+    lines := editor_debug_lines(scene)
+    // Whole lines only.
+    count := min(len(lines), MAX_DEBUG_LINE_VERTICES) &~ 1
+    if count == 0 do return
+
+    r := &g_renderer
+    first := int(r.frame_slot) * MAX_DEBUG_LINE_VERTICES
+    copy(r.debug_line_mapped[first:first + count], lines[:count])
+    vertex_view := d3d12.VERTEX_BUFFER_VIEW{
+        BufferLocation = r.debug_line_buffer->GetGPUVirtualAddress() + u64(first * size_of(DebugLineVertex)),
+        SizeInBytes = u32(count * size_of(DebugLineVertex)),
+        StrideInBytes = size_of(DebugLineVertex),
+    }
+
+    camera := &scene.cameras[camera_index]
+    camera_position := scene.transforms[camera_index].position
+    constants := SelectionConstants{
+        model_view_projection = camera_view_matrix(camera, camera_position) *
+                                camera_projection(camera, f32(r.width) / f32(r.height)),
+        camera_position = camera_position,
+    }
+
+    back_buffer := back_buffer
+    depth := renderer_depth_dsv(read_only = true)
+    r.command_list->OMSetRenderTargets(1, &back_buffer, false, &depth)
+    r.command_list->RSSetViewports(1, &r.viewport)
+    r.command_list->RSSetScissorRects(1, &r.scissor_rect)
+    r.command_list->SetGraphicsRootSignature(r.selection_root_signature)
+    r.command_list->IASetPrimitiveTopology(.LINELIST)
+    r.command_list->IASetVertexBuffers(0, 1, &vertex_view)
+    // The hidden parts first, so the visible ones draw over them.
+    for hidden in ([2]u32{1, 0}) {
+        constants.group = hidden
+        r.command_list->SetPipelineState(r.debug_line_pipeline_states[hidden])
+        r.command_list->SetGraphicsRoot32BitConstants(0, SELECTION_ROOT_VALUE_COUNT, &constants, 0)
+        r.command_list->DrawInstanced(u32(count), 1, 0, 0)
+    }
 }
 
 // (Re)creates the mask target at the window size; at startup and on resize.

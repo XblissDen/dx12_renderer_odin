@@ -48,7 +48,7 @@ therefore two frames old. Presentation uses vsync.
 | TAA | Blends the frame into the reprojected history, in HDR | [Post-processing](post_processing.md#taa) |
 | Auto exposure | Luminance histogram and exposure adaptation (compute) | [Post-processing](post_processing.md#auto-exposure) |
 | Bloom | Threshold, downsample chain, upsample chain | [Post-processing](post_processing.md#bloom) |
-| Post + UI | Tone mapping, then FXAA or sharpening, the selection outline, and the UI | [Post-processing](post_processing.md) |
+| Post + UI | Tone mapping, then FXAA or sharpening, the debug lines, the selection outline, and the UI | [Post-processing](post_processing.md) |
 
 The scene is rendered into an `R16G16B16A16_FLOAT` HDR target. Everything up
 to tone mapping works in linear HDR; the swap chain is `R8G8B8A8_UNORM`, and
@@ -145,8 +145,8 @@ Static samplers: linear wrap (s0), shadow comparison with a white border (s1),
 16× anisotropic for materials (s2), panoramas wrapping horizontally but
 clamped at the poles (s3), and clamp-to-edge for screen-space lookups (s4).
 
-Compute passes (auto exposure, light clusters, fog) and the selection outline have their
-own small root signatures.
+Compute passes (auto exposure, light clusters, fog) have their own small root
+signatures, and so do the selection outline and debug lines, which share one.
 
 ## GPU timings
 

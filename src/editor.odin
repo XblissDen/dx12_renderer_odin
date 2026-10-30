@@ -186,6 +186,8 @@ editor_draw_scene :: proc(scene: ^Scene){
             debug_ui_text("(limit reached)")
         }
         ui_separator()
+        editor_draw_viewport_controls()
+        ui_separator()
         // Undo/Redo
         ui_begin_disabled(
             g_editor_history_cursor == 0 && !g_editor_pending_changed,

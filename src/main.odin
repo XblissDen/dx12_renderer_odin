@@ -30,6 +30,7 @@ main :: proc(){
     renderer_create_bloom_targets()
     renderer_create_ssao_targets()
     renderer_create_selection_mask()
+    renderer_create_debug_lines()
     renderer_create_taa_targets()
     renderer_create_ssr_targets()
     if error := renderer_set_environment(renderer_default_environment_settings()); error != "" do panic(error)

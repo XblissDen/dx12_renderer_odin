@@ -180,7 +180,9 @@ renderer_render_post_process :: proc(scene: ^Scene) {
         renderer_end_gpu_pass(.FXAA)
     }
 
-    // The outline and UI draw after anti-aliasing, so text stays crisp.
+    // Debug lines, the outline and the UI draw after anti-aliasing, so they
+    // stay crisp.
+    renderer_render_debug_lines(scene, rtv_handle)
     renderer_render_selection(scene, rtv_handle)
     r.command_list->OMSetRenderTargets(1, &rtv_handle, false, nil)
 

@@ -79,8 +79,13 @@ cursor (`src/editor_picking.odin`):
 
 Clicking empty background clears the selection.
 
-**Cycling**: picking collects every entity the ray hits, sorted by its
-nearest hit. A plain click within 4 pixels of the last plain click, while the
+**Icons** come first. Entities with nothing to draw have an icon instead
+([Viewport icons and debug lines](#viewport-icons-and-debug-lines)), and a
+click within 13 pixels of one picks it before any mesh, since the icon is
+drawn over the scene. Several icons under the cursor go nearest first.
+
+**Cycling**: picking collects every icon under the cursor and every entity
+the ray hits, sorted by its nearest hit. A plain click within 4 pixels of the last plain click, while the
 selection is still just what that click picked, selects the next entity
 behind it instead, wrapping back to the nearest after the farthest. This
 reaches objects inside or behind others. Moving away, a Ctrl or Shift click,
@@ -150,6 +155,55 @@ and moves it back until a sphere around everything selected fits in the view,
 with a little margin; the far plane grows if needed. The sphere is centered
 on the box around each entity's own bounding sphere, so it is close to, but
 not always, the smallest one.
+
+## Viewport icons and debug lines
+
+Three checkboxes in the Scene panel control them (`src/editor_viewport.odin`).
+Neither shows while the UI is hidden (F1).
+
+**Icons for entities without a mesh** (on by default): every placed entity
+that draws nothing gets a 10-pixel icon at its world position. These are
+empty entities, and lights whose marker mesh was removed; the camera gets
+none. The icons make such entities clickable in the viewport.
+
+- A **point light** is a disc in the light's color with eight rays.
+- A **spot light** is the same disc, with three rays fanning along its beam's
+  direction on screen.
+- An **empty entity** is a diamond.
+- A selected icon gets a ring, orange for the primary and darker for the
+  others.
+
+Icons are drawn on ImGui's background list, the same as the gizmo: under the
+panels, over the scene, and under the gizmo. Nearer icons cover farther ones.
+Icons behind the camera or past the far plane are not drawn.
+
+**Debug lines** are world-space lines that the renderer draws after
+anti-aliasing, before the selection outline (`renderer_render_debug_lines`
+in `src/renderer_selection.odin`). They show:
+
+- **Light ranges**, for the selected lights, or for every light with **Ranges
+  of all lights** (the unselected ones fainter). A point light's range is
+  three circles in the axis planes plus the sphere's outline as the camera
+  sees it. A spot light's cone is the circle where the outer angle meets the
+  range, four edges from the light to that circle, and a fainter circle for
+  the inner angle. Lines use the light's color at full brightness.
+- **Orbits**: an orbiting point light's circle, in its parent's space.
+- **Mesh bounds**, with **Mesh bounds** checked: each drawn mesh's local
+  bounding box, placed by its world matrix, which is the box that culling
+  uses.
+
+The editor builds the line list on the CPU each frame, and it goes into this
+frame slot's part of an upload buffer. That buffer holds up to 65,536 lines,
+and any more are dropped. Two pipelines draw the lines, both tested against
+the prepass depth without writing it:
+
+1. **Hidden parts**: `GREATER`, at a quarter of the line's alpha.
+2. **Visible parts**: `LESS_EQUAL`, at full alpha.
+
+As a result, lines show faintly through what is in front of them. Before the
+depth test, each vertex is pulled 0.2% of its distance towards the camera.
+Without this, a line lying on a surface (a box around a cube) would flicker
+against TAA's jittered depth.
 
 ## Gizmos
 

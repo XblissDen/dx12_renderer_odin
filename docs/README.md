@@ -15,7 +15,8 @@ README](../README.md) covers building and running.
 - [Assets](assets.md): the asset catalog, OBJ and glTF import, materials,
   textures and their mips, environments, and removing assets.
 - [Editor](editor.md): the UI, camera and shortcuts, picking and selection,
-  gizmos, undo and redo, lights, and scene files.
+  viewport icons and debug lines, gizmos, undo and redo, lights, and scene
+  files.
 - [Hierarchy](hierarchy.md): parents and children, empty entities, glTF node
   trees, world matrices, reparenting, and how the gizmo, duplicate and delete
   handle subtrees.
@@ -53,14 +54,14 @@ README](../README.md) covers building and running.
 | `src/renderer_taa.odin` | TAA targets and resolve |
 | `src/renderer_post.odin` | HDR/LDR targets, bloom, auto exposure |
 | `src/renderer_environment.odin` | HDR panoramas, sun extraction, IBL baking |
-| `src/renderer_selection.odin` | Selection outline |
+| `src/renderer_selection.odin` | Selection outline and debug lines |
 | `src/texture_mips.odin` | GPU mip generation |
 | `src/assets.odin`, `src/gltf.odin`, `src/mesh.odin` | Asset catalog, glTF and OBJ loading |
 | `src/scene.odin`, `src/scene_file.odin` | Entities, components and parents; saving and loading scenes |
 | `src/camera.odin`, `src/frustum.odin` | Fly camera; frustum culling |
-| `src/editor*.odin`, `src/debug_ui.odin` | Panels, picking, gizmos, undo history |
+| `src/editor*.odin`, `src/debug_ui.odin` | Panels, picking, viewport icons and lines, gizmos, undo history |
 | `shaders/scene.hlsl` | Mesh shading, prepass, shadows, SSAO, SSR, light clusters, fog |
 | `shaders/post_process.hlsl` | Full-screen triangle, bloom, TAA, tone mapping, FXAA, sharpening |
 | `shaders/auto_exposure.hlsl` | Luminance histogram and exposure adaptation |
 | `shaders/sky.hlsl`, `irradiance.hlsl`, `environment_prefilter.hlsl` | Sky and IBL baking |
-| `shaders/texture_mips.hlsl`, `selection.hlsl` | Mip generation; selection outline |
+| `shaders/texture_mips.hlsl`, `selection.hlsl` | Mip generation; selection outline and debug lines |
