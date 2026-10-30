@@ -555,8 +555,14 @@ Renderer :: struct {
     prefilter_constant_buffer: ^d3d12.IResource,
     prefilter_cb_mapped_data: [^]PrefilterConstants,
 
+    // Selection outline: the mask pass's pipeline (selection_pipeline_state),
+    // the outline pass's, and the mask target.
     selection_root_signature: ^d3d12.IRootSignature,
     selection_pipeline_state: ^d3d12.IPipelineState,
+    selection_outline_pipeline_state: ^d3d12.IPipelineState,
+    selection_mask: ^d3d12.IResource,
+    selection_rtv_heap: ^d3d12.IDescriptorHeap,
+    selection_srv_index: u32,
 
     // Shader hot-reload. Stamps sum the write times of shaders/*.hlsl: as
     // loaded, as last polled, and for the IBL bake shaders as last baked.
@@ -756,7 +762,7 @@ renderer_pipeline_slots :: proc() -> []^^d3d12.IPipelineState {
         &r.ssao_pipeline_state, &r.ssao_blur_pipeline_state, &r.ssr_pipeline_state, &r.mip_pipeline,
         &r.cluster_pipeline_state,
         &r.fog_inject_pipeline_state, &r.fog_integrate_pipeline_state, &r.fog_apply_pipeline_state,
-        &r.selection_pipeline_state,
+        &r.selection_pipeline_state, &r.selection_outline_pipeline_state,
         &r.exposure_histogram_pipeline, &r.exposure_adapt_pipeline,
     )
     return slots[:]
@@ -1652,6 +1658,7 @@ renderer_resize:: proc(width, height: u32){
     renderer_release_taa_targets()
     renderer_release_ssr_targets()
     r.bloom_texture->Release()
+    r.selection_mask->Release()
 
     for i in 0..<FRAME_COUNT{
         r.render_targets[i]->Release()
@@ -1695,6 +1702,7 @@ renderer_resize:: proc(width, height: u32){
     renderer_create_ssao_targets()
     renderer_create_taa_targets()
     renderer_create_ssr_targets()
+    renderer_create_selection_mask()
 }
 
 renderer_load_textures :: proc(){
@@ -2099,6 +2107,8 @@ renderer_destroy :: proc(){
     renderer_release_fog()
     r.ssr_rtv_heap->Release()
     r.selection_root_signature->Release()
+    r.selection_mask->Release()
+    r.selection_rtv_heap->Release()
 
     r.bloom_texture->Release()
     r.bloom_rtv_heap->Release()

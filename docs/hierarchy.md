@@ -22,8 +22,8 @@ are in the parent's space, and a root's transform is in world space.
 - **Empty entities**: an entity can have just a transform, with no mesh and
   no light. It groups its children and places them, like a glTF node without
   geometry. It is listed, selected and edited like any other entity, but it
-  cannot be clicked in the viewport. Selecting it outlines its descendants,
-  and Focus Selected frames them.
+  cannot be clicked in the viewport. Selecting it outlines its descendants
+  as one shape, and Focus Selected frames them.
 
 ## glTF node trees
 
@@ -56,7 +56,8 @@ Everything that needs to know where an entity is uses it:
 - **Lights**: point and spot light positions, the spot direction (the world
   matrix's −Y axis), and their shadow maps and shadow-slot distances.
 - **Editor**: picking (the ray goes into the entity's space through the
-  inverse world matrix), selection boxes, Focus Selected, and the gizmo.
+  inverse world matrix), the selection outline, Focus Selected, and the
+  gizmo.
 
 Animation stays local. **Spin** turns an entity about its own Y axis, so a
 spinning parent carries its children around. An orbiting point light circles

@@ -124,10 +124,28 @@ Removing the primary makes the first remaining selected entity primary.
   part cannot be redone (a light past the limit), the parts already done are
   reverted.
 
-Each selected entity with a mesh, and each of their descendants, gets a box
-around its local bounds: orange for the primary, darker for the rest. The boxes are slightly enlarged so
-their lines do not fight the surface, depth-tested against the scene, and
-drawn after anti-aliasing. **Focus Selected** keeps the camera's direction
+**Outline**: the selection is outlined in groups. Each selected entity with no
+selected ancestor makes one group, together with all of its descendants, and
+each group gets one 2-pixel outline around its whole silhouette. Selecting a
+model's top entity therefore outlines the model as one shape, not each part
+of it; selecting one part outlines just that part (and its own children).
+The primary selection's group is orange, the others darker.
+`src/renderer_selection.odin` draws it in two passes after anti-aliasing:
+
+1. **Mask**: every mesh of each group is drawn into a screen-sized integer
+   target (`R16_UINT`) as the group's id: 1 for the primary's group, then 2,
+   3 and so on. There is no depth test and no culling, so the mask is each
+   group's full silhouette, hidden parts included.
+2. **Outline**: a full-screen pass over the back buffer colors each pixel
+   within two pixels (a round brush) of a group it is not part of. Meshes in
+   one group share its id, so the edges between them do not show; two
+   selected groups that touch both show their edge. Outlines stay visible
+   through objects in front.
+
+The mask ignores cutout alpha, so a cutout surface is outlined along its
+triangles rather than its holes.
+
+**Focus Selected** keeps the camera's direction
 and moves it back until a sphere around everything selected fits in the view,
 with a little margin; the far plane grows if needed. The sphere is centered
 on the box around each entity's own bounding sphere, so it is close to, but

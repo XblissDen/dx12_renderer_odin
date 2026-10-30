@@ -181,7 +181,7 @@ renderer_render_post_process :: proc(scene: ^Scene) {
     }
 
     // The outline and UI draw after anti-aliasing, so text stays crisp.
-    renderer_render_selection(scene)
+    renderer_render_selection(scene, rtv_handle)
     r.command_list->OMSetRenderTargets(1, &rtv_handle, false, nil)
 
     debug_ui_render()

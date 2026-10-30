@@ -3,8 +3,8 @@ package main
 import "core:math"
 import alg "core:math/linalg"
 
-// An entity's local mesh bounds and world matrix, for the selection box and
-// focusing; not ok for entities without a drawable mesh.
+// An entity's local mesh bounds and world matrix, for the selection outline
+// and focusing; not ok for entities without a drawable mesh.
 editor_entity_bounds :: proc(scene: ^Scene, entity: Entity) -> (
     bounds: MeshBounds,
     world: alg.Matrix4f32,

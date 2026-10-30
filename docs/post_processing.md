@@ -8,7 +8,7 @@ After the lit pass, the HDR image goes through, in order:
 4. **Tone mapping**, which applies exposure, adds bloom, maps HDR to the
    display range and encodes sRGB.
 5. **FXAA** or **sharpening**, on the tone-mapped image, when enabled.
-6. The selection box and the UI, drawn last so they stay crisp.
+6. The selection outline and the UI, drawn last so they stay crisp.
 
 The HDR image after step 1 is the *scene color*: TAA's output, or the lit HDR
 target without TAA. Exposure, bloom and tone mapping read it, and next frame's
