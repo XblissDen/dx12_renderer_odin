@@ -5,8 +5,8 @@ does, in what order, and why it is built that way. The [project
 README](../README.md) covers building and running.
 
 - [Frame structure](frame.md): the main loop, frames in flight, the order of
-  GPU passes, per-frame data, culling, instanced batching, the depth prepass, the root signature,
-  GPU timings, and shader hot-reload.
+  GPU passes, per-frame data, culling, instanced batching, bindless textures,
+  the depth prepass, the root signature, GPU timings, and shader hot-reload.
 - [Lighting](lighting.md): surface shading, materials, the sun, point and spot
   lights, clustered lighting, shadows, image-based lighting and the sky,
   volumetric fog, SSAO, and screen-space reflections.

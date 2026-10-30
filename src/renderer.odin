@@ -20,7 +20,9 @@ import "core:image/png"
 FRAME_COUNT :: 2
 
 SHADOW_MAP_SIZE :: 2048
-SRV_HEAP_CAPACITY :: 65536 // Includes FRAME_COUNT * MAX_DRAWS material tables.
+// Every SRV: render targets, environment maps and every texture. Shaders see
+// the whole heap as the bindless texture array (root slot Textures).
+SRV_HEAP_CAPACITY :: 65536
 
 // Bloom mip chain levels: half resolution down to 1/64 (about 30x17 at 1080p).
 BLOOM_MIP_COUNT :: 6
@@ -100,33 +102,6 @@ renderer_alloc_srv :: proc(count: u32 = 1) -> u32 {
     result := r.srv_next
     r.srv_next += count
     return result
-}
-
-// Copies a set of material textures (albedo, normal, roughness, metallic,
-// emissive, occlusion) into table `table_index` of this frame's material
-// ring and returns the table to bind. Draws with the same textures share one.
-// The slot is free: begin_frame waited for the frame that last used it.
-renderer_material_table :: proc(
-    table_index: int,
-    textures: [MATERIAL_TEXTURE_COUNT]TextureHandle,
-) -> d3d12.GPU_DESCRIPTOR_HANDLE {
-    r := &g_renderer
-    assert(table_index >= 0 && table_index < MAX_DRAWS)
-    first := r.material_srv_start +
-             u32((int(r.frame_slot) * MAX_DRAWS + table_index) * MATERIAL_TEXTURE_COUNT)
-
-    destination, source: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.srv_heap->GetCPUDescriptorHandleForHeapStart(&destination)
-    r.srv_staging_heap->GetCPUDescriptorHandleForHeapStart(&source)
-    for texture, i in textures {
-        assert(assets_texture_valid(texture))
-        to := destination
-        to.ptr += uint(first + u32(i)) * uint(r.srv_descriptor_size)
-        from := source
-        from.ptr += uint(r.textures[texture].srv_index) * uint(r.srv_descriptor_size)
-        r.device->CopyDescriptorsSimple(1, to, from, .CBV_SRV_UAV)
-    }
-    return renderer_srv_gpu(first)
 }
 
 // Written once per frame and shared by every draw (b4).
@@ -253,7 +228,11 @@ ObjectData :: struct {
 
     // Blended materials: albedo alpha is multiplied by this.
     opacity: f32,
-    _pad: [7]f32,
+
+    // SRV heap indices of the albedo, normal, roughness, metallic, emissive
+    // and occlusion textures (neutral textures for unused maps).
+    textures: [MATERIAL_TEXTURE_COUNT]u32,
+    _pad: f32,
 }
 
 // The structured buffer's stride; matches ObjectData in scene.hlsl, padded
@@ -352,9 +331,6 @@ Renderer :: struct {
 
     textures: []GpuTexture,
     srv_heap: ^d3d12.IDescriptorHeap,
-    srv_staging_heap: ^d3d12.IDescriptorHeap,
-    // Ring of per-draw material tables, one region per frame in flight.
-    material_srv_start: u32,
     srv_descriptor_size: u32,
     srv_next: u32,
     shadow_srv_index, hdr_srv_index, bloom_srv_start: u32,
@@ -664,15 +640,16 @@ renderer_compile_shader_set :: proc() -> (error: string) {
     }
     compile :: proc(job: ^Job) {
         parts := strings.split(job.key, "|", context.temp_allocator)
-        flags: u32 = 0
+        // The bindless texture array (scene.hlsl) is an unbounded table.
+        flags := d3dc.D3DCOMPILE{.ENABLE_UNBOUNDED_DESCRIPTOR_TABLES}
         when ODIN_DEBUG {
-            flags = u32(d3dc.D3DCOMPILE_FLAG.DEBUG | d3dc.D3DCOMPILE_FLAG.SKIP_OPTIMIZATION)
+            flags += {.DEBUG, .SKIP_OPTIMIZATION}
         }
         job.hr = d3dc.CompileFromFile(
             win32.utf8_to_wstring(parts[0]), nil, nil,
             strings.clone_to_cstring(parts[1], context.temp_allocator),
             strings.clone_to_cstring(parts[2], context.temp_allocator),
-            flags, 0, &job.blob, &job.errors,
+            transmute(u32)flags, 0, &job.blob, &job.errors,
         )
     }
 
@@ -1033,7 +1010,7 @@ Root_Slot :: enum u32 {
     Irradiance,          // t3
     Prefilter_Constants, // b3
     Prefiltered,         // t4
-    Material,            // t10-t15: albedo, normal, roughness, metallic, emissive, occlusion
+    Textures,            // t22 onwards: the whole SRV heap, indexed by the objects' material textures
     Frame_Constants,     // b4: camera, lights, shadows, AO, TAA matrices
     Shadow_Cascade,      // b5: root constant, the cascade being drawn
     Texture_T8,          // t8: ambient occlusion, or TAA motion vectors
@@ -1072,7 +1049,7 @@ ROOT_LAYOUT := [Root_Slot]Root_Param{
     .Irradiance          = {.Table, 3, 1, .PIXEL},
     .Prefilter_Constants = {.CBV, 3, 0, .PIXEL},
     .Prefiltered         = {.Table, 4, 1, .PIXEL},
-    .Material            = {.Table, 10, MATERIAL_TEXTURE_COUNT, .PIXEL},
+    .Textures            = {.Table, 22, SRV_HEAP_CAPACITY, .PIXEL},
     .Frame_Constants     = {.CBV, 4, 0, .ALL},
     .Shadow_Cascade      = {.Constants, 5, 1, .VERTEX},
     .Texture_T8          = {.Table, 8, 1, .PIXEL},
@@ -1089,18 +1066,19 @@ ROOT_LAYOUT := [Root_Slot]Root_Param{
     .Instance_Draws      = {.SRV, 21, 0, .VERTEX},
 }
 
-// Binds this frame's objects and instance lists, for the mesh passes.
+// Binds this frame's objects and instance lists, and the bindless textures
+// they index, for the mesh passes. The SRV heap must be set.
 renderer_bind_objects :: proc() {
     renderer_bind_buffer_srv(.Objects, renderer_object_buffer_address())
     renderer_bind_buffer_srv(.Instance_Draws, renderer_instance_buffer_address())
+    renderer_bind_srv(.Textures, 0)
 }
 
-// Draws a batch's instances: its first draw's material table, geometry and
-// submesh range, once per instance. renderer_bind_objects must have run.
+// Draws a batch's instances: its first draw's geometry and submesh range,
+// once per instance. renderer_bind_objects must have run.
 renderer_draw_batch :: proc(draws: []Draw, batch: DrawBatch) {
     r := &g_renderer
     draw := draws[batch.draw]
-    r.command_list->SetGraphicsRootDescriptorTable(u32(Root_Slot.Material), draw.material_table)
     r.command_list->SetGraphicsRoot32BitConstant(u32(Root_Slot.Draw_Constants), batch.first_instance, 0)
 
     assert(int(draw.mesh) > 0 && int(draw.mesh) < len(r.meshes))
@@ -1744,19 +1722,7 @@ renderer_load_textures :: proc(){
         (^rawptr)(&r.srv_heap),
     ))
 
-    // CPU-only mirror of the texture SRVs: the copy source for per-draw
-    // material tables (copying out of a shader-visible heap is slow).
-    srv_heap_desc.Flags = {}
-    dx_check(r.device->CreateDescriptorHeap(
-        &srv_heap_desc,
-        d3d12.IDescriptorHeap_UUID,
-        (^rawptr)(&r.srv_staging_heap),
-    ))
-
     r.srv_descriptor_size = r.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV)
-
-    // Per frame in flight and per draw: albedo, normal, roughness, metallic.
-    r.material_srv_start = renderer_alloc_srv(FRAME_COUNT * MAX_DRAWS * MATERIAL_TEXTURE_COUNT)
 
     r.shadow_srv_index = renderer_alloc_srv()
     r.spot_shadow_srv_index = renderer_alloc_srv()
@@ -1963,11 +1929,6 @@ renderer_upload_texture :: proc(
 
     r.device->CreateShaderResourceView(gpu.resource, &srv_desc, srv_handle)
 
-    staging_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.srv_staging_heap->GetCPUDescriptorHandleForHeapStart(&staging_handle)
-    staging_handle.ptr += uint(gpu.srv_index) * uint(r.srv_descriptor_size)
-    r.device->CreateShaderResourceView(gpu.resource, &srv_desc, staging_handle)
-
     return
 }
 
@@ -2105,7 +2066,6 @@ renderer_destroy :: proc(){
     delete(r.meshes)
     delete(r.textures)
     r.srv_heap->Release()
-    r.srv_staging_heap->Release()
 
     r.shadow_map->Release()
     r.shadow_dsv_heap->Release()

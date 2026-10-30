@@ -15,8 +15,7 @@ CullingStats :: struct {
     draws_dropped: bool,
 }
 
-// Draws per frame: one per (entity, submesh). Sizes the object buffer and
-// the material-table rings.
+// Draws per frame: one per (entity, submesh). Sizes the object buffer.
 MAX_DRAWS :: 4096
 // Instance-list entries per frame: each view lists each draw at most once,
 // and the views are the camera's opaque and blended lists plus every shadow
@@ -33,8 +32,6 @@ Draw_Variant :: enum u8 {Opaque, Masked, Double_Sided, Masked_Double_Sided}
 Draw :: struct {
     mesh: MeshHandle,
     first_index, index_count: u32,
-    // Albedo, normal, roughness, metallic, emissive and occlusion textures.
-    material_table: d3d12.GPU_DESCRIPTOR_HANDLE,
     variant: Draw_Variant,
     // Alpha-blended: drawn in the transparent pass instead of the prepass and
     // lit pass.
@@ -44,7 +41,7 @@ Draw :: struct {
 }
 
 // One draw call: `instance_count` instances of `draw`'s submesh, with its
-// material table and pipeline variant. Instance i draws the object at entry
+// pipeline variant. Each instance's object names its own textures. Instance i draws the object at entry
 // first_instance + i of this frame's instance list.
 DrawBatch :: struct {
     draw: u32,
@@ -79,33 +76,31 @@ FrameDraws :: struct {
 }
 
 // Turns a view's visible draws into draw calls, appending their instance
-// lists to this frame's. With `merge`, draws of the same submesh range,
-// material table and variant become one call; the calls are sorted by
-// variant, then material, so pipelines and tables change rarely. Without
+// lists to this frame's. With `merge`, draws of the same submesh range and
+// variant become one call, whatever their materials (textures are bindless);
+// the calls are sorted by variant, so pipelines change rarely. Without
 // it, every draw is its own call in the given order (blended draws, sorted
 // back to front).
 renderer_batch_draws :: proc(data: ^FrameDraws, indices: []u32, merge: bool) -> []DrawBatch {
     Batch_Key :: struct {
         variant: Draw_Variant,
-        table: u64,
         mesh: MeshHandle,
         first_index, index_count: u32,
         draw: u32,
     }
     same_batch :: proc(a, b: Batch_Key) -> bool {
-        return a.variant == b.variant && a.table == b.table && a.mesh == b.mesh &&
+        return a.variant == b.variant && a.mesh == b.mesh &&
                a.first_index == b.first_index && a.index_count == b.index_count
     }
 
     keys := make([]Batch_Key, len(indices), context.temp_allocator)
     for draw_index, i in indices {
         draw := &data.draws[draw_index]
-        keys[i] = {draw.variant, draw.material_table.ptr, draw.mesh, draw.first_index, draw.index_count, draw_index}
+        keys[i] = {draw.variant, draw.mesh, draw.first_index, draw.index_count, draw_index}
     }
     if merge {
         slice.sort_by(keys, proc(a, b: Batch_Key) -> bool {
             if a.variant != b.variant do return a.variant < b.variant
-            if a.table != b.table do return a.table < b.table
             if a.mesh != b.mesh do return a.mesh < b.mesh
             if a.first_index != b.first_index do return a.first_index < b.first_index
             if a.index_count != b.index_count do return a.index_count < b.index_count
@@ -142,9 +137,6 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     post := &r.post_cb_mapped_data[r.frame_slot]
     sky := &r.sky_cb_mapped_data[r.frame_slot]
     objects := r.object_mapped[int(r.frame_slot) * MAX_DRAWS:]
-    // One material table per distinct set of textures: draws can share a
-    // batch only if they share a table.
-    material_tables := make(map[[MATERIAL_TEXTURE_COUNT]TextureHandle]d3d12.GPU_DESCRIPTOR_HANDLE, context.temp_allocator)
     environment_sin := math.sin(math.to_radians(r.environment_settings.rotation_degrees))
     environment_cos := math.cos(math.to_radians(r.environment_settings.rotation_degrees))
 
@@ -379,18 +371,17 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
                 alpha_cutoff = clamp(0.5 / opacity, 0, 1) if opacity > 0 else 1
             }
 
-            material_table, table_found := material_tables[textures]
-            if !table_found {
-                material_table = renderer_material_table(len(material_tables), textures)
-                material_tables[textures] = material_table
+            // Bindless: the shaders index the SRV heap with these.
+            texture_indices: [MATERIAL_TEXTURE_COUNT]u32
+            for texture, t in textures {
+                assert(assets_texture_valid(texture))
+                texture_indices[t] = r.textures[texture].srv_index
             }
 
             draw^ = Draw{
                 mesh = mesh,
                 first_index = submesh.first_index,
                 index_count = submesh.index_count,
-                // The depth-only passes bind it too, for cutouts.
-                material_table = material_table,
                 variant = Draw_Variant(int(cutout) + 2 * int(material.double_sided)),
                 blended = material.alpha_blend,
                 bounds = bounds_to_world(submesh.bounds, model),
@@ -421,6 +412,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
                 emissive = material.emissive * material.emissive_strength,
                 alpha_cutoff = alpha_cutoff,
                 opacity = opacity,
+                textures = texture_indices,
             }
             data.draw_count += 1
         }

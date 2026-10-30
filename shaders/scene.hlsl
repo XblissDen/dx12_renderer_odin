@@ -60,8 +60,16 @@ struct ObjectData
     float  alpha_cutoff; // Used by the cutout pipelines only.
 
     float opacity; // Blended materials: multiplies albedo alpha.
-    float3 _object_pad0; // Up to the 288 bytes Odin gives the struct.
-    float4 _object_pad1;
+
+    // The material's textures, as indices into g_textures (the SRV heap).
+    // Unused maps are neutral textures (white, flat normal).
+    uint albedo_texture;
+    uint normal_texture;
+    uint roughness_texture;
+    uint metallic_texture;
+    uint emissive_texture;
+    uint occlusion_texture;
+    float _object_pad; // Up to the 288 bytes Odin gives the struct.
 };
 
 StructuredBuffer<ObjectData> g_objects : register(t20);
@@ -206,14 +214,17 @@ cbuffer ShadowCascade : register(b5)
     uint shadow_cascade_index;
 };
 
-// The material table (root slot Material): albedo, normal, roughness,
-// metallic, emissive, occlusion. Unused maps are neutral (white, flat normal).
-Texture2D         g_texture       : register(t10);
-Texture2D<float4> g_normal_map    : register(t11);
-Texture2D<float4> g_roughness_map : register(t12);
-Texture2D<float4> g_metallic_map  : register(t13);
-Texture2D<float4> g_emissive_map  : register(t14);
-Texture2D<float4> g_occlusion_map : register(t15);
+// Bindless textures: the whole SRV heap (root slot Textures), indexed by the
+// object's texture indices. Instances of one draw call can use different
+// textures, so the index may differ across a wave: NonUniformResourceIndex.
+Texture2D<float4> g_textures[] : register(t22);
+
+#define g_texture       g_textures[NonUniformResourceIndex(g_object.albedo_texture)]
+#define g_normal_map    g_textures[NonUniformResourceIndex(g_object.normal_texture)]
+#define g_roughness_map g_textures[NonUniformResourceIndex(g_object.roughness_texture)]
+#define g_metallic_map  g_textures[NonUniformResourceIndex(g_object.metallic_texture)]
+#define g_emissive_map  g_textures[NonUniformResourceIndex(g_object.emissive_texture)]
+#define g_occlusion_map g_textures[NonUniformResourceIndex(g_object.occlusion_texture)]
 
 SamplerState g_sampler : register(s0);
 SamplerState g_material_sampler : register(s2);

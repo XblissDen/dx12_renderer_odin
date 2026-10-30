@@ -26,8 +26,8 @@ All temporary allocations of a frame are freed at the end of the iteration.
 
 Two frames can be in flight (`FRAME_COUNT`). Each has its own command
 allocator and its own slice of every per-frame upload buffer: frame constants,
-per-draw object data and instance lists, post-processing and sky constants, the
-light buffer, and the material descriptor tables. Before recording, the CPU waits on the
+per-draw object data and instance lists, post-processing and sky constants,
+and the light buffer. Before recording, the CPU waits on the
 fence for the frame that last used the same slot (`renderer_begin_frame`). That
 wait is also when it reads that frame's GPU timings and exposure, which are
 therefore two frames old. Presentation uses vsync.
@@ -61,15 +61,14 @@ GPU data every frame:
 
 - **Draws**: one per submesh of every visible model entity, up to `MAX_DRAWS`
   (4096). Each has its object data: the model matrix, the inverse model
-  matrix for normals, last frame's model matrix, and the material's values.
-  These are 288-byte `ObjectData` entries in this frame's part of the object
-  buffer, which shaders read as a structured buffer.
-- **Material tables**: the six textures (albedo, normal, roughness,
-  metallic, emissive, occlusion) are copied from a CPU-only staging descriptor
-  heap into a contiguous table in the shader-visible heap, bound with one root
-  descriptor table. Draws with the same six textures share one table. Unused
-  maps get neutral textures (white, or a flat normal), so shaders never branch
-  on missing textures except where a flag saves work.
+  matrix for normals, last frame's model matrix, the material's values, and
+  its textures. These are 288-byte `ObjectData` entries in this frame's part
+  of the object buffer, which shaders read as a structured buffer.
+- **Bindless textures**: an object names its six textures (albedo, normal,
+  roughness, metallic, emissive, occlusion) by their index in the SRV heap
+  ([below](#bindless-textures)). Unused maps get neutral textures (white, or a
+  flat normal), so shaders never branch on missing textures except where a
+  flag saves work.
 - **Draw variants**: each mesh pass has four pipelines, for opaque, cutout,
   double-sided, and cutout double-sided materials. Cutouts run the alpha test
   in the depth-only passes; double-sided ones disable culling.
@@ -99,37 +98,65 @@ off to compare.
 ### Instanced batching
 
 Draws that could be drawn by the same draw call go out as one instanced call.
-Two draws batch when they share the same mesh and submesh index range, the
-same material table, and the same pipeline variant. Their transforms and material values
-(tint, roughness, and so on) can differ, so copies of a model, or the repeated
-parts of a glTF node tree, become one call. The camera and every shadow view
+Two draws batch when they share the same mesh and submesh index range and the
+same pipeline variant. Everything else can differ: transforms, material values
+(tint, roughness, and so on), and textures, which are bindless. Copies of a
+model, the repeated parts of a glTF node tree, and different objects that use
+the same mesh (the cube, say) all become one call. The camera and every shadow view
 batch separately (`renderer_batch_draws` in `src/renderer_frame_data.odin`):
 
-1. The view's visible draws are sorted by variant, then material table, then
-   submesh, so pipelines and tables change rarely.
+1. The view's visible draws are sorted by variant, then submesh, so
+   pipelines change rarely.
 2. Each run of draws that batch together becomes a `DrawBatch`. Its draw
    indices go into this frame's **instance list**, an upload buffer of `u32`s
    with room for every view to list every draw once.
-3. The call binds the first draw's material table and geometry, sets the
-   batch's start in the instance list as a root constant (`instance_base`),
-   and draws `instance_count` instances.
+3. The call binds the first draw's geometry, sets the batch's start in the
+   instance list as a root constant (`instance_base`), and draws
+   `instance_count` instances.
 
 The vertex shader finds its object as
 `g_objects[g_instance_draws[instance_base + SV_InstanceID]]` and passes the
-index to the pixel shader as a `nointerpolation` value. That way the pixel shader reads the same object's
-material values. The prepass and the lit pass use the same batches.
+index to the pixel shader as a `nointerpolation` value. That way the pixel
+shader reads the same object's material values and textures. The prepass and
+the lit pass use the same batches.
 
 Blended draws are not merged, because they must stay in back-to-front order:
 each is its own call of one instance.
 
 The panel's **Draw calls** count is the camera's calls per pass, next to the
-visible draws, and the shadow line shows its draws and calls. In the default
-scene, 46 draws take 4 calls per pass, and 214 shadow draws take 30 calls.
+visible draws, and the shadow line shows its draws and calls. With 40 extra
+cubes in the default scene, the 46 draws take 2 calls per pass: every
+cube-shaped object (portrait cubes, the stone ground, the light markers),
+then the pyramid. The 214 shadow draws take 21 calls. Sponza gains little,
+because its submeshes are different index ranges.
 
-Within a pass, the draw order is now the sort order rather than entity
-order. Where two surfaces have exactly the same depth, the one drawn last wins
-the `LESS_EQUAL` test, so the result can differ from before. In Sponza this
-changed about a dozen pixels on overlapping leaves.
+Within a pass, draws go in sort order rather than entity order. Where two
+surfaces have exactly the same depth (overlapping leaves in Sponza), the one
+drawn last wins the `LESS_EQUAL` test.
+
+### Bindless textures
+
+Shaders see the entire SRV heap as one array, `g_textures[]`, through one
+descriptor table (root slot `Textures`) bound at the heap's start. Every
+texture's SRV is written into the heap once, when it is loaded or imported,
+at the index it keeps (`GpuTexture.srv_index`). Each object stores the
+indices of its six material textures. Shaders read them through
+`NonUniformResourceIndex`, because the instances of one call can use different
+textures, so the index can differ within a wave.
+
+- **Nothing is copied per draw.** There is no per-frame material table ring,
+  and no CPU-only staging heap to copy from.
+- **Batching ignores textures.** Draws batch on geometry and variant alone.
+- **The array is unbounded.** FXC needs
+  `ENABLE_UNBOUNDED_DESCRIPTOR_TABLES` for that, so every shader is compiled
+  with it.
+- **Hardware support:** feature level 12_0, which the renderer already
+  requires, guarantees resource binding tier 2. That tier allows a table over
+  the whole heap with slots the shader never reads left unwritten.
+
+The heap holds 65,536 descriptors, render targets and environment maps
+included. The rest is room for textures, and importing reports when it is
+full.
 
 ## Depth prepass
 
@@ -173,7 +200,7 @@ assigns registers:
 | Spot shadows, Point shadows | t5, t6 | Shadow map arrays |
 | Surface | t7 | Prepass normal and roughness |
 | Texture T8, Depth | t8, t9 | AO or motion vectors; scene depth |
-| Material | t10–t15 | The draw's material table |
+| Textures | t22 onwards | The whole SRV heap, the bindless texture array |
 | Exposure buffer | t16 | Root SRV, the automatic exposure |
 | Reflections | t17 | SSR result |
 | Lights, Cluster lights | t18, t19 | Root SRVs, the light buffer and cluster lists |
