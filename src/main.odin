@@ -34,6 +34,7 @@ main :: proc(){
     renderer_create_debug_lines()
     renderer_create_taa_targets()
     renderer_create_ssr_targets()
+    renderer_create_hiz()
     if error := renderer_set_environment(renderer_default_environment_settings()); error != "" do panic(error)
 
     defer renderer_destroy()

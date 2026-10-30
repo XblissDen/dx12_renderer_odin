@@ -2,7 +2,7 @@ package main
 
 import d3d12 "vendor:directx/d3d12"
 
-renderer_render_scene_pass :: proc(draws: []Draw, batches, transparent_batches: []DrawBatch) {
+renderer_render_scene_pass :: proc(draws: []Draw, batches, late_batches, transparent_batches: []DrawBatch) {
     r := &g_renderer
 
     renderer_begin_gpu_pass(.Scene)
@@ -63,7 +63,9 @@ renderer_render_scene_pass :: proc(draws: []Draw, batches, transparent_batches: 
     renderer_bind_buffer_srv(.Lights, renderer_light_buffer_address())
     renderer_bind_buffer_srv(.Cluster_Lights, r.cluster_buffer->GetGPUVirtualAddress())
 
+    // The prepass's early and late calls.
     renderer_draw_batches(draws, batches, r.hdr_pipeline_states)
+    renderer_draw_batches(draws, late_batches, r.hdr_pipeline_states)
 
     // Blended surfaces over the result, farthest first. They also write their
     // motion into the prepass's velocity target where they are mostly

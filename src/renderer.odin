@@ -54,6 +54,7 @@ GPU_Pass :: enum u32{
     Light_Clusters,
     Fog,
     Culling,
+    Occlusion,
 }
 
 Vertex :: struct {
@@ -330,8 +331,15 @@ Renderer :: struct {
     cull_bounds_mapped: [^]CullBounds,
     indirect_upload_mapped: [^]u8,
     indirect_buffer, instance_buffer, cull_readback: ^d3d12.IResource,
+    // Occlusion culling: per draw, whether the camera saw it last frame; the
+    // depth pyramid (power-of-two size, every level) with its views: the
+    // whole pyramid, then each level alone, and each level's UAV.
+    visibility_buffer, hiz_texture: ^d3d12.IResource,
+    hiz_width, hiz_height, hiz_mip_count: u32,
+    hiz_srv_start, hiz_uav_start: u32,
+    occlusion_culling_enabled: bool,
     cull_root_signature: ^d3d12.IRootSignature,
-    cull_pipeline_state: ^d3d12.IPipelineState,
+    cull_pipeline_state, hiz_pipeline_state: ^d3d12.IPipelineState,
     // ExecuteIndirect's layout of IndirectDraw.
     draw_command_signature: ^d3d12.ICommandSignature,
 
@@ -764,7 +772,7 @@ renderer_pipeline_slots :: proc() -> []^^d3d12.IPipelineState {
         &r.taa_resolve_pipeline_state, &r.sky_pipeline_state,
         &r.irradiance_pipeline_state, &r.prefilter_pipeline_state,
         &r.ssao_pipeline_state, &r.ssao_blur_pipeline_state, &r.ssr_pipeline_state, &r.mip_pipeline,
-        &r.cluster_pipeline_state, &r.cull_pipeline_state,
+        &r.cluster_pipeline_state, &r.cull_pipeline_state, &r.hiz_pipeline_state,
         &r.fog_inject_pipeline_state, &r.fog_integrate_pipeline_state, &r.fog_apply_pipeline_state,
         &r.selection_pipeline_state, &r.selection_outline_pipeline_state,
         &r.debug_line_pipeline_states[0], &r.debug_line_pipeline_states[1],
@@ -890,6 +898,7 @@ renderer_init :: proc() {
     r.fog = renderer_default_fog_settings()
 
     r.frustum_culling_enabled = true
+    r.occlusion_culling_enabled = true
 
     // DEBUG LAYER
     when ODIN_DEBUG {
@@ -1671,6 +1680,7 @@ renderer_resize:: proc(width, height: u32){
     for target in r.ao_targets do target->Release()
     renderer_release_taa_targets()
     renderer_release_ssr_targets()
+    r.hiz_texture->Release()
     r.bloom_texture->Release()
     r.selection_mask->Release()
 
@@ -1716,6 +1726,7 @@ renderer_resize:: proc(width, height: u32){
     renderer_create_ssao_targets()
     renderer_create_taa_targets()
     renderer_create_ssr_targets()
+    renderer_create_hiz()
     renderer_create_selection_mask()
 }
 
@@ -1959,12 +1970,12 @@ renderer_render_frame :: proc(scene: ^Scene) {
     // Depth first: SSAO and SSR read it, and the lit pass only shades
     // visible pixels. SSR reads last frame's image before the lit pass
     // overwrites the HDR target.
-    renderer_render_depth_prepass(draws, frame.scene_batches)
+    renderer_render_depth_prepass(frame)
     renderer_render_ssao()
     renderer_render_ssr()
     renderer_build_light_clusters()
     renderer_render_fog()
-    renderer_render_scene_pass(draws, frame.scene_batches, frame.transparent_batches)
+    renderer_render_scene_pass(draws, frame.scene_batches, frame.late_scene_batches, frame.transparent_batches)
 
     // TAA resolves in HDR, so bloom and tone mapping see the stable image.
     renderer_render_taa()
@@ -2062,6 +2073,7 @@ renderer_destroy :: proc(){
 
     r.object_buffer->Release()
     renderer_release_culling()
+    r.hiz_texture->Release()
     r.frame_constant_buffer->Release()
 
     r.depth_buffer->Release()

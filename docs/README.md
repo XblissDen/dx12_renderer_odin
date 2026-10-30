@@ -5,8 +5,8 @@ does, in what order, and why it is built that way. The [project
 README](../README.md) covers building and running.
 
 - [Frame structure](frame.md): the main loop, frames in flight, the order of
-  GPU passes, per-frame data, instanced batching, GPU culling and indirect
-  draws, bindless textures,
+  GPU passes, per-frame data, instanced batching, GPU frustum and occlusion
+  culling with indirect draws, bindless textures,
   the depth prepass, the root signature, GPU timings, and shader hot-reload.
 - [Lighting](lighting.md): surface shading, materials, the sun, point and spot
   lights, clustered lighting, shadows, image-based lighting and the sky,
@@ -64,6 +64,6 @@ README](../README.md) covers building and running.
 | `shaders/scene.hlsl` | Mesh shading, prepass, shadows, SSAO, SSR, light clusters, fog |
 | `shaders/post_process.hlsl` | Full-screen triangle, bloom, TAA, tone mapping, FXAA, sharpening |
 | `shaders/auto_exposure.hlsl` | Luminance histogram and exposure adaptation |
-| `shaders/cull.hlsl` | GPU frustum culling of the draws |
+| `shaders/cull.hlsl` | GPU frustum and occlusion culling, the depth pyramid |
 | `shaders/sky.hlsl`, `irradiance.hlsl`, `environment_prefilter.hlsl` | Sky and IBL baking |
 | `shaders/texture_mips.hlsl`, `selection.hlsl` | Mip generation; selection outline and debug lines |

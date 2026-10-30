@@ -184,6 +184,7 @@ debug_ui_update :: proc() {
         debug_ui_text(fmt.bprintf(text_buffer[:], "FPS: %.0f | Frame: %.2f ms", r.fps, r.frame_ms))
 
         ui_checkbox("Frustum culling", &r.frustum_culling_enabled)
+        ui_checkbox("Occlusion culling", &r.occlusion_culling_enabled)
 
         stats := r.culling_stats
         spot_shadow_count := 0
@@ -193,10 +194,11 @@ debug_ui_update :: proc() {
         // Visible draws and nonempty calls come from the GPU cull pass.
         debug_ui_text(fmt.bprintf(
             text_buffer[:],
-            "Scene meshes: %d/%d | Culled: %d | Draw calls: %d",
+            "Scene meshes: %d/%d | Culled: %d (%d occluded) | Draw calls: %d",
             stats.gpu.scene_visible,
             stats.scene_total,
             stats.scene_total - int(stats.gpu.scene_visible),
+            stats.gpu.scene_occluded,
             stats.gpu.scene_calls,
         ))
 
@@ -214,7 +216,7 @@ debug_ui_update :: proc() {
         pass_names := [GPU_PASS_COUNT]string{
             "Shadow", "Scene", "Bloom prefilter", "Bloom downsample",
             "Bloom upsample", "Post + UI", "Depth prepass", "SSAO + blur", "FXAA / sharpen", "TAA resolve",
-            "Auto exposure", "SSR", "Light clusters", "Volumetric fog", "GPU culling",
+            "Auto exposure", "SSR", "Light clusters", "Volumetric fog", "GPU culling", "Occlusion culling",
         }
         if ui_begin_table("GPU timings") {
             ui_table_column("GPU pass")

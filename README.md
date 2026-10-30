@@ -22,7 +22,8 @@ written in Odin on DirectX 12, with a Dear ImGui interface.
   move/rotate/scale gizmos, viewport icons and debug lines (light ranges,
   bounds), an Inspector, undo and redo, and saving and
   loading scenes.
-- **Draws**: frustum culling per view on the GPU with indirect draws,
+- **Draws**: GPU culling with indirect draws (frustum culling per view, and
+  two-phase Hi-Z occlusion culling for the camera),
   bindless textures, and instanced batching of draws that share a mesh and
   pipeline.
 - **Workflow**: shader hot-reload, and GPU timings for every pass.

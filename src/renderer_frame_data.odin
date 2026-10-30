@@ -17,19 +17,24 @@ CullingStats :: struct {
 }
 
 // The cull pass's counters, at the start of the indirect call buffer: draws
-// that passed the camera's frustum and the calls they went into (prepass and
-// lit pass each make these), then the same over all shadow views.
+// the camera sees and the calls they went into (early and late together;
+// prepass and lit pass each make these), the same over all shadow views,
+// then the camera's draws in its frustum but hidden behind others.
 CullCounters :: struct {
     scene_visible, scene_calls: u32,
     shadow_visible, shadow_calls: u32,
+    scene_occluded: u32,
 }
 
 // Draws per frame: one per (entity, submesh). Sizes the object buffer.
 MAX_DRAWS :: 4096
 // Instance-list entries per frame: each view lists each draw at most once,
-// and the views are the camera's opaque and blended lists plus every shadow
-// view. Also bounds the cull entries.
+// and the views are the camera's early, late and blended lists plus every
+// shadow view (the camera's three hold at most two of each draw). The cull
+// entries fit in the same count.
 MAX_INSTANCES :: (SHADOW_VIEW_COUNT + 2) * MAX_DRAWS
+// Levels of the depth pyramid for occlusion culling: up to 8192 texels.
+HIZ_MAX_MIPS :: 14
 // Indirect draw calls per frame; a view whose calls do not fit is skipped.
 MAX_DRAW_CALLS :: 32768
 
@@ -68,12 +73,25 @@ CullBounds :: struct {
     half_axes: [3][3]f32,
 }
 
-// Per frame slot, read by the cull pass.
+// Per frame slot, read by the cull pass; laid out like cull.hlsl's cbuffer.
 CullConstants :: struct #align(256) {
     view_planes: [CULL_VIEW_COUNT][6][4]f32,
+    // The camera's unjittered view-projection, for the depth pyramid test.
+    view_projection: alg.Matrix4f32,
+    hiz_size: [2]f32,
+    hiz_mip_count: u32,
+    occlusion_enabled: u32,
     entry_count: u32,
     culling_enabled: u32,
+    // Entries come as the camera's opaque draws, its blended ones, then the
+    // shadow views'.
+    opaque_entry_count, camera_entry_count: u32,
+    // The camera's late calls are copies of its early ones, this many
+    // commands on.
+    late_command_offset: u32,
 }
+#assert(offset_of(CullConstants, view_projection) == 3168)
+#assert(offset_of(CullConstants, late_command_offset) == 3264)
 
 // How a draw's material changes its pipelines (one per variant in each mesh
 // pass): cutouts discard pixels in the depth-only passes, and double-sided
@@ -120,7 +138,10 @@ FrameDraws :: struct {
     // The draw calls of the camera's opaque and blended draws and of each
     // shadow view (in the frame's temp allocator): every draw the view
     // might see, culled on the GPU. Shadow views without a light have none.
-    scene_batches, transparent_batches: []DrawBatch,
+    // The camera's opaque draws have two sets of calls: early ones for what
+    // it saw last frame, and late ones (the same calls, with their own
+    // instances) for what the depth pyramid shows it now sees as well.
+    scene_batches, late_scene_batches, transparent_batches: []DrawBatch,
     shadow_batches: [SHADOW_VIEW_COUNT][]DrawBatch,
     // How much of this frame's instance list, cull entries and indirect
     // calls those use.
@@ -172,9 +193,10 @@ renderer_batch_draws :: proc(data: ^FrameDraws, indices: []u32, merge: bool) -> 
 
 // Gives `view` (0: the camera; 1 + n: shadow view n) its own copy of a
 // layout's calls: one indirect call each, with room in the instance list for
-// all its draws, and a cull entry per draw. Returns nothing, and marks draws
-// as dropped, if the calls do not fit this frame.
-renderer_add_view_batches :: proc(data: ^FrameDraws, layout: DrawLayout, view: u32) -> []DrawBatch {
+// all its draws, and a cull entry per draw (unless `with_entries` is off: the
+// camera's late calls, which the early calls' entries fill). Returns nothing,
+// and marks draws as dropped, if the calls do not fit this frame.
+renderer_add_view_batches :: proc(data: ^FrameDraws, layout: DrawLayout, view: u32, with_entries := true) -> []DrawBatch {
     r := &g_renderer
     call_count := len(layout.starts) - 1
     if call_count <= 0 do return nil
@@ -196,7 +218,7 @@ renderer_add_view_batches :: proc(data: ^FrameDraws, layout: DrawLayout, view: u
             first_instance = u32(data.instance_count) + first,
             args = {IndexCountPerInstance = draw.index_count, StartIndexLocation = draw.first_index},
         }
-        for draw_index in layout.draws[first:end] {
+        if with_entries do for draw_index in layout.draws[first:end] {
             assert(data.entry_count < MAX_INSTANCES)
             entries[data.entry_count] = {draw_index, command, view}
             data.entry_count += 1
@@ -615,8 +637,15 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     transparent_order := make([]u32, len(transparent), context.temp_allocator)
     for draw, i in transparent do transparent_order[i] = draw.index
 
-    data.scene_batches = renderer_add_view_batches(data, renderer_batch_draws(data, opaque[:], merge = true), 0)
+    // The camera's calls come first, so they always fit: early, late, then
+    // blended. The cull pass tells the entries apart by these counts.
+    opaque_layout := renderer_batch_draws(data, opaque[:], merge = true)
+    data.scene_batches = renderer_add_view_batches(data, opaque_layout, 0)
+    opaque_entry_count := data.entry_count
+    late_command_offset := data.command_count
+    data.late_scene_batches = renderer_add_view_batches(data, opaque_layout, 0, with_entries = false)
     data.transparent_batches = renderer_add_view_batches(data, renderer_batch_draws(data, transparent_order, merge = false), 0)
+    camera_entry_count := data.entry_count
 
     // Only shadow views with a light this frame get calls.
     view_frustums: [CULL_VIEW_COUNT]Frustum
@@ -644,8 +673,15 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
 
     cull := &r.cull_constants_mapped[r.frame_slot]
     for frustum, view in view_frustums do cull.view_planes[view] = transmute([6][4]f32)frustum.planes
+    cull.view_projection = view_projection
+    cull.hiz_size = {f32(r.hiz_width), f32(r.hiz_height)}
+    cull.hiz_mip_count = r.hiz_mip_count
+    cull.occlusion_enabled = u32(r.occlusion_culling_enabled)
     cull.entry_count = u32(data.entry_count)
     cull.culling_enabled = u32(r.frustum_culling_enabled)
+    cull.opaque_entry_count = u32(opaque_entry_count)
+    cull.camera_entry_count = u32(camera_entry_count)
+    cull.late_command_offset = u32(late_command_offset)
     // The counters start at zero; the calls follow them.
     (^CullCounters)(renderer_frame_indirect_header())^ = {}
 
@@ -665,53 +701,199 @@ renderer_frame_indirect_header :: proc() -> [^]u8 {
     return r.indirect_upload_mapped[int(r.frame_slot) * INDIRECT_SLOT_SIZE:]
 }
 
-// Culls this frame's candidate draws on the GPU (cull.hlsl): fills in the
-// indirect calls' instance counts and the instance list the mesh passes
-// read, and copies the counters for the panel. Runs before the shadow pass.
+// The cull pass's root signature and its buffers, for either phase. `late`
+// selects the phase (cull.hlsl's g_pass.x).
+renderer_bind_cull :: proc(late: bool) {
+    r := &g_renderer
+    heaps := []^d3d12.IDescriptorHeap{r.srv_heap}
+    r.command_list->SetDescriptorHeaps(1, raw_data(heaps))
+    r.command_list->SetComputeRootSignature(r.cull_root_signature)
+    r.command_list->SetPipelineState(r.cull_pipeline_state)
+    pass := [4]u32{u32(late), 0, 0, 0}
+    r.command_list->SetComputeRoot32BitConstants(u32(Cull_Root_Slot.Pass_Constants), 4, &pass[0], 0)
+    r.command_list->SetComputeRootConstantBufferView(u32(Cull_Root_Slot.Constants),
+        r.cull_constant_buffer->GetGPUVirtualAddress() + u64(r.frame_slot) * size_of(CullConstants))
+    r.command_list->SetComputeRootShaderResourceView(u32(Cull_Root_Slot.Entries),
+        r.cull_entry_buffer->GetGPUVirtualAddress() + u64(int(r.frame_slot) * MAX_INSTANCES * size_of(CullEntry)))
+    r.command_list->SetComputeRootShaderResourceView(u32(Cull_Root_Slot.Bounds),
+        r.cull_bounds_buffer->GetGPUVirtualAddress() + u64(int(r.frame_slot) * MAX_DRAWS * size_of(CullBounds)))
+    r.command_list->SetComputeRootDescriptorTable(u32(Cull_Root_Slot.Hiz), renderer_srv_gpu(r.hiz_srv_start))
+    r.command_list->SetComputeRootUnorderedAccessView(u32(Cull_Root_Slot.Commands), r.indirect_buffer->GetGPUVirtualAddress())
+    r.command_list->SetComputeRootUnorderedAccessView(u32(Cull_Root_Slot.Instances), r.instance_buffer->GetGPUVirtualAddress())
+    r.command_list->SetComputeRootUnorderedAccessView(u32(Cull_Root_Slot.Visibility), r.visibility_buffer->GetGPUVirtualAddress())
+}
+
+buffer_transition :: proc(resource: ^d3d12.IResource, before, after: d3d12.RESOURCE_STATES) -> d3d12.RESOURCE_BARRIER {
+    barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
+    barrier.Transition = {
+        pResource = resource, StateBefore = before, StateAfter = after,
+        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+    }
+    return barrier
+}
+
+// The early cull (cull.hlsl): copies this frame's indirect calls to the GPU,
+// then fills in the shadow views' calls and the camera's early ones (what it
+// saw last frame). Runs before the shadow pass.
 renderer_cull_draws :: proc(data: ^FrameDraws) {
     r := &g_renderer
     renderer_begin_gpu_pass(.Culling)
     defer renderer_end_gpu_pass(.Culling)
 
-    // Both buffers decay to the common state after each frame's commands.
-    barriers := [2]d3d12.RESOURCE_BARRIER{{Type = .TRANSITION}, {Type = .TRANSITION}}
-    barriers[0].Transition = {
-        pResource = r.indirect_buffer, StateBefore = d3d12.RESOURCE_STATE_COMMON,
-        StateAfter = {.COPY_DEST}, Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
-    }
-    barriers[1].Transition = {
-        pResource = r.instance_buffer, StateBefore = d3d12.RESOURCE_STATE_COMMON,
-        StateAfter = {.UNORDERED_ACCESS}, Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+    // The buffers decay to the common state after each frame's commands.
+    barriers := [3]d3d12.RESOURCE_BARRIER{
+        buffer_transition(r.indirect_buffer, d3d12.RESOURCE_STATE_COMMON, {.COPY_DEST}),
+        buffer_transition(r.instance_buffer, d3d12.RESOURCE_STATE_COMMON, {.UNORDERED_ACCESS}),
+        buffer_transition(r.visibility_buffer, d3d12.RESOURCE_STATE_COMMON, {.UNORDERED_ACCESS}),
     }
     r.command_list->ResourceBarrier(len(barriers), &barriers[0])
     r.command_list->CopyBufferRegion(
         r.indirect_buffer, 0, r.indirect_upload_buffer, u64(int(r.frame_slot) * INDIRECT_SLOT_SIZE),
         u64(CULL_HEADER_SIZE + data.command_count * size_of(IndirectDraw)),
     )
-    barriers[0].Transition.StateBefore = {.COPY_DEST}
-    barriers[0].Transition.StateAfter = {.UNORDERED_ACCESS}
+    barriers[0] = buffer_transition(r.indirect_buffer, {.COPY_DEST}, {.UNORDERED_ACCESS})
     r.command_list->ResourceBarrier(1, &barriers[0])
 
     if data.entry_count > 0 {
-        r.command_list->SetComputeRootSignature(r.cull_root_signature)
-        r.command_list->SetPipelineState(r.cull_pipeline_state)
-        r.command_list->SetComputeRootConstantBufferView(u32(Cull_Root_Slot.Constants),
-            r.cull_constant_buffer->GetGPUVirtualAddress() + u64(r.frame_slot) * size_of(CullConstants))
-        r.command_list->SetComputeRootShaderResourceView(u32(Cull_Root_Slot.Entries),
-            r.cull_entry_buffer->GetGPUVirtualAddress() + u64(int(r.frame_slot) * MAX_INSTANCES * size_of(CullEntry)))
-        r.command_list->SetComputeRootShaderResourceView(u32(Cull_Root_Slot.Bounds),
-            r.cull_bounds_buffer->GetGPUVirtualAddress() + u64(int(r.frame_slot) * MAX_DRAWS * size_of(CullBounds)))
-        r.command_list->SetComputeRootUnorderedAccessView(u32(Cull_Root_Slot.Commands), r.indirect_buffer->GetGPUVirtualAddress())
-        r.command_list->SetComputeRootUnorderedAccessView(u32(Cull_Root_Slot.Instances), r.instance_buffer->GetGPUVirtualAddress())
+        renderer_bind_cull(late = false)
         r.command_list->Dispatch(u32(data.entry_count + 63) / 64, 1, 1)
     }
 
-    barriers[0].Transition.StateBefore = {.UNORDERED_ACCESS}
-    barriers[0].Transition.StateAfter = {.INDIRECT_ARGUMENT, .COPY_SOURCE}
-    barriers[1].Transition.StateBefore = {.UNORDERED_ACCESS}
-    barriers[1].Transition.StateAfter = {.NON_PIXEL_SHADER_RESOURCE}
+    barriers[0] = buffer_transition(r.indirect_buffer, {.UNORDERED_ACCESS}, {.INDIRECT_ARGUMENT})
+    barriers[1] = buffer_transition(r.instance_buffer, {.UNORDERED_ACCESS}, {.NON_PIXEL_SHADER_RESOURCE})
+    r.command_list->ResourceBarrier(2, &barriers[0])
+}
+
+// Between the prepass's early and late draws (the depth buffer readable by
+// compute): builds the depth pyramid from the early depth, then the late
+// cull fills in the camera's late and blended calls and records what the
+// camera sees for next frame. Copies the counters for the panel. Leaves the
+// compute root signature set.
+renderer_cull_late :: proc(data: ^FrameDraws) {
+    r := &g_renderer
+    renderer_begin_gpu_pass(.Occlusion)
+    defer renderer_end_gpu_pass(.Occlusion)
+
+    renderer_bind_cull(late = true)
+    if r.occlusion_culling_enabled do renderer_build_hiz()
+
+    barriers := [2]d3d12.RESOURCE_BARRIER{
+        buffer_transition(r.indirect_buffer, {.INDIRECT_ARGUMENT}, {.UNORDERED_ACCESS}),
+        buffer_transition(r.instance_buffer, {.NON_PIXEL_SHADER_RESOURCE}, {.UNORDERED_ACCESS}),
+    }
+    r.command_list->ResourceBarrier(len(barriers), &barriers[0])
+    // The early cull read the visibility flags that this one rewrites.
+    visibility_done := d3d12.RESOURCE_BARRIER{Type = .UAV}
+    visibility_done.UAV = {pResource = r.visibility_buffer}
+    r.command_list->ResourceBarrier(1, &visibility_done)
+
+    camera_entries := u32(r.cull_constants_mapped[r.frame_slot].camera_entry_count)
+    if camera_entries > 0 {
+        r.command_list->SetPipelineState(r.cull_pipeline_state)
+        r.command_list->Dispatch((camera_entries + 63) / 64, 1, 1)
+    }
+
+    barriers[0] = buffer_transition(r.indirect_buffer, {.UNORDERED_ACCESS}, {.INDIRECT_ARGUMENT, .COPY_SOURCE})
+    barriers[1] = buffer_transition(r.instance_buffer, {.UNORDERED_ACCESS}, {.NON_PIXEL_SHADER_RESOURCE})
     r.command_list->ResourceBarrier(len(barriers), &barriers[0])
     r.command_list->CopyBufferRegion(r.cull_readback, u64(r.frame_slot) * size_of(CullCounters), r.indirect_buffer, 0, size_of(CullCounters))
+}
+
+// Builds the depth pyramid level by level, each from the one before (level
+// 0 from the depth buffer). Between frames the whole pyramid is readable by
+// compute; each level is written as a UAV in turn. The cull root signature
+// must be set.
+renderer_build_hiz :: proc() {
+    r := &g_renderer
+    r.command_list->SetPipelineState(r.hiz_pipeline_state)
+    source_size := [2]u32{r.width, r.height}
+    for level in 0..<r.hiz_mip_count {
+        target_size := [2]u32{max(r.hiz_width >> level, 1), max(r.hiz_height >> level, 1)}
+        barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
+        barrier.Transition = {
+            pResource = r.hiz_texture, Subresource = level,
+            StateBefore = {.NON_PIXEL_SHADER_RESOURCE}, StateAfter = {.UNORDERED_ACCESS},
+        }
+        r.command_list->ResourceBarrier(1, &barrier)
+
+        sizes := [4]u32{source_size.x, source_size.y, target_size.x, target_size.y}
+        r.command_list->SetComputeRoot32BitConstants(u32(Cull_Root_Slot.Pass_Constants), 4, &sizes[0], 0)
+        source := r.depth_srv_index if level == 0 else r.hiz_srv_start + level
+        r.command_list->SetComputeRootDescriptorTable(u32(Cull_Root_Slot.Hiz_Source), renderer_srv_gpu(source))
+        r.command_list->SetComputeRootDescriptorTable(u32(Cull_Root_Slot.Hiz_Target), renderer_srv_gpu(r.hiz_uav_start + level))
+        r.command_list->Dispatch((target_size.x + 7) / 8, (target_size.y + 7) / 8, 1)
+
+        barrier.Transition.StateBefore = {.UNORDERED_ACCESS}
+        barrier.Transition.StateAfter = {.NON_PIXEL_SHADER_RESOURCE}
+        r.command_list->ResourceBarrier(1, &barrier)
+        source_size = target_size
+    }
+    // Back to the late cull's phase constant.
+    pass := [4]u32{1, 0, 0, 0}
+    r.command_list->SetComputeRoot32BitConstants(u32(Cull_Root_Slot.Pass_Constants), 4, &pass[0], 0)
+}
+
+// (Re)creates the depth pyramid: the power of two at or below the window
+// size in each direction, down to one texel. Called with the other
+// screen-sized targets, at startup and on resize; its views keep their
+// heap slots.
+renderer_create_hiz :: proc() {
+    r := &g_renderer
+    floor_pow2 :: proc(x: u32) -> u32 {
+        p := u32(1)
+        for p * 2 <= x do p *= 2
+        return p
+    }
+    r.hiz_width = floor_pow2(r.width)
+    r.hiz_height = floor_pow2(r.height)
+    r.hiz_mip_count = 1
+    for max(r.hiz_width, r.hiz_height) >> r.hiz_mip_count > 0 do r.hiz_mip_count += 1
+    assert(r.hiz_mip_count <= HIZ_MAX_MIPS)
+
+    // The full pyramid (culling), each level alone (building the next), and
+    // each level's UAV.
+    if r.hiz_srv_start == 0 {
+        r.hiz_srv_start = renderer_alloc_srv(1 + HIZ_MAX_MIPS)
+        r.hiz_uav_start = renderer_alloc_srv(HIZ_MAX_MIPS)
+    }
+
+    heap := d3d12.HEAP_PROPERTIES{Type = .DEFAULT}
+    desc := d3d12.RESOURCE_DESC{
+        Dimension = .TEXTURE2D,
+        Width = u64(r.hiz_width),
+        Height = r.hiz_height,
+        DepthOrArraySize = 1,
+        MipLevels = u16(r.hiz_mip_count),
+        Format = .R32_FLOAT,
+        SampleDesc = {Count = 1},
+        Flags = {.ALLOW_UNORDERED_ACCESS},
+    }
+    dx_check(r.device->CreateCommittedResource(
+        &heap, {}, &desc, {.NON_PIXEL_SHADER_RESOURCE}, nil,
+        d3d12.IResource_UUID, (^rawptr)(&r.hiz_texture),
+    ))
+
+    handle :: proc(index: u32) -> d3d12.CPU_DESCRIPTOR_HANDLE {
+        r := &g_renderer
+        h: d3d12.CPU_DESCRIPTOR_HANDLE
+        r.srv_heap->GetCPUDescriptorHandleForHeapStart(&h)
+        h.ptr += uint(index) * uint(r.srv_descriptor_size)
+        return h
+    }
+    srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
+        Format = .R32_FLOAT,
+        ViewDimension = .TEXTURE2D,
+        Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
+    }
+    srv_desc.Texture2D = {MipLevels = r.hiz_mip_count}
+    r.device->CreateShaderResourceView(r.hiz_texture, &srv_desc, handle(r.hiz_srv_start))
+    for level in 0..<r.hiz_mip_count {
+        srv_desc.Texture2D = {MostDetailedMip = level, MipLevels = 1}
+        r.device->CreateShaderResourceView(r.hiz_texture, &srv_desc, handle(r.hiz_srv_start + 1 + level))
+        uav_desc := d3d12.UNORDERED_ACCESS_VIEW_DESC{Format = .R32_FLOAT, ViewDimension = .TEXTURE2D}
+        uav_desc.Texture2D = {MipSlice = level}
+        r.device->CreateUnorderedAccessView(r.hiz_texture, nil, &uav_desc, handle(r.hiz_uav_start + level))
+    }
 }
 
 // The counters frame `slot` counted, once the GPU has finished it.
@@ -727,11 +909,16 @@ renderer_read_cull_counters :: proc(slot: u32) {
 }
 
 Cull_Root_Slot :: enum u32 {
-    Constants, // b0
-    Entries,   // t0: root SRV
-    Bounds,    // t1: root SRV
-    Commands,  // u0: root UAV, the indirect calls
-    Instances, // u1: root UAV, the instance list
+    Constants,      // b0
+    Pass_Constants, // b1: root constants, the phase or the pyramid level sizes
+    Entries,        // t0: root SRV
+    Bounds,         // t1: root SRV
+    Hiz,            // t2: the whole depth pyramid
+    Hiz_Source,     // t3: the level (or depth) a pyramid level is built from
+    Commands,       // u0: root UAV, the indirect calls
+    Instances,      // u1: root UAV, the instance list
+    Hiz_Target,     // u2: the pyramid level being built
+    Visibility,     // u3: root UAV, what the camera saw last frame
 }
 
 // The cull pass's buffers and root signature, and the command signature the
@@ -761,14 +948,26 @@ renderer_create_culling :: proc() {
     // One of each on the GPU: frames run in order on the one queue.
     r.indirect_buffer = buffer(INDIRECT_SLOT_SIZE, .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON)
     r.instance_buffer = buffer(MAX_INSTANCES * size_of(u32), .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON)
+    // Kept across frames; starts zeroed, so the first frame draws everything late.
+    r.visibility_buffer = buffer(MAX_DRAWS * size_of(u32), .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON)
     r.cull_readback = buffer(FRAME_COUNT * size_of(CullCounters), .READBACK, {}, {.COPY_DEST})
 
+    ranges := #partial [Cull_Root_Slot]d3d12.DESCRIPTOR_RANGE{
+        .Hiz = {RangeType = .SRV, NumDescriptors = 1, BaseShaderRegister = 2},
+        .Hiz_Source = {RangeType = .SRV, NumDescriptors = 1, BaseShaderRegister = 3},
+        .Hiz_Target = {RangeType = .UAV, NumDescriptors = 1, BaseShaderRegister = 2},
+    }
     params: [Cull_Root_Slot]d3d12.ROOT_PARAMETER
     params[.Constants] = {ParameterType = .CBV, Descriptor = {ShaderRegister = 0}}
+    params[.Pass_Constants] = {ParameterType = ._32BIT_CONSTANTS, Constants = {ShaderRegister = 1, Num32BitValues = 4}}
     params[.Entries] = {ParameterType = .SRV, Descriptor = {ShaderRegister = 0}}
     params[.Bounds] = {ParameterType = .SRV, Descriptor = {ShaderRegister = 1}}
     params[.Commands] = {ParameterType = .UAV, Descriptor = {ShaderRegister = 0}}
     params[.Instances] = {ParameterType = .UAV, Descriptor = {ShaderRegister = 1}}
+    params[.Visibility] = {ParameterType = .UAV, Descriptor = {ShaderRegister = 3}}
+    for slot in ([]Cull_Root_Slot{.Hiz, .Hiz_Source, .Hiz_Target}) {
+        params[slot] = {ParameterType = .DESCRIPTOR_TABLE, DescriptorTable = {NumDescriptorRanges = 1, pDescriptorRanges = &ranges[slot]}}
+    }
     rs_desc := d3d12.ROOT_SIGNATURE_DESC{NumParameters = len(params), pParameters = &params[Cull_Root_Slot(0)]}
     signature, errors: ^d3d12.IBlob
     hr := d3d12.SerializeRootSignature(&rs_desc, ._1, &signature, &errors)
@@ -802,7 +1001,8 @@ renderer_create_culling :: proc() {
     ))
 }
 
-// The cull pipeline is released with the others (renderer_pipeline_slots).
+// The pipelines are released with the others (renderer_pipeline_slots), and
+// the depth pyramid with the screen-sized targets.
 renderer_release_culling :: proc() {
     r := &g_renderer
     r.cull_constant_buffer->Release()
@@ -811,19 +1011,24 @@ renderer_release_culling :: proc() {
     r.indirect_upload_buffer->Release()
     r.indirect_buffer->Release()
     r.instance_buffer->Release()
+    r.visibility_buffer->Release()
     r.cull_readback->Release()
     r.cull_root_signature->Release()
     r.draw_command_signature->Release()
 }
 
-// The cull pipeline; rebuilt by shader hot-reload.
+// The cull and depth pyramid pipelines; rebuilt by shader hot-reload.
 renderer_create_cull_pipeline :: proc() {
     r := &g_renderer
-    cs := renderer_compile_shader("shaders/cull.hlsl", "CSCull", "cs_5_1")
-    defer cs->Release()
-    if renderer_skip_pipeline() do return
-    desc := d3d12.COMPUTE_PIPELINE_STATE_DESC{pRootSignature = r.cull_root_signature, CS = shader_bytecode(cs)}
-    renderer_check_pipeline(r.device->CreateComputePipelineState(&desc, d3d12.IPipelineState_UUID, (^rawptr)(&r.cull_pipeline_state)))
+    entries := [2]cstring{"CSCull", "CSBuildHiZ"}
+    pipelines := [2]^^d3d12.IPipelineState{&r.cull_pipeline_state, &r.hiz_pipeline_state}
+    for entry, i in entries {
+        cs := renderer_compile_shader("shaders/cull.hlsl", entry, "cs_5_1")
+        defer cs->Release()
+        if renderer_skip_pipeline() do continue
+        desc := d3d12.COMPUTE_PIPELINE_STATE_DESC{pRootSignature = r.cull_root_signature, CS = shader_bytecode(cs)}
+        renderer_check_pipeline(r.device->CreateComputePipelineState(&desc, d3d12.IPipelineState_UUID, (^rawptr)(pipelines[i])))
+    }
 }
 
 TAA_JITTER_SAMPLES :: 8

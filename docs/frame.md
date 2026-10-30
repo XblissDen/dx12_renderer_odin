@@ -34,9 +34,9 @@ timings, exposure and culling counters, which are therefore two frames old.
 Presentation uses vsync.
 
 The buffers the GPU itself writes each frame (the indirect calls after
-culling, the instance lists) exist once: frames run in order on the one
-queue, so a frame never overwrites them while an earlier one still reads
-them.
+culling, the instance lists, the depth pyramid, and the flags saying which
+draws the camera saw) exist once: frames run in order on the one queue, so a
+frame never overwrites them while an earlier one still reads them.
 
 ## Pass order
 
@@ -44,9 +44,9 @@ them.
 
 | Pass | What it does | Details |
 | --- | --- | --- |
-| GPU culling | Compute pass testing every draw against every view, filling in the draw calls | [below](#gpu-culling) |
+| GPU culling | Compute pass testing draws against every view's frustum, filling in the shadow views' calls and the camera's early ones | [below](#gpu-culling) |
 | Shadows | Sun cascades, then spot shadow slots, then point shadow cube faces | [Lighting](lighting.md#shadows) |
-| Depth prepass | Depth, motion vectors, and the surface buffer (normal, roughness) | [below](#depth-prepass) |
+| Depth prepass | Depth, motion vectors, and the surface buffer (normal, roughness): the camera's early calls, then the depth pyramid and the late cull, then its late calls | [below](#depth-prepass) |
 | SSAO | Ambient occlusion from depth, then a depth-aware blur | [Lighting](lighting.md#ambient-occlusion-ssao) |
 | SSR | Reflections traced through depth, read from last frame's image | [Lighting](lighting.md#screen-space-reflections-ssr) |
 | Light clusters | Compute pass listing the lights that reach each view cluster | [Lighting](lighting.md#clustered-lighting) |
@@ -116,7 +116,8 @@ view (`renderer_batch_draws` and `renderer_add_view_batches` in
    and index buffer views, a root constant (`instance_base`) with the call's
    start in the **instance list**, and the indexed draw's arguments, with an
    instance count of zero. The call has room in the instance list for all its
-   candidates.
+   candidates. The camera's opaque draws get two copies, early and late
+   ([occlusion culling](#occlusion-culling)).
 
 The GPU then culls ([below](#gpu-culling)), which fills in each call's
 instances. A pass draws its calls with `ExecuteIndirect`, one per run of the
@@ -135,8 +136,8 @@ the CPU sorts all of them by distance to their center, in view or not, and
 each is its own call of at most one instance.
 
 The panel's **Draw calls** count is the camera's calls that drew something,
-per pass, next to the visible draws, and the shadow line shows its draws and
-calls. With 40 extra cubes in the default scene, the 46 draws take 2 calls per
+per pass (early and late together), next to the visible draws, and the
+shadow line shows its draws and calls. With 40 extra cubes in the default scene, the 46 draws take 2 calls per
 pass: every cube-shaped object (portrait cubes, the stone ground, the light
 markers), then the pyramid. The 214 shadow draws take 21 calls. Sponza gains
 little, because its submeshes are different index ranges.
@@ -156,8 +157,9 @@ cascade, each spot shadow slot, and each point shadow cube face cull
 separately, so shadow passes draw only their own casters.
 
 The test runs on the GPU, in a compute pass before the shadow pass
-(`renderer_cull_draws`, `shaders/cull.hlsl`). The CPU writes three things
-per frame:
+(`renderer_cull_draws`, `shaders/cull.hlsl`), except for what the camera
+tests after the prepass's early draws ([below](#occlusion-culling)). The
+CPU writes three things per frame:
 
 - **Bounds**: each draw's box. Draws without bounds get huge boxes, so they
   pass every test.
@@ -175,14 +177,58 @@ draws keep zero instances and draw nothing. The buffer then serves as
 shaders' `g_instance_draws`.
 
 The CPU never learns what is visible. The pass also counts visible draws and
-calls that drew something, for the camera and for the shadow views, at the
-start of the call buffer. These counts are copied to a readback buffer and
-shown in the panel two frames late. Frustum culling can be turned off in the
-panel to compare; the cull pass then keeps every candidate.
+calls that drew something, for the camera and for the shadow views, and the
+camera's draws hidden by occlusion culling, at the start of the call buffer.
+These counts are copied to a readback buffer and shown in the panel two
+frames late. Frustum culling can be turned off in the panel to compare; the
+cull pass then keeps every candidate.
 
 Limits: 32,768 calls per frame (`MAX_DRAW_CALLS`). A view whose calls do not
 fit is skipped that frame. Point and spot lights are still culled on the CPU
 (their range against the camera), since the light list is built there.
+
+### Occlusion culling
+
+The camera also skips draws hidden behind others, using the depth the prepass
+has already written. It needs depth before deciding what to draw, so its
+draws are split in two phases around a **depth pyramid** (Hi-Z):
+
+1. **Early.** The first cull pass gives the camera's early calls the draws
+   in its frustum that it saw last frame (a per-draw flag in
+   `visibility_buffer`, kept across frames). The prepass draws them.
+2. **Pyramid.** A compute pass builds the depth pyramid from that depth
+   (`renderer_build_hiz`, `CSBuildHiZ`). Level 0 is the power of two at or
+   below the window size in each direction, so each of its texels covers up
+   to three depth texels each way. Each further level halves it, down to
+   one texel. Every texel holds the farthest depth of what it covers.
+3. **Late.** A second cull pass (`renderer_cull_late`) tests every draw in
+   the camera's frustum against the pyramid. It projects the box's corners,
+   takes their nearest depth and the screen rectangle they cover, and picks
+   the level where that rectangle spans at most two texels each way. The
+   draw is hidden if its nearest depth is farther than the farthest depth of
+   those texels. The result becomes the draw's flag for next frame. Visible
+   draws not drawn early go into the late calls, which the prepass draws
+   next. Blended draws, which write no depth, are only culled here, into
+   their own calls.
+
+The lit pass then draws the early and late calls. Every visible draw is
+drawn in one phase or the other, so nothing pops in a frame late, even when
+the camera jumps. The early depth holds only real surfaces, so it can
+never hide a visible draw. A wrong guess from last frame only costs work:
+a draw that is no longer visible is still drawn early, and a draw that
+just came into view waits for the late phase.
+
+The test is conservative. It works on boxes rather than meshes, adds one
+top-level texel of margin for TAA's jitter, and never hides a box reaching
+behind the camera. Shadow views test only their frustums. On the first frame,
+and for a draw newly added, there are no flags yet, so everything is drawn
+late.
+
+Occlusion culling can be turned off in the panel. Every draw in the frustum
+is then drawn early, and the pyramid is not built. Its GPU timing row covers
+the pyramid and the late cull, and the depth prepass row includes them too.
+With a wall in front of the 40-cube scene, 34 of its 47 draws are culled as
+hidden.
 
 ### Bindless textures
 
@@ -216,6 +262,10 @@ pixel is shaded once, and SSAO and SSR have depth to read. The vertex shaders
 of the two passes share one function, so both produce bit-identical depth:
 opaque surfaces use a `LESS_EQUAL` test, and cutouts use `EQUAL` so the lit
 pass does not repeat the alpha test.
+
+The prepass draws in two halves, the camera's early and late calls. Between
+them, the depth buffer is briefly readable by compute for the depth pyramid
+and the late cull ([occlusion culling](#occlusion-culling)).
 
 The prepass writes two color targets alongside depth:
 
@@ -303,6 +353,7 @@ need the program rebuilt.
 
 On resize, the renderer waits for the GPU, releases and recreates the swap
 chain buffers, depth, and every screen-sized target (HDR, LDR, bloom chain,
-SSAO, TAA history and motion vectors, SSR surface and reflection targets), and
+SSAO, TAA history and motion vectors, SSR surface and reflection targets, the
+depth pyramid), and
 rewrites their descriptors in place. TAA and SSR restart: their history from
 the old size is discarded.

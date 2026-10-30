@@ -90,7 +90,9 @@ renderer_srv_gpu :: proc(index: u32) -> d3d12.GPU_DESCRIPTOR_HANDLE {
     return handle
 }
 
-renderer_render_depth_prepass :: proc(draws: []Draw, batches: []DrawBatch) {
+// Also runs the late cull, between the camera's early and late calls.
+renderer_render_depth_prepass :: proc(frame: ^FrameDraws) {
+    draws := frame.draws[:frame.draw_count]
     r := &g_renderer
 
     renderer_begin_gpu_pass(.Depth_Prepass)
@@ -126,17 +128,28 @@ renderer_render_depth_prepass :: proc(draws: []Draw, batches: []DrawBatch) {
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
     renderer_bind_cbv(.Frame_Constants, renderer_frame_cb_address())
 
-    renderer_draw_batches(draws, batches, r.depth_prepass_pipeline_states)
-
-    // Read-only from here to the end of the frame: SSAO and SSR sample it and
-    // the lit and selection passes test against it.
+    // What the camera saw last frame, then (after the late cull tests the
+    // rest against this depth) what it newly sees.
+    renderer_draw_batches(draws, frame.scene_batches, r.depth_prepass_pipeline_states)
     depth_barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
     depth_barrier.Transition = {
         pResource = r.depth_buffer,
         StateBefore = {.DEPTH_WRITE},
-        StateAfter = {.DEPTH_READ, .PIXEL_SHADER_RESOURCE},
+        StateAfter = {.DEPTH_READ, .NON_PIXEL_SHADER_RESOURCE},
         Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
     }
+    r.command_list->ResourceBarrier(1, &depth_barrier)
+    // Compute only: the graphics root signature and its bindings stay set.
+    renderer_cull_late(frame)
+    depth_barrier.Transition.StateBefore = {.DEPTH_READ, .NON_PIXEL_SHADER_RESOURCE}
+    depth_barrier.Transition.StateAfter = {.DEPTH_WRITE}
+    r.command_list->ResourceBarrier(1, &depth_barrier)
+    renderer_draw_batches(draws, frame.late_scene_batches, r.depth_prepass_pipeline_states)
+
+    // Read-only from here to the end of the frame: SSAO and SSR sample it and
+    // the lit and selection passes test against it.
+    depth_barrier.Transition.StateBefore = {.DEPTH_WRITE}
+    depth_barrier.Transition.StateAfter = {.DEPTH_READ, .PIXEL_SHADER_RESOURCE}
     r.command_list->ResourceBarrier(1, &depth_barrier)
 
     for &barrier in barriers {
