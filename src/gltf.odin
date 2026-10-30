@@ -155,8 +155,9 @@ GLB_MAGIC :: 0x46546C67 // "glTF"
 GLB_CHUNK_JSON :: 0x4E4F534A
 GLB_CHUNK_BIN :: 0x004E4942
 
-// Parses and flattens a glTF file. Everything except model.mesh lives in
-// the temporary allocator and must be used before it is freed.
+// Parses a glTF file into the flattened model and its node tree. The meshes
+// (model.mesh and each part's) come from `allocator`; everything else lives
+// in the temporary allocator and must be used before it is freed.
 gltf_load :: proc(path: string, allocator := context.allocator) -> (model: Gltf_Model, error: string) {
     file_data, read_error := os.read_entire_file(path, context.temp_allocator)
     if read_error != nil do return {}, "Cannot read the glTF file."
@@ -574,6 +575,19 @@ gltf_read_component :: proc(data: Gltf_Accessor_Data, element, component: int) -
     return 0
 }
 
+// One element of an index accessor, read as an integer: through
+// gltf_read_component's f32, indices past 2^24 would lose precision.
+@(private="file")
+gltf_read_index :: proc(data: Gltf_Accessor_Data, element: int) -> u32 {
+    p := rawptr(&data.bytes[element * data.stride])
+    switch data.component_type {
+        case 5121: return u32((^u8)(p)^)
+        case 5123: return u32((^u16le)(p)^)
+        case 5125: return u32((^u32le)(p)^)
+    }
+    return 0
+}
+
 @(private="file")
 gltf_add_primitive :: proc(loader: ^Gltf_Loader, primitive: Doc_Primitive, world: alg.Matrix4f32, out: ^[dynamic]Gltf_Primitive_Out) -> string {
     if mode := primitive.mode.? or_else 4; mode != 4 {
@@ -653,7 +667,7 @@ gltf_add_primitive :: proc(loader: ^Gltf_Loader, primitive: Doc_Primitive, world
         }
         indices = make([]u32, data.count, context.temp_allocator)
         for i in 0..<data.count {
-            index := u32(gltf_read_component(data, i, 0))
+            index := gltf_read_index(data, i)
             if int(index) >= vertex_count do return "A glTF index is out of range."
             indices[i] = index
         }

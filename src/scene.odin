@@ -1,5 +1,9 @@
 package main
 
+// The scene is a fixed set of entity slots. Each component is an array
+// indexed by entity with a has_* flag beside it, so an entity is whatever
+// components its slot has (a mesh and material, a light, the camera...).
+
 import alg "core:math/linalg"
 import "core:math"
 
@@ -561,15 +565,6 @@ scene_init :: proc(){
         bounds := g_assets.meshes[model].bounds
         _ = scene_spawn_model(&g_scene, model, {position = {1, -0.5 - bounds.minimum.y * 1.5, 1.5}, scale = 1.5})
     }
-
-    entity := scene_spawn_model(
-        &g_scene,
-        assets_mesh("barrel"),
-        Transform{
-            position = {1, 0, 2},
-            scale = 1,
-        },
-    )
 }
 
 scene_spawn_model :: proc(scene: ^Scene, mesh: MeshHandle, transform: Transform) -> Entity {
@@ -599,13 +594,13 @@ scene_update :: proc(scene: ^Scene, dt: f32){
 
                 scene.transforms[i].position = orbit_position(light^)
             }
-            
+
+            // The marker shows the light's color.
             if scene.has_material[i] {
                 scene.materials[i].tint = light.color
             }
         }
 
-        // The marker shows the light's color.
         if scene.has_spot_light[i] && scene.has_material[i] {
             scene.materials[i].tint = scene.spot_lights[i].color
         }

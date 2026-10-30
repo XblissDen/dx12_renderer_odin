@@ -23,10 +23,12 @@ struct GpuLight
     float3 position;
     float  range;       // Fades out completely here.
     float3 radiance;    // Color times intensity.
-    float  spot_offset; // Cone fade: saturate(cos * spot_scale + spot_offset)^2;
-    float3 direction;   // the cone's axis. Point lights: scale 0, offset 1.
+    // Cone fade: saturate(cos * spot_scale + spot_offset)^2, with cos taken
+    // to the cone's axis. Point lights: scale 0, offset 1.
+    float  spot_offset;
+    float3 direction;
     float  spot_scale;
-    int    shadow_index;       // Spot shadow slot, or -1.
+    int    shadow_index;       // Spot shadow slot or point shadow cube, or -1.
     float  shadow_texel_scale; // Texel size per unit of distance along the axis.
     float  shadow_near;        // Point lights: the cube faces' near plane.
     float  _light_pad;
@@ -208,7 +210,8 @@ float3 ClusterHeatColor(uint count)
     return color;
 }
 
-// Which cascade the shadow pass is drawing.
+// Which shadow view the shadow pass is drawing: a cascade, a spot slot or a
+// point light's cube face (see VSShadow).
 cbuffer ShadowCascade : register(b5)
 {
     uint shadow_cascade_index;
@@ -833,7 +836,6 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
 
     result += prefiltered_color * specular_occlusion *
             (ambient_F0 * environment_brdf.x + environment_brdf.y);
-
 
     // Use the interpolated geometric normal: normal-map detail does not change
     // the depth stored in the shadow map.

@@ -1,3 +1,6 @@
+// The background behind the scene: the HDR panorama seen in the camera's
+// direction, or a solid color. Drawn first into the HDR target.
+
 Texture2D<float4> g_environment : register(t0);
 SamplerState g_sampler : register(s3);
 

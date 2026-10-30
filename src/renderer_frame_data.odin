@@ -1,5 +1,10 @@
 package main
 
+// The CPU's part of each frame: one Draw per entity submesh with its object
+// data, the frame constants and visible lights, and every view's draws grouped
+// into indirect calls. Then the GPU cull passes (cull.hlsl) that decide how
+// many instances each call draws. docs/frame.md walks through it.
+
 import "core:fmt"
 import "core:math"
 import "core:slice"

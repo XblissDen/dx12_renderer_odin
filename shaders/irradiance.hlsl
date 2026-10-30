@@ -1,3 +1,7 @@
+// Bakes the irradiance map, a small panorama of diffuse light: for each
+// surface normal, the panorama's light averaged over the hemisphere around
+// it, weighted by the cosine.
+
 Texture2D<float4> g_environment : register(t2);
 SamplerState g_sampler : register(s3);
 

@@ -1,3 +1,7 @@
+// Bakes one mip of the prefiltered specular map (the split-sum
+// approximation): for each reflection direction, the panorama's light
+// averaged over the GGX lobe of this mip's roughness.
+
 Texture2D<float4> g_environment : register(t2);
 SamplerState g_sampler : register(s3);
 
@@ -62,7 +66,7 @@ float4 PSMain(VSOutput input) : SV_TARGET
     [loop]
     for (uint i = 0u; i < SAMPLE_COUNT; ++i)
     {
-        // Hammersley samples cover the GGX lobe without the old 16 x 8 grid.
+        // Hammersley points, spread evenly over the GGX lobe.
         float2 xi = float2(
             (float(i) + 0.5f) / float(SAMPLE_COUNT),
             float(reversebits(i)) * 2.3283064365386963e-10f

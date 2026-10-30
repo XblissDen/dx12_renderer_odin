@@ -562,6 +562,12 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
     g_scene_file_arena = arena
     g_scene_file_arena_active = true
     g_scene = staged^
+    // The entity slots now hold other entities, so none has a last-frame
+    // model matrix to move from, and every history shows the old scene.
+    g_renderer.previous_model_frame = {}
+    g_renderer.taa_history_valid = false
+    g_renderer.ssr_history_valid = false
+    g_renderer.fog_history_ready = false
 
     g_renderer.post_exposure = post.exposure
     g_renderer.post_threshold = post.bloom_threshold

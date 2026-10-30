@@ -417,7 +417,7 @@ renderer_render_shadow_pass :: proc(
         r.command_list->ClearDepthStencilView(
             dsv_handle, {.DEPTH}, 1.0, 0, 0, nil,
         )
-        // VSShadow reads this cascade's matrix from the frame constants.
+        // VSShadow reads this view's matrix from the frame constants.
         r.command_list->SetGraphicsRoot32BitConstant(u32(Root_Slot.Shadow_Cascade), u32(cascade), 0)
 
         renderer_draw_batches(draws, view_batches[cascade], r.shadow_pipeline_states)

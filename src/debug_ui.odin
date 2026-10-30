@@ -128,11 +128,22 @@ debug_ui_text :: proc(text: string) {
     ui_text(raw_data(text), uint(len(text)))
 }
 
+// A picker for a linear color, which it shows gamma-encoded (2.2, close to
+// sRGB) so the swatch and values look like the rendered result. Keeps the
+// color within 0-1.
+debug_ui_linear_color :: proc(label: cstring, color: ^[3]f32) -> bool {
+    picker: [3]f32
+    for channel in 0..<3 do picker[channel] = math.pow(clamp(color[channel], 0, 1), 1.0 / 2.2)
+    if !ui_color_edit3(label, &picker) do return false
+    for channel in 0..<3 do color[channel] = math.pow(clamp(picker[channel], 0, 1), 2.2)
+    return true
+}
+
 debug_ui_update :: proc() {
     if !g_debug_ui_ready {
         return
     }
-    //finish edits when leaving the UI
+    // Capturing the mouse ends any edit in progress.
     if g_cursor_locked {
         editor_finish_edit()
     }
@@ -204,11 +215,13 @@ debug_ui_update :: proc() {
     editor_finish_idle_edit()
 }
 
-// Frame rate, what culling kept, and the GPU time of each pass.
+// Frame rate, what culling kept, the lights in view, and the GPU time of
+// each pass.
 debug_ui_draw_profiler :: proc() {
     r := &g_renderer
     text_buffer: [256]u8
-    ui_next_window(f32(WINDOW_WIDTH) - 436, 16, 420, 520)
+    // Along the right edge of the window, wherever that is.
+    ui_next_window(max(f32(r.width) - 436, 16), 16, 420, 520)
     if ui_begin_panel("Profiler") {
         debug_ui_text(fmt.bprintf(text_buffer[:], "FPS: %.0f | Frame: %.2f ms", r.fps, r.frame_ms))
         ui_separator()
@@ -246,6 +259,16 @@ debug_ui_draw_profiler :: proc() {
             spot_shadow_count,
             point_shadow_count,
         ))
+        debug_ui_text(fmt.bprintf(
+            text_buffer[:], "Point and spot lights: %d in view of %d (clustered)",
+            r.visible_light_count, r.scene_light_count,
+        ))
+        if stats.draws_dropped {
+            debug_ui_text(fmt.bprintf(
+                text_buffer[:], "Draws skipped: over %d draws or %d calls in a frame",
+                MAX_DRAWS, MAX_DRAW_CALLS,
+            ))
+        }
         ui_separator()
 
         pass_names := [GPU_PASS_COUNT]string{
@@ -351,11 +374,6 @@ debug_ui_shadow_controls :: proc() {
     }
 
     ui_separator()
-    text_buffer: [96]u8
-    debug_ui_text(fmt.bprintf(
-        text_buffer[:], "Point and spot lights: %d in view of %d (clustered)",
-        r.visible_light_count, r.scene_light_count,
-    ))
     ui_checkbox("Show light clusters", &r.light_show_clusters)
 
     ui_separator()
@@ -365,7 +383,7 @@ debug_ui_shadow_controls :: proc() {
         ui_slider_float("Fog density", &fog.density, 0, MAX_FOG_DENSITY)
         ui_slider_float("Fog height", &fog.height, MIN_FOG_HEIGHT, MAX_FOG_HEIGHT)
         ui_slider_float("Fog height falloff", &fog.height_falloff, 0, MAX_FOG_HEIGHT_FALLOFF)
-        ui_color_edit3("Fog color", &fog.color)
+        debug_ui_linear_color("Fog color", &fog.color)
         ui_slider_float("Fog anisotropy", &fog.anisotropy, -MAX_FOG_ANISOTROPY, MAX_FOG_ANISOTROPY)
         ui_slider_float("Fog sky light", &fog.ambient, 0, MAX_FOG_AMBIENT)
         ui_slider_float("Fog distance", &fog.distance, MIN_FOG_DISTANCE, MAX_FOG_DISTANCE)
@@ -387,7 +405,7 @@ debug_ui_environment_controls :: proc() {
         changed = true
     }
     if settings.ambient_mode == .Color {
-        if ui_color_edit3("Ambient color", &settings.ambient_color) do changed = true
+        if debug_ui_linear_color("Ambient color", &settings.ambient_color) do changed = true
         if ui_slider_float("Ambient intensity", &settings.ambient_intensity, 0, 8) do changed = true
     } else {
         if ui_slider_float("IBL intensity", &settings.intensity, 0, 8) do changed = true
@@ -417,7 +435,7 @@ debug_ui_environment_controls :: proc() {
         changed = true
     }
     if settings.background_mode == .Solid {
-        if ui_color_edit3("Background color", &settings.background_color) do changed = true
+        if debug_ui_linear_color("Background color", &settings.background_color) do changed = true
     }
     if ui_slider_float("Background brightness", &settings.background_brightness, 0, 8) do changed = true
 

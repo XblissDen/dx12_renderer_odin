@@ -566,8 +566,9 @@ editor_update_gizmo :: proc(scene: ^Scene) {
 
     index, has_target := editor_gizmo_target(scene)
     if !has_target || int(gizmo.entity) != index {
-        // The selection changed or vanished underneath an active drag.
-        gizmo.active = .None
+        // The selection changed or vanished underneath a drag: what it did
+        // so far still becomes an undo step, for the entities still there.
+        editor_gizmo_end(scene, false)
     }
     if g_cursor_locked {
         editor_gizmo_end(scene, false)

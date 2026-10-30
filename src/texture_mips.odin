@@ -3,8 +3,10 @@ package main
 import "core:math"
 import d3d12 "vendor:directx/d3d12"
 
-// HDR panoramas are linear radiance. Weight latitude rows by their solid angle
-// so each level preserves spherical energy, including for odd-sized images.
+// The next mip level of an HDR panorama (RGBA floats), built on the CPU at
+// half the size. Panoramas are linear radiance, so latitude rows are weighted
+// by their solid angle: each level keeps the sphere's energy, including for
+// odd sizes.
 texture_next_environment_mip :: proc(
     source: []f32,
     width, height: u32,

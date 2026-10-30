@@ -602,7 +602,8 @@ renderer_generate_irradiance :: proc(source_srv_index: u32) {
     renderer_wait_for_gpu()
 }
 
-// create the mipmapped texture
+// The prefiltered specular map: each mip holds the panorama blurred for one
+// roughness, from 0 at mip 0 to 1 at the last, with a constant slot per mip.
 renderer_create_prefiltered_environment :: proc() {
     r := &g_renderer
 
@@ -702,7 +703,8 @@ renderer_create_prefiltered_environment :: proc() {
     }
 }
 
-//render each mip at startup
+// Renders every mip of the prefiltered map from the panorama at
+// `source_srv_index`, and waits for the GPU.
 renderer_generate_prefiltered_environment :: proc(source_srv_index: u32) {
     r := &g_renderer
 

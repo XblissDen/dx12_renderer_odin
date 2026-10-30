@@ -63,7 +63,8 @@ renderer_create_hdr_target :: proc() {
     hdr_srv.ptr += uint(r.hdr_srv_index) * uint(r.srv_descriptor_size)
     r.device->CreateShaderResourceView(r.hdr_texture, &hdr_srv_desc, hdr_srv)
 
-    // The tone-mapped frame, in the back buffer's format, for FXAA to read.
+    // The tone-mapped frame, in the back buffer's format, for FXAA or
+    // sharpening to read.
     if r.ldr_rtv_heap == nil {
         rtv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{NumDescriptors = 1, Type = .RTV}
         dx_check(r.device->CreateDescriptorHeap(

@@ -1,5 +1,10 @@
 package main
 
+// Frames in flight: each of the FRAME_COUNT slots has its own command
+// allocator, its own part of every per-frame upload buffer, and its own GPU
+// timestamps. A slot is reused only once the GPU has finished the frame that
+// last used it, which is also when that frame's readbacks are read.
+
 import win32 "core:sys/windows"
 import d3d12 "vendor:directx/d3d12"
 

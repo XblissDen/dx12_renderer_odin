@@ -35,8 +35,16 @@ so text stays sharp.
   and the frustum and occlusion culling switches. **Show ImGui demo** opens
   ImGui's own demo window.
 - **Profiler**: frame rate and frame time, the camera's and shadow views'
-  draws and calls after culling (with how many were occluded), and the
-  [GPU timings](frame.md#gpu-timings) of every pass.
+  draws and calls after culling (with how many were occluded), the point and
+  spot lights in view, a warning when a frame had more draws than fit, and
+  the [GPU timings](frame.md#gpu-timings) of every pass.
+
+Color pickers show colors gamma-encoded (a 2.2 power, close to sRGB), so the
+swatch and the numbers look like the result on screen; the scene stores and
+renders them as linear values.
+
+The window opens with a 1920×1080 drawing area, shrunk to fit the screen's
+work area (a 1080p screen minus the taskbar is smaller), and centered.
 - **Scene**: add models (a glTF model with several nodes as its node tree,
   see [Hierarchy](hierarchy.md#gltf-node-trees)) and lights, undo and redo,
   duplicate, delete, focus, save and load, and the entity tree (drag a row
@@ -283,7 +291,9 @@ exposure). Assets are referenced by catalog ID.
   referenced asset must exist and suit its use (an albedo texture where an
   albedo is expected, and so on), values must be in range, and there must be
   one sun, one camera, and at most 1024 lights. Then the scene is replaced, and
-  its names are kept in their own arena.
+  its names are kept in their own arena. The renderer's histories (last
+  frame's model matrices, and the TAA, SSR and fog histories) are dropped, as
+  entity slots now hold other entities and the old images show the old scene.
 - **Parents** are saved as positions in the file's entity list, and loading
   rejects cycles ([Hierarchy](hierarchy.md#scene-files)).
 - **Versions**: the format is at version 16. Newer settings are optional

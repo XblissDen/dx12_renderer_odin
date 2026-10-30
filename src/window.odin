@@ -36,17 +36,27 @@ window_create :: proc(){
 
     win32.RegisterClassExW(&wc)
 
+    // The window around a WINDOW_WIDTH x WINDOW_HEIGHT client area, shrunk to
+    // fit the desktop's work area (a 1080p screen minus the taskbar is
+    // smaller) and centered in it. WM_SIZE then reports the real client size.
     rect := win32.RECT {0, 0, WINDOW_WIDTH, WINDOW_HEIGHT}
-    win32.AdjustWindowRect(&rect, win32.WS_EX_OVERLAPPEDWINDOW, false)
+    win32.AdjustWindowRect(&rect, win32.WS_OVERLAPPEDWINDOW, false)
+    width, height := rect.right - rect.left, rect.bottom - rect.top
+    x, y := i32(win32.CW_USEDEFAULT), i32(win32.CW_USEDEFAULT)
+    work: win32.RECT
+    if win32.SystemParametersInfoW(win32.SPI_GETWORKAREA, 0, &work, 0) {
+        width = min(width, work.right - work.left)
+        height = min(height, work.bottom - work.top)
+        x = work.left + (work.right - work.left - width) / 2
+        y = work.top + (work.bottom - work.top - height) / 2
+    }
 
     g_hwnd = win32.CreateWindowExW(
         0,
         win32.L(WINDOW_CLASS),
         win32.L(WINDOW_TITLE),
         win32.WS_OVERLAPPEDWINDOW,
-        win32.CW_USEDEFAULT, win32.CW_USEDEFAULT,
-        rect.right - rect.left,
-        rect.bottom - rect.top,
+        x, y, width, height,
         nil, nil,
         hinstance,
         nil,
@@ -79,7 +89,6 @@ window_lock_cursor :: proc() {
     g_mouse_delta_y = 0
     win32.ShowCursor(false)
 
-    // clip cursor to window
     rect: win32.RECT
     win32.GetClientRect(g_hwnd, &rect)
 
@@ -91,8 +100,8 @@ window_lock_cursor :: proc() {
     clip_rect := win32.RECT{ top_left.x, top_left.y, bottom_right.x, bottom_right.y }
     win32.ClipCursor(&clip_rect)
 
-
-    // raw input registration
+    // Raw mouse input: WM_INPUT reports unaccelerated deltas, even at the clip
+    // rectangle's edge.
     rid: win32.RAWINPUTDEVICE
     rid.usUsagePage = 0x01 // Generic Desktop Controls
     rid.usUsage     = 0x02 // Mouse
@@ -164,8 +173,8 @@ wparam: win32.WPARAM, lparam: win32.LPARAM) -> win32.LRESULT{
     switch msg{
         case win32.WM_INPUT:
             if g_cursor_locked {
-                // GetRawInputData requires DWORD-aligned storage; a temporary
-                // byte slice only guarantees byte alignment. We register mice only.
+                // A RAWINPUT, not a byte buffer: GetRawInputData needs
+                // DWORD-aligned storage, and only the mouse is registered.
                 raw: win32.RAWINPUT
                 size := win32.UINT(size_of(raw))
                 bytes_read := win32.GetRawInputData(

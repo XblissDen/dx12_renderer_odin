@@ -203,6 +203,9 @@ mesh_load_obj :: proc(
     return mesh, true
 }
 
+// Fills each vertex's tangent from the UV directions of the triangles around
+// it, made perpendicular to the normal, with the bitangent's handedness in w
+// (the shader rebuilds the bitangent from it). Also normalizes the normals.
 mesh_generate_tangents :: proc(mesh: MeshData) {
     tangents := make(
         []linalg.Vector3f32,
@@ -300,6 +303,7 @@ parse_face_vertex :: proc(s: string) -> (key: struct { pos_idx, tex_idx, norm_id
     return key, true
 }
 
+// OBJ indices start at 1; negative ones count back from the latest element.
 obj_resolve_index :: proc(index, count: int) -> (int, bool) {
     resolved := index if index > 0 else count + index + 1
     return resolved, resolved > 0 && resolved <= count

@@ -185,7 +185,8 @@ compare; the
 cull pass then keeps every candidate.
 
 Limits: 32,768 calls per frame (`MAX_DRAW_CALLS`). A view whose calls do not
-fit is skipped that frame. Point and spot lights are still culled on the CPU
+fit is skipped that frame, as are draws past `MAX_DRAWS`; the Profiler panel
+then shows a warning. Point and spot lights are still culled on the CPU
 (their range against the camera), since the light list is built there.
 
 ### Occlusion culling

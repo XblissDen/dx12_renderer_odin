@@ -83,8 +83,8 @@ EditorAssetValue :: struct {
     enabled: bool,
 }
 
-// An entity the editor creates or deletes: a model, a point light with its
-// marker mesh, or an empty one (a group, such as a glTF node without
+// An entity the editor creates or deletes: a model, a point or spot light
+// with its marker mesh, or an empty one (a group, such as a glTF node without
 // geometry).
 EditorMeshSnapshot :: struct {
     name: string,
@@ -114,9 +114,8 @@ EditorCommand :: struct {
     entity: Entity,
     field: EditorField,
 
-    // Position uses all three values.
-    // Scalar properties use the first value.
-    // Asset references use the typed payload below.
+    // Vector fields use all three values and scalar ones the first; asset
+    // references use the typed payload below.
     before: [3]f32,
     after: [3]f32,
     asset_before, asset_after: EditorAssetValue,
@@ -135,8 +134,8 @@ EditorCommand :: struct {
 g_editor_history: [MAX_EDITOR_HISTORY]EditorCommand
 g_editor_history_count: int
 
-// Number of commands currently applied.
-// Commands from cursor to count are available for redo.
+// Number of commands currently applied; those from the cursor to the count
+// can be redone.
 g_editor_history_cursor: int
 
 g_editor_pending_edit: EditorCommand
@@ -498,6 +497,9 @@ editor_finish_edit :: proc() {
     g_editor_pending_changed = false
 }
 
+// Turns a widget's frame-by-frame changes into one undo step: the step starts
+// when the widget activates (or first changes) with `before`, and is pushed
+// when it deactivates. Call right after the widget, which it queries.
 editor_track_edit :: proc(
     scene: ^Scene,
     index: int,
@@ -505,7 +507,6 @@ editor_track_edit :: proc(
     before: [3]f32,
     changed: bool,
 ) {
-    // Call immediately after the corresponding ImGui widget.
     activated := ui_item_activated()
     deactivated := ui_item_deactivated()
 
@@ -559,9 +560,10 @@ editor_finish_idle_edit :: proc() {
     }
 }
 
+// Whether an undo step could bring back or select the entity in `slot`, so
+// the slot must not be reused yet. Redo steps do not count: the next push,
+// which reusing the slot makes, discards them.
 editor_slot_referenced_by_history :: proc(slot: int) -> bool {
-    // Only applied commands survive after a new action.
-    // Redo commands are discarded when the next command is pushed.
     for i in 0..<g_editor_history_cursor {
         command := g_editor_history[i]
 

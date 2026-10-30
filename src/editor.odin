@@ -188,7 +188,6 @@ editor_draw_scene :: proc(scene: ^Scene){
         ui_separator()
         editor_draw_viewport_controls()
         ui_separator()
-        // Undo/Redo
         ui_begin_disabled(
             g_editor_history_cursor == 0 && !g_editor_pending_changed,
         )
@@ -249,7 +248,6 @@ editor_draw_scene :: proc(scene: ^Scene){
 
         ui_separator()
 
-        // Save/Load
         if ui_button("Save Scene"){
             editor_finish_edit()
             _, g_editor_file_status = scene_save_to_file(
@@ -290,7 +288,7 @@ editor_draw_scene :: proc(scene: ^Scene){
                 name = "Entity"
             }
 
-            // The hidden suffix makes each selectable entry's ID unique
+            // The hidden ### suffix keeps each row's ImGui ID unique.
             label := fmt.bprintf(label_buffer[:127], "%s###entity_%d", name, i,)
             label_buffer[len(label)] = 0
 

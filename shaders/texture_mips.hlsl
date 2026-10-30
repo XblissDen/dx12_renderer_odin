@@ -6,9 +6,8 @@
 // bytes and does the sRGB conversion and the rounding itself. The hardware's
 // sRGB encode and float-to-UNORM rounding are only specified within a
 // tolerance, and the error would grow level after level. Doing both here
-// reproduces the CPU box filter this replaced: data maps bit for bit, colors
-// and normals apart from a few texels one step off (pow and normalize
-// precision).
+// matches an exact CPU box filter: data maps bit for bit, colors and normals
+// apart from a few texels one step off (pow and normalize precision).
 
 Texture2D<float4> g_source_mip : register(t0);
 

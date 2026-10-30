@@ -1,5 +1,9 @@
 package main
 
+// Inspector widgets bound to one EditorField of an entity: each shows the
+// field's value, applies changes through editor_apply_value (which clamps
+// them), and turns a drag into a single undo step with editor_track_edit.
+
 import "core:math"
 
 editor_slider :: proc(
@@ -104,28 +108,11 @@ editor_color :: proc(
     label: cstring,
 ) {
     before := editor_value(scene, index, field)
-    picker_color: [3]f32
+    value := before
 
-    for channel in 0..<3 {
-        picker_color[channel] = math.pow(
-            clamp(before[channel], 0.0, 1.0),
-            1.0 / 2.2,
-        )
-    }
-
-    changed := ui_color_edit3(label, &picker_color)
+    changed := debug_ui_linear_color(label, &value)
     if changed {
-        linear_color: [3]f32
-        for channel in 0..<3 {
-            linear_color[channel] = math.pow(
-                clamp(picker_color[channel], 0.0, 1.0),
-                2.2,
-            )
-        }
-
-        changed = editor_apply_value(
-            scene, Entity(index), field, linear_color,
-        )
+        changed = editor_apply_value(scene, Entity(index), field, value)
     }
 
     editor_track_edit(scene, index, field, before, changed)

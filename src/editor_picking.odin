@@ -32,7 +32,7 @@ editor_mouse_ray :: proc(
     camera := &scene.cameras[camera_index]
     forward := camera_forward(camera)
 
-    // Match tge renderer's screen-right basis
+    // The renderer's screen-right basis.
     right := alg.normalize(alg.cross(alg.Vector3f32{0, 1, 0}, forward))
     up := alg.cross(forward, right)
 

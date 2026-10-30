@@ -53,11 +53,8 @@ renderer_render_scene_pass :: proc(draws: []Draw, batches, late_batches, transpa
     // Screen-space reflections (likewise ignored while off).
     renderer_bind_srv(.Reflections, r.ssr_srv_index)
 
-    // viewport, scissor
     r.command_list->RSSetViewports(1, &r.viewport)
     r.command_list->RSSetScissorRects(1, &r.scissor_rect)
-
-    // Geometry
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
     renderer_bind_cbv(.Frame_Constants, renderer_frame_cb_address())
     renderer_bind_buffer_srv(.Lights, renderer_light_buffer_address())
@@ -104,7 +101,6 @@ renderer_render_scene_pass :: proc(draws: []Draw, batches, late_batches, transpa
     r.command_list->OMSetRenderTargets(1, &hdr_rtv, false, nil)
     renderer_apply_fog()
 
-    // Scene render target becomes a shader input.
     hdr_barrier.Transition.StateBefore = {.RENDER_TARGET}
     hdr_barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
     r.command_list->ResourceBarrier(1, &hdr_barrier)
@@ -116,7 +112,6 @@ renderer_render_post_process :: proc(scene: ^Scene) {
     r := &g_renderer
 
     renderer_begin_gpu_pass(.Post_Process)
-    // Now acquire the swap-chain back buffer for the post-process pass.
     back_buffer_barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
     back_buffer_barrier.Transition = {
         pResource = r.render_targets[r.frame_index],
@@ -192,7 +187,6 @@ renderer_render_post_process :: proc(scene: ^Scene) {
 
     debug_ui_render()
 
-    // Presentable again.
     back_buffer_barrier.Transition.StateBefore = {.RENDER_TARGET}
     back_buffer_barrier.Transition.StateAfter = d3d12.RESOURCE_STATE_PRESENT
     r.command_list->ResourceBarrier(1, &back_buffer_barrier)

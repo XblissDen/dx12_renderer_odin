@@ -1,3 +1,8 @@
+// The passes after the lit image: bloom, TAA resolve, tone mapping, FXAA and
+// sharpening. VSMain is the full-screen triangle every full-screen pass in
+// the project draws with. Each pass reads its main input from t0, so
+// g_hdr_texture is whatever that pass reads, not always the HDR image.
+
 Texture2D<float4> g_hdr_texture : register(t0);
 Texture2D<float4> g_bloom_texture : register(t1);
 SamplerState g_sampler : register(s0);
@@ -530,9 +535,9 @@ float3 SampleHistoryCatmullRom(float2 uv)
     return max(result / total, 0.0f); // The filter can undershoot slightly.
 }
 
-// Screen motion of the sky at `uv` since last frame, in UV units like
-// PSVelocity: this pixel's far-plane point reprojected with last frame's
-// rotation (sky_reprojection).
+// Screen motion of the sky at `uv` since last frame, in UV units like the
+// prepass's motion vectors (ScreenMotion in scene.hlsl): this pixel's
+// far-plane point reprojected with last frame's rotation (sky_reprojection).
 float2 SkyVelocity(float2 uv)
 {
     float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);

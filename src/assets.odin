@@ -1,5 +1,9 @@
 package main
 
+// The asset catalog (assets.json): models, textures and HDR environments,
+// each known by a string id and used through a handle (its index here; 0 is
+// none). Loading, importing into the project, and removing again.
+
 import "base:runtime"
 import "core:encoding/json"
 import "core:fmt"
@@ -89,7 +93,8 @@ ModelNode :: struct {
     transform: Transform,
     part: MeshHandle, // 0 for a node without geometry.
 }
-// `removed`: as for MeshAsset.
+// `hidden`: built-in textures (neutral defaults) kept out of the pickers and
+// the catalog file. `removed`: as for MeshAsset.
 TextureAsset :: struct {
     desc: TextureDesc,
     label: cstring,
@@ -147,6 +152,8 @@ AssetImportRequest :: struct {
     material: AssetMaterial,
 }
 
+// A deep copy (strings and slices included) in `allocator`, made by a JSON
+// round trip.
 assets_clone_import :: proc(value: $T, allocator: mem.Allocator) -> T {
     bytes, error := json.marshal(value, {use_enum_names = true})
     assert(error == nil)
@@ -156,6 +163,9 @@ assets_clone_import :: proc(value: $T, allocator: mem.Allocator) -> T {
     return result
 }
 
+// Writes the catalog as it will be, with these assets added and removed ones
+// left out, to a temporary file beside assets.json. The caller renames it
+// over the catalog once everything else has succeeded.
 assets_prepare_catalog :: proc(
     model: ^MeshDesc = nil,
     texture: ^TextureDesc = nil,
@@ -197,6 +207,8 @@ assets_prepare_catalog :: proc(
     return
 }
 
+// An unused id for an imported file, made from its name, and where its copy
+// goes in the project.
 assets_import_id :: proc(source: string, model: bool, usage: TextureUsage) -> (id, destination: string) {
     slug := make([dynamic]u8, context.temp_allocator)
     for byte in transmute([]u8)os.stem(source) {
@@ -217,12 +229,15 @@ assets_import_id :: proc(source: string, model: bool, usage: TextureUsage) -> (i
     }
 }
 
-// Process imports between UI construction and renderer_begin_frame.
 assets_is_gltf_path :: proc(path: string) -> bool {
     extension := os.ext(path)
     return strings.equal_fold(extension, ".gltf") || strings.equal_fold(extension, ".glb")
 }
 
+// Copies a model or texture into the project, uploads it, and adds it to the
+// catalog (assets.json); nothing changes unless every step succeeds. Runs
+// between the UI frame and rendering (editor_process_asset_import), as it
+// waits for the GPU and replaces the renderer's mesh and texture arrays.
 assets_import :: proc(request: AssetImportRequest) -> (model: MeshHandle, texture: TextureHandle, message: string) {
     if request.path == "" do return 0, 0, "Choose a source file."
     if request.model && assets_is_gltf_path(request.path) {
@@ -895,7 +910,8 @@ assets_init :: proc(path: string) -> (message: string) {
     return ""
 }
 
-// Return owned RGBA8 pixels to the startup uploader, including generated assets.
+// A texture asset's RGBA8 pixels, decoded from its file or generated (solid,
+// checkerboard), with its import settings applied. The caller owns them.
 assets_try_texture_pixels :: proc(desc: TextureDesc, allocator := context.allocator) ->
 (pixels: []u8, width, height: u32, message: string) {
     if desc.source != .file {
@@ -987,6 +1003,10 @@ assets_decode_batch_size :: proc() -> int {
     return clamp(os.get_processor_core_count(), 1, 16)
 }
 
+// Scene files store asset handles as catalog ids: these JSON hooks convert
+// MeshHandle, TextureHandle and EnvironmentHandle to ids and back. While
+// g_asset_read_legacy is set, ids from scene files of version 2 and older
+// are renamed to today's.
 g_asset_marshalers: map[typeid]json.User_Marshaler
 g_asset_unmarshalers: map[typeid]json.User_Unmarshaler
 g_asset_json_installed: bool

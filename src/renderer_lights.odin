@@ -25,7 +25,7 @@ Light_Cluster_Root_Slot :: enum u32 {
 }
 
 // The per-frame light buffers, the cluster buffer, and the compute root
-// signature. The pipeline is built with the others (renderer_create_pipelines).
+// signature. The pipeline is built with the others (renderer_build_pipelines).
 renderer_create_light_clusters :: proc() {
     r := &g_renderer
 

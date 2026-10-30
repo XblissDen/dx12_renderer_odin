@@ -14,9 +14,6 @@ import d3dc "vendor:directx/d3d_compiler"
 import "core:math"
 import alg "core:math/linalg"
 
-import "core:image"
-import "core:image/png"
-
 FRAME_COUNT :: 2
 
 SHADOW_MAP_SIZE :: 2048
@@ -93,7 +90,6 @@ GpuMesh :: struct {
     index_buffer: ^d3d12.IResource,
     index_buffer_view: d3d12.INDEX_BUFFER_VIEW,
     index_count: u32,
-
 }
 
 GpuTexture :: struct {resource: ^d3d12.IResource, srv_index: u32}
@@ -360,8 +356,10 @@ Renderer :: struct {
     // Temporary sun-free panorama used only while baking the IBL maps.
     environment_bake_srv_index: u32,
 
+    // Sun shadow cascades (renderer_shadow.odin).
     shadow_map: ^d3d12.IResource,
     shadow_dsv_heap: ^d3d12.IDescriptorHeap,
+    shadow_pipeline_states: [Draw_Variant]^d3d12.IPipelineState,
     // Spot light shadows (renderer_shadow.odin): one slice per slot, the
     // entity each slot went to this frame (-1: unused), and pipelines with a
     // slope-scaled depth bias.
@@ -376,7 +374,6 @@ Renderer :: struct {
     point_shadow_dsv_heap: ^d3d12.IDescriptorHeap,
     point_shadow_srv_index: u32,
     point_shadow_entities: [POINT_SHADOW_COUNT]int,
-    shadow_pipeline_states: [Draw_Variant]^d3d12.IPipelineState,
 
     hdr_texture: ^d3d12.IResource,
     hdr_rtv_heap: ^d3d12.IDescriptorHeap,
@@ -684,12 +681,12 @@ renderer_compile_shader_set :: proc() -> (error: string) {
     thread.join_multiple(..threads)
     for t in threads do thread.destroy(t)
 
-    // An error in a shared file fails every entry point in it alike: print
-    // each distinct message once.
     // Messages name files by absolute path; shown relative to the working
     // directory, they fit the panel.
     directory, _ := os.get_working_directory(context.temp_allocator)
     directory_prefix := strings.concatenate({directory, "\\"}, context.temp_allocator)
+    // An error in a shared file fails every entry point in it alike: print
+    // each distinct message once.
     printed := make(map[string]bool, context.temp_allocator)
     for job in jobs {
         r.shader_blobs[job.key] = job.blob
@@ -868,8 +865,9 @@ renderer_poll_shaders :: proc() {
 renderer_init :: proc() {
     r := &g_renderer
 
-    r.width = WINDOW_WIDTH
-    r.height = WINDOW_HEIGHT
+    // The client area window_create got (it may be smaller than asked for).
+    r.width = g_client_width if g_client_width > 0 else WINDOW_WIDTH
+    r.height = g_client_height if g_client_height > 0 else WINDOW_HEIGHT
 
     r.post_exposure = 1.0
     r.auto_exposure = DEFAULT_AUTO_EXPOSURE
@@ -900,7 +898,6 @@ renderer_init :: proc() {
     r.frustum_culling_enabled = true
     r.occlusion_culling_enabled = true
 
-    // DEBUG LAYER
     when ODIN_DEBUG {
         debug: ^d3d12.IDebug
         if win32.SUCCEEDED(d3d12.GetDebugInterface(d3d12.IDebug_UUID, (^rawptr)(&debug))) {
@@ -909,7 +906,6 @@ renderer_init :: proc() {
         }
     }
 
-    // FACTORY
     factory_flags: dxgi.CREATE_FACTORY
     when ODIN_DEBUG {
         factory_flags = { .DEBUG }
@@ -919,7 +915,6 @@ renderer_init :: proc() {
     dx_check(dxgi.CreateDXGIFactory2(factory_flags, dxgi.IFactory6_UUID, (^rawptr)(&factory)))
     defer factory->Release()
 
-    // ADAPTER
     adapter: ^dxgi.IAdapter1
     dx_check(factory->EnumAdapterByGpuPreference(
         0,
@@ -929,7 +924,6 @@ renderer_init :: proc() {
     ))
     defer adapter->Release()
 
-    // DEVICE
     dx_check(d3d12.CreateDevice(adapter, ._12_0, d3d12.IDevice_UUID, (^rawptr)(&r.device)))
 
     // Debug-layer messages go to an attached debugger; also read them back so
@@ -938,14 +932,12 @@ renderer_init :: proc() {
         r.device->QueryInterface(d3d12.IInfoQueue_UUID, (^rawptr)(&r.info_queue))
     }
 
-    // COMMAND QUEUE
     queue_desc := d3d12.COMMAND_QUEUE_DESC{
         Type = .DIRECT,
         Flags = {},
     }
     dx_check(r.device->CreateCommandQueue(&queue_desc, d3d12.ICommandQueue_UUID, (^rawptr)(&r.command_queue)))
 
-    // SWAP CHAIN
     sc_desc := dxgi.SWAP_CHAIN_DESC1{
         BufferCount = FRAME_COUNT,
         Width = r.width,
@@ -971,7 +963,7 @@ renderer_init :: proc() {
     dx_check(swap_chain1->QueryInterface(dxgi.ISwapChain3_UUID, (^rawptr)(&r.swap_chain)))
     r.frame_index = r.swap_chain->GetCurrentBackBufferIndex()
 
-    // RTV DESCRIPTOR HEAP
+    // The back buffers' RTVs.
     rtv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{
         NumDescriptors = FRAME_COUNT,
         Type = .RTV,
@@ -989,7 +981,6 @@ renderer_init :: proc() {
         rtv_handle.ptr += uint(r.rtv_descriptor_size)
     }
 
-    // COMMAND ALLOCATORS
     for i in 0..<FRAME_COUNT{
         dx_check(r.device->CreateCommandAllocator(
             .DIRECT,
@@ -998,7 +989,6 @@ renderer_init :: proc() {
         ))
     }
 
-    // COMMAND LIST
     dx_check(r.device->CreateCommandList(
         0,
         .DIRECT,
@@ -1009,7 +999,6 @@ renderer_init :: proc() {
     ))
     r.command_list->Close()
 
-    // FENCE
     dx_check(r.device->CreateFence(0, {}, d3d12.IFence_UUID, (^rawptr)(&r.fence)))
 
     r.fence_event = win32.CreateEventW(nil, false, false, nil)
@@ -1036,7 +1025,7 @@ Root_Slot :: enum u32 {
     Prefiltered,         // t4
     Textures,            // t22 onwards: the whole SRV heap, indexed by the objects' material textures
     Frame_Constants,     // b4: camera, lights, shadows, AO, TAA matrices
-    Shadow_Cascade,      // b5: root constant, the cascade being drawn
+    Shadow_Cascade,      // b5: root constant, the shadow view being drawn (cascade, spot slot or point face)
     Texture_T8,          // t8: ambient occlusion, or TAA motion vectors
     Depth,               // t9: scene depth
     Mip_Constants,       // b6: root constant, texture mip builder flags
@@ -1464,19 +1453,17 @@ renderer_load_assets :: proc(){
         ))
     }
 
-    // CONSTANT BUFFER
     renderer_create_frame_constant_buffers()
 
-    // â”€â”€ 6. Viewport & Scissor â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     r.viewport = d3d12.VIEWPORT {
-        Width    = WINDOW_WIDTH,
-        Height   = WINDOW_HEIGHT,
+        Width    = f32(r.width),
+        Height   = f32(r.height),
         MinDepth = 0,
         MaxDepth = 1,
     }
     r.scissor_rect = d3d12.RECT {
-        right  = WINDOW_WIDTH,
-        bottom = WINDOW_HEIGHT,
+        right  = i32(r.width),
+        bottom = i32(r.height),
     }
 }
 
@@ -1799,8 +1786,7 @@ renderer_load_textures :: proc(){
     }
 }
 
-// Frees a removed asset's GPU data; the GPU must be idle. The SRV slot stays
-// allocated (handles are not reused), so its descriptor is simply never bound.
+// Frees a removed asset's GPU data; the GPU must be idle.
 renderer_release_mesh :: proc(handle: MeshHandle) {
     mesh := &g_renderer.meshes[handle]
     if mesh.vertex_buffer != nil do mesh.vertex_buffer->Release()
@@ -1808,6 +1794,8 @@ renderer_release_mesh :: proc(handle: MeshHandle) {
     mesh^ = {}
 }
 
+// Like renderer_release_mesh. The SRV slot stays allocated (handles are not
+// reused), so its descriptor is simply never bound again.
 renderer_release_texture :: proc(handle: TextureHandle) {
     texture := &g_renderer.textures[handle]
     if texture.resource != nil do texture.resource->Release()
@@ -1861,7 +1849,6 @@ renderer_upload_texture :: proc(
     )
     if hr < 0 do return
 
-    // UPLOAD BUFFER
     layout: d3d12.PLACED_SUBRESOURCE_FOOTPRINT
     row_count: u32
     row_size, upload_size: u64
@@ -1919,7 +1906,7 @@ renderer_upload_texture :: proc(
     }
     r.command_list->CopyTextureRegion(&dst_location, 0, 0, 0, &src_location, nil)
 
-    // Level 0: COPY_DEST â†’ PIXEL_SHADER_RESOURCE; the mip builder moves the rest.
+    // Level 0 becomes readable; the mip builder moves the rest.
     copy_barrier := d3d12.RESOURCE_BARRIER { Type = .TRANSITION }
     copy_barrier.Transition = {
         pResource   = gpu.resource,
@@ -1938,7 +1925,6 @@ renderer_upload_texture :: proc(
 
     renderer_wait_for_gpu()
 
-    // â”€â”€ SRV â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC {
         Format                  = format,
         ViewDimension           = .TEXTURE2D,
