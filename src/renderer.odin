@@ -102,18 +102,18 @@ renderer_alloc_srv :: proc(count: u32 = 1) -> u32 {
     return result
 }
 
-// Copies a draw's material textures (albedo, normal, roughness, metallic,
-// emissive, occlusion) into its slot of this frame's material ring and
-// returns the table to bind.
+// Copies a set of material textures (albedo, normal, roughness, metallic,
+// emissive, occlusion) into table `table_index` of this frame's material
+// ring and returns the table to bind. Draws with the same textures share one.
 // The slot is free: begin_frame waited for the frame that last used it.
 renderer_material_table :: proc(
-    draw_index: int,
+    table_index: int,
     textures: [MATERIAL_TEXTURE_COUNT]TextureHandle,
 ) -> d3d12.GPU_DESCRIPTOR_HANDLE {
     r := &g_renderer
-    assert(draw_index >= 0 && draw_index < MAX_DRAWS)
+    assert(table_index >= 0 && table_index < MAX_DRAWS)
     first := r.material_srv_start +
-             u32((int(r.frame_slot) * MAX_DRAWS + draw_index) * MATERIAL_TEXTURE_COUNT)
+             u32((int(r.frame_slot) * MAX_DRAWS + table_index) * MATERIAL_TEXTURE_COUNT)
 
     destination, source: d3d12.CPU_DESCRIPTOR_HANDLE
     r.srv_heap->GetCPUDescriptorHandleForHeapStart(&destination)
@@ -222,8 +222,9 @@ FrameConstants :: struct #align(256) {
 #assert(SHADOW_CASCADE_COUNT == 4) // Packed as float4 rows in scene.hlsl.
 #assert(size_of(FrameConstants) == 2816)
 
-// Written per draw (b0).
-ObjectConstants :: struct #align(256) {
+// Written per draw, into this frame's part of the object buffer (g_objects,
+// t20): one per submesh of each entity, read by instance.
+ObjectData :: struct {
     model: alg.Matrix4f32,
     // Inverse model matrix; its upper 3x3 transforms normals under
     // non-uniform scale when used with the shader's row-vector convention.
@@ -252,10 +253,12 @@ ObjectConstants :: struct #align(256) {
 
     // Blended materials: albedo alpha is multiplied by this.
     opacity: f32,
+    _pad: [7]f32,
 }
 
-// Constant-buffer views start on 256-byte boundaries.
-#assert(size_of(ObjectConstants) == 512)
+// The structured buffer's stride; matches ObjectData in scene.hlsl, padded
+// to the 32-byte alignment Odin gives matrices.
+#assert(size_of(ObjectData) == 288)
 
 // Missing from older scene files, which therefore keep Reinhard.
 ToneMapper :: enum u32 {Reinhard, ACES, AgX}
@@ -332,8 +335,12 @@ Renderer :: struct {
     viewport: d3d12.VIEWPORT,
     scissor_rect: d3d12.RECT,
 
-    object_constant_buffer: ^d3d12.IResource,
-    object_cb_mapped_data: [^]ObjectConstants,
+    // Per frame slot: MAX_DRAWS objects, and the instance lists that say
+    // which objects each draw call draws.
+    object_buffer: ^d3d12.IResource,
+    object_mapped: [^]ObjectData,
+    instance_buffer: ^d3d12.IResource,
+    instance_mapped: [^]u32,
 
     frame_constant_buffer: ^d3d12.IResource,
     frame_cb_mapped_data: [^]FrameConstants,
@@ -1017,7 +1024,7 @@ renderer_init :: proc() {
 // The single root signature every pass uses. Passes bind by slot name; the
 // layout table below is the only place registers are assigned.
 Root_Slot :: enum u32 {
-    Object_Constants,    // b0: per-draw transforms and material values
+    Draw_Constants,      // b0: root constant, the draw call's first instance-list entry
     Texture_T0,          // t0: main input of full-screen passes (sky panorama, scene color, ...)
     Texture_T1,          // t1: second input (shadow cascades, bloom, TAA history)
     Post_Constants,      // b1
@@ -1039,6 +1046,8 @@ Root_Slot :: enum u32 {
     Reflections,         // t17: screen-space reflections for the lit pass
     Lights,              // t18: root SRV, this frame's visible point and spot lights
     Cluster_Lights,      // t19: root SRV, each light cluster's light list
+    Objects,             // t20: root SRV, this frame's ObjectData
+    Instance_Draws,      // t21: root SRV, this frame's instance lists
 }
 
 // SRV: a root shader-resource view of a buffer, bound by GPU address.
@@ -1054,7 +1063,7 @@ Root_Param :: struct {
 MATERIAL_TEXTURE_COUNT :: 6
 
 ROOT_LAYOUT := [Root_Slot]Root_Param{
-    .Object_Constants    = {.CBV, 0, 0, .ALL},
+    .Draw_Constants      = {.Constants, 0, 1, .VERTEX},
     .Texture_T0          = {.Table, 0, 1, .PIXEL},
     .Texture_T1          = {.Table, 1, 1, .PIXEL},
     .Post_Constants      = {.CBV, 1, 0, .PIXEL},
@@ -1076,36 +1085,45 @@ ROOT_LAYOUT := [Root_Slot]Root_Param{
     .Reflections         = {.Table, 17, 1, .PIXEL},
     .Lights              = {.SRV, 18, 0, .PIXEL},
     .Cluster_Lights      = {.SRV, 19, 0, .PIXEL},
+    .Objects             = {.SRV, 20, 0, .ALL},
+    .Instance_Draws      = {.SRV, 21, 0, .VERTEX},
 }
 
-// Binds a draw's object constants and geometry and draws its submesh range.
-renderer_draw :: proc(draws: []Draw, draw_index: u32) {
+// Binds this frame's objects and instance lists, for the mesh passes.
+renderer_bind_objects :: proc() {
+    renderer_bind_buffer_srv(.Objects, renderer_object_buffer_address())
+    renderer_bind_buffer_srv(.Instance_Draws, renderer_instance_buffer_address())
+}
+
+// Draws a batch's instances: its first draw's material table, geometry and
+// submesh range, once per instance. renderer_bind_objects must have run.
+renderer_draw_batch :: proc(draws: []Draw, batch: DrawBatch) {
     r := &g_renderer
-    i := int(draw_index)
-    assert(i < len(draws))
-    draw := draws[i]
-    renderer_bind_cbv(.Object_Constants, renderer_object_cb_address(i))
+    draw := draws[batch.draw]
+    r.command_list->SetGraphicsRootDescriptorTable(u32(Root_Slot.Material), draw.material_table)
+    r.command_list->SetGraphicsRoot32BitConstant(u32(Root_Slot.Draw_Constants), batch.first_instance, 0)
 
     assert(int(draw.mesh) > 0 && int(draw.mesh) < len(r.meshes))
     gpu_mesh := &r.meshes[draw.mesh]
     r.command_list->IASetVertexBuffers(0, 1, &gpu_mesh.vertex_buffer_view)
     r.command_list->IASetIndexBuffer(&gpu_mesh.index_buffer_view)
-    r.command_list->DrawIndexedInstanced(draw.index_count, 1, draw.first_index, 0, 0)
+    r.command_list->DrawIndexedInstanced(draw.index_count, batch.instance_count, draw.first_index, 0, 0)
 }
 
-// Draws a pass's draws with their material tables, switching to each draw's
-// pipeline variant from `pipelines` when it changes. The SRV heap must be set.
-renderer_draw_list :: proc(draws: []Draw, indices: []u32, pipelines: [Draw_Variant]^d3d12.IPipelineState) {
+// Draws a pass's batches, switching to each batch's pipeline variant from
+// `pipelines` when it changes. Batches come sorted by variant, so that is
+// rare. The SRV heap must be set.
+renderer_draw_batches :: proc(draws: []Draw, batches: []DrawBatch, pipelines: [Draw_Variant]^d3d12.IPipelineState) {
     r := &g_renderer
+    renderer_bind_objects()
     current: Maybe(Draw_Variant)
-    for draw_index in indices {
-        draw := &draws[draw_index]
-        if current != draw.variant {
-            r.command_list->SetPipelineState(pipelines[draw.variant])
-            current = draw.variant
+    for batch in batches {
+        variant := draws[batch.draw].variant
+        if current != variant {
+            r.command_list->SetPipelineState(pipelines[variant])
+            current = variant
         }
-        r.command_list->SetGraphicsRootDescriptorTable(u32(Root_Slot.Material), draw.material_table)
-        renderer_draw(draws, draw_index)
+        renderer_draw_batch(draws, batch)
     }
 }
 
@@ -1962,23 +1980,17 @@ renderer_render_frame :: proc(scene: ^Scene) {
     frame := renderer_prepare_frame(scene)
 
     draws := frame.draws[:frame.draw_count]
-    shadow_draws: [SHADOW_VIEW_COUNT][]u32
-    for view in 0..<SHADOW_VIEW_COUNT {
-        shadow_draws[view] = frame.shadow_indices[view][:frame.shadow_draw_count[view]]
-    }
-    renderer_render_shadow_pass(draws, shadow_draws)
+    renderer_render_shadow_pass(draws, frame.shadow_batches)
 
     // Depth first: SSAO and SSR read it, and the lit pass only shades
     // visible pixels. SSR reads last frame's image before the lit pass
     // overwrites the HDR target.
-    visible := frame.scene_indices[:frame.scene_draw_count]
-    renderer_render_depth_prepass(draws, visible)
+    renderer_render_depth_prepass(draws, frame.scene_batches)
     renderer_render_ssao()
     renderer_render_ssr()
     renderer_build_light_clusters()
     renderer_render_fog()
-    transparent := frame.transparent_indices[:frame.transparent_draw_count]
-    renderer_render_scene_pass(draws, visible, transparent)
+    renderer_render_scene_pass(draws, frame.scene_batches, frame.transparent_batches)
 
     // TAA resolves in HDR, so bloom and tone mapping see the stable image.
     renderer_render_taa()
@@ -2074,7 +2086,8 @@ renderer_destroy :: proc(){
 
     r.root_signature->Release()
 
-    r.object_constant_buffer->Release()
+    r.object_buffer->Release()
+    r.instance_buffer->Release()
     r.frame_constant_buffer->Release()
 
     r.depth_buffer->Release()

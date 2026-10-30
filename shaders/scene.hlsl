@@ -32,8 +32,10 @@ struct GpuLight
     float  _light_pad;
 };
 
-// Per-draw data.
-cbuffer ObjectConstants : register(b0)
+// Per-draw data (renderer.odin's ObjectData): one per submesh of each entity,
+// in g_objects. A draw call draws instances of one submesh; instance i is the
+// object g_instance_draws[instance_base + i].
+struct ObjectData
 {
     float4x4 model;
     // Upper 3x3 is the inverse model matrix; mul(normal, it) applies the
@@ -58,7 +60,29 @@ cbuffer ObjectConstants : register(b0)
     float  alpha_cutoff; // Used by the cutout pipelines only.
 
     float opacity; // Blended materials: multiplies albedo alpha.
+    float3 _object_pad0; // Up to the 288 bytes Odin gives the struct.
+    float4 _object_pad1;
 };
+
+StructuredBuffer<ObjectData> g_objects : register(t20);
+StructuredBuffer<uint> g_instance_draws : register(t21);
+
+cbuffer DrawConstants : register(b0)
+{
+    uint instance_base; // This draw call's first entry in g_instance_draws.
+};
+
+// The object being drawn; every entry point loads it first.
+static ObjectData g_object;
+
+// For vertex shaders: loads the instance's object and returns its index,
+// which the pixel shader gets as `draw`.
+uint LoadInstanceObject(uint instance)
+{
+    uint draw = g_instance_draws[instance_base + instance];
+    g_object = g_objects[draw];
+    return draw;
+}
 
 // Shared by every draw in a frame.
 cbuffer FrameConstants : register(b4)
@@ -219,10 +243,12 @@ struct VSInput
     float3 normal   : NORMAL;
     float2 texcoord : TEXCOORD;
     float4 tangent : TANGENT;
+    uint instance : SV_InstanceID;
 };
 
 struct PSInput
 {
+    nointerpolation uint draw : DRAW; // Index of the object in g_objects.
     float4 position     : SV_POSITION;
     float3 world_pos    : TEXCOORD0;
     float3 normal       : NORMAL;
@@ -239,7 +265,7 @@ struct PSInput
 // pass tests LESS_EQUAL against the prepass without writing.
 float4 ObjectToClip(float3 position, out float4 world_pos, out float4 view_pos)
 {
-    world_pos = mul(float4(position, 1.0f), model);
+    world_pos = mul(float4(position, 1.0f), g_object.model);
     view_pos = mul(world_pos, view);
     return mul(view_pos, projection);
 }
@@ -251,11 +277,11 @@ float4 ObjectToClip(float3 position, out float4 world_pos, out float4 view_pos)
 // Test").
 void ClipAlpha(float2 texcoord)
 {
-    float2 uv = texcoord * uv_scale;
+    float2 uv = texcoord * g_object.uv_scale;
     float alpha = g_texture.Sample(g_material_sampler, uv).a;
     float mip = g_texture.CalculateLevelOfDetail(g_material_sampler, uv);
     alpha *= 1.0f + max(mip, 0.0f) * 0.25f;
-    clip(alpha - alpha_cutoff);
+    clip(alpha - g_object.alpha_cutoff);
 }
 
 struct VelocityInput
@@ -267,19 +293,21 @@ struct VelocityInput
     // World space, for the surface buffer's shading normal.
     float3 normal        : NORMAL;
     float4 tangent       : TEXCOORD3;
+    nointerpolation uint draw : DRAW;
 };
 
 VelocityInput VSDepth(VSInput input)
 {
     VelocityInput output;
+    output.draw = LoadInstanceObject(input.instance);
     float4 world_pos, view_pos;
     output.position = ObjectToClip(input.position, world_pos, view_pos);
     output.current_clip = mul(world_pos, view_projection);
-    float4 previous_world = mul(float4(input.position, 1.0f), previous_model);
+    float4 previous_world = mul(float4(input.position, 1.0f), g_object.previous_model);
     output.previous_clip = mul(previous_world, previous_view_projection);
     output.texcoord = input.texcoord;
-    output.normal = mul(input.normal, (float3x3)normal_matrix);
-    output.tangent = float4(mul(input.tangent.xyz, (float3x3)model), input.tangent.w);
+    output.normal = mul(input.normal, (float3x3)g_object.normal_matrix);
+    output.tangent = float4(mul(input.tangent.xyz, (float3x3)g_object.model), input.tangent.w);
     return output;
 }
 
@@ -301,6 +329,7 @@ float2 Velocity(VelocityInput input)
 PSInput VSMain(VSInput input)
 {
     PSInput output;
+    output.draw = LoadInstanceObject(input.instance);
 
     float4 world_pos, view_pos;
     output.position = ObjectToClip(input.position, world_pos, view_pos);
@@ -308,14 +337,14 @@ PSInput VSMain(VSInput input)
     // Distance along the camera's forward axis, which selects the cascade.
     output.view_depth = view_pos.z;
 
-    output.normal = mul(input.normal, (float3x3)normal_matrix);
+    output.normal = mul(input.normal, (float3x3)g_object.normal_matrix);
     output.texcoord = input.texcoord;
     output.tangent = float4(
-        mul(input.tangent.xyz, (float3x3)model),
+        mul(input.tangent.xyz, (float3x3)g_object.model),
         input.tangent.w
     );
     output.current_clip = mul(world_pos, view_projection);
-    output.previous_clip = mul(mul(float4(input.position, 1.0f), previous_model), previous_view_projection);
+    output.previous_clip = mul(mul(float4(input.position, 1.0f), g_object.previous_model), previous_view_projection);
 
     return output;
 }
@@ -324,12 +353,14 @@ struct ShadowInput
 {
     float4 position : SV_POSITION;
     float2 texcoord : TEXCOORD0; // Read by cutouts only.
+    nointerpolation uint draw : DRAW;
 };
 
 ShadowInput VSShadow(VSInput input)
 {
     ShadowInput output;
-    float4 world_pos = mul(float4(input.position, 1.0f), model);
+    output.draw = LoadInstanceObject(input.instance);
+    float4 world_pos = mul(float4(input.position, 1.0f), g_object.model);
     // Views: the sun's cascades, the spot shadow slots, then the point
     // shadow cube faces.
     uint view = shadow_cascade_index;
@@ -354,6 +385,7 @@ ShadowInput VSShadow(VSInput input)
 // Cutouts cast shadows through their holes. Opaque casters have no pixel shader.
 void PSShadowMasked(ShadowInput input)
 {
+    g_object = g_objects[input.draw];
     ClipAlpha(input.texcoord);
 }
 
@@ -606,8 +638,8 @@ void SurfaceNormalRoughness(
     out float material_roughness
 )
 {
-    float roughness_value = roughness;
-    if (use_roughness_map != 0)
+    float roughness_value = g_object.roughness;
+    if (g_object.use_roughness_map != 0)
     {
         roughness_value *= g_roughness_map.Sample(
             g_material_sampler, material_uv
@@ -618,7 +650,7 @@ void SurfaceNormalRoughness(
     float face_sign = is_front_face ? 1.0f : -1.0f;
     geometric_normal = normalize(interpolated_normal) * face_sign;
     N = geometric_normal;
-    if (normal_strength > 0.0f)
+    if (g_object.normal_strength > 0.0f)
     {
         // Rebuild an orthogonal surface basis after interpolation.
         float3 T = normalize(
@@ -631,7 +663,7 @@ void SurfaceNormalRoughness(
             g_material_sampler, material_uv
         ).xyz * 2.0f - 1.0f;
 
-        tangent_normal.xy *= normal_strength;
+        tangent_normal.xy *= g_object.normal_strength;
 
         N = normalize(
             T * tangent_normal.x +
@@ -655,7 +687,7 @@ PrepassOutput Prepass(VelocityInput input, bool is_front_face)
     float3 geometric_normal, N;
     float material_roughness;
     SurfaceNormalRoughness(
-        input.normal, input.tangent, input.texcoord * uv_scale, is_front_face,
+        input.normal, input.tangent, input.texcoord * g_object.uv_scale, is_front_face,
         geometric_normal, N, material_roughness
     );
 
@@ -663,13 +695,14 @@ PrepassOutput Prepass(VelocityInput input, bool is_front_face)
     output.velocity = Velocity(input);
     output.surface = float4(
         mul(N, (float3x3)view),
-        unlit != 0 ? 1.0f : material_roughness
+        g_object.unlit != 0 ? 1.0f : material_roughness
     );
     return output;
 }
 
 PrepassOutput PSPrepass(VelocityInput input, bool is_front_face : SV_IsFrontFace)
 {
+    g_object = g_objects[input.draw];
     return Prepass(input, is_front_face);
 }
 
@@ -677,6 +710,7 @@ PrepassOutput PSPrepass(VelocityInput input, bool is_front_face : SV_IsFrontFace
 // then shades exactly those pixels (EQUAL depth test).
 PrepassOutput PSPrepassMasked(VelocityInput input, bool is_front_face : SV_IsFrontFace)
 {
+    g_object = g_objects[input.draw];
     ClipAlpha(input.texcoord);
     return Prepass(input, is_front_face);
 }
@@ -687,15 +721,15 @@ PrepassOutput PSPrepassMasked(VelocityInput input, bool is_front_face : SV_IsFro
 float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
 {
     // Albedo SRVs are _SRGB, so the sampler returns filtered linear values.
-    float2 material_uv = input.texcoord * uv_scale;
+    float2 material_uv = input.texcoord * g_object.uv_scale;
 
     float4 albedo_sample = g_texture.Sample(
         g_material_sampler, material_uv
     );
-    float3 albedo = albedo_sample.rgb * material_tint;
+    float3 albedo = albedo_sample.rgb * g_object.material_tint;
 
-    float metallic_value = metallic;
-    if (use_metallic_map != 0)
+    float metallic_value = g_object.metallic;
+    if (g_object.use_metallic_map != 0)
     {
         metallic_value *= g_metallic_map.Sample(
             g_material_sampler, material_uv
@@ -768,10 +802,10 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
     }
     // Baked occlusion (glTF's definition: red channel, blended in by strength)
     // adds the detail SSAO cannot see, such as creases inside a model.
-    if (use_occlusion_map != 0u)
+    if (g_object.use_occlusion_map != 0u)
     {
         float baked = g_occlusion_map.Sample(g_material_sampler, material_uv).r;
-        ambient_occlusion *= 1.0f + occlusion_strength * (baked - 1.0f);
+        ambient_occlusion *= 1.0f + g_object.occlusion_strength * (baked - 1.0f);
     }
     float n_dot_v = max(dot(N, V), 0.0f);
     // Lagarde's specular occlusion: reflections fade with AO, less so at
@@ -899,9 +933,9 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
 
     // Emission is not lit or shadowed; bloom picks up its bright parts.
     [branch]
-    if (any(emissive > 0.0f))
+    if (any(g_object.emissive > 0.0f))
     {
-        result += emissive * g_emissive_map.Sample(g_material_sampler, material_uv).rgb;
+        result += g_object.emissive * g_emissive_map.Sample(g_material_sampler, material_uv).rgb;
     }
 
     if (ao_show != 0u)
@@ -914,18 +948,19 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
         result = ClusterHeatColor(cluster_light_count);
     }
 
-    return float4(result, transparent ? saturate(albedo_sample.a * opacity) : 1.0f);
+    return float4(result, transparent ? saturate(albedo_sample.a * g_object.opacity) : 1.0f);
 }
 
 // Unlit materials (light markers): a bright flat color.
 float4 UnlitColor()
 {
-    return float4(material_tint * 4.0f, 1.0f);
+    return float4(g_object.material_tint * 4.0f, 1.0f);
 }
 
 float4 PSMain(PSInput input, bool is_front_face : SV_IsFrontFace) : SV_TARGET
 {
-    if (unlit != 0) return UnlitColor();
+    g_object = g_objects[input.draw];
+    if (g_object.unlit != 0) return UnlitColor();
     return ShadeSurface(input, is_front_face, false);
 }
 
@@ -943,8 +978,9 @@ struct TransparentOutput
 // Blended materials, drawn over the opaque image (alpha blending).
 TransparentOutput PSTransparent(PSInput input, bool is_front_face : SV_IsFrontFace)
 {
+    g_object = g_objects[input.draw];
     TransparentOutput output;
-    output.color = unlit != 0 ? UnlitColor() : ShadeSurface(input, is_front_face, true);
+    output.color = g_object.unlit != 0 ? UnlitColor() : ShadeSurface(input, is_front_face, true);
     output.motion = float4(
         ScreenMotion(input.current_clip, input.previous_clip), 0.0f,
         output.color.a >= TRANSPARENT_MOTION_COVERAGE ? 1.0f : 0.0f

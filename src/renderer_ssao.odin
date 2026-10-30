@@ -90,7 +90,7 @@ renderer_srv_gpu :: proc(index: u32) -> d3d12.GPU_DESCRIPTOR_HANDLE {
     return handle
 }
 
-renderer_render_depth_prepass :: proc(draws: []Draw, draw_indices: []u32) {
+renderer_render_depth_prepass :: proc(draws: []Draw, batches: []DrawBatch) {
     r := &g_renderer
 
     renderer_begin_gpu_pass(.Depth_Prepass)
@@ -126,7 +126,7 @@ renderer_render_depth_prepass :: proc(draws: []Draw, draw_indices: []u32) {
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
     renderer_bind_cbv(.Frame_Constants, renderer_frame_cb_address())
 
-    renderer_draw_list(draws, draw_indices, r.depth_prepass_pipeline_states)
+    renderer_draw_batches(draws, batches, r.depth_prepass_pipeline_states)
 
     // Read-only from here to the end of the frame: SSAO and SSR sample it and
     // the lit and selection passes test against it.

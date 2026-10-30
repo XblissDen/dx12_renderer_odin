@@ -2,7 +2,7 @@ package main
 
 import d3d12 "vendor:directx/d3d12"
 
-renderer_render_scene_pass :: proc(draws: []Draw, draw_indices, transparent_indices: []u32) {
+renderer_render_scene_pass :: proc(draws: []Draw, batches, transparent_batches: []DrawBatch) {
     r := &g_renderer
 
     renderer_begin_gpu_pass(.Scene)
@@ -63,12 +63,12 @@ renderer_render_scene_pass :: proc(draws: []Draw, draw_indices, transparent_indi
     renderer_bind_buffer_srv(.Lights, renderer_light_buffer_address())
     renderer_bind_buffer_srv(.Cluster_Lights, r.cluster_buffer->GetGPUVirtualAddress())
 
-    renderer_draw_list(draws, draw_indices, r.hdr_pipeline_states)
+    renderer_draw_batches(draws, batches, r.hdr_pipeline_states)
 
     // Blended surfaces over the result, farthest first. They also write their
     // motion into the prepass's velocity target where they are mostly
     // opaque, so TAA follows moving glass instead of what is behind it.
-    if len(transparent_indices) > 0 {
+    if len(transparent_batches) > 0 {
         velocity_barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
         velocity_barrier.Transition = {
             pResource = r.velocity_texture,
@@ -80,15 +80,15 @@ renderer_render_scene_pass :: proc(draws: []Draw, draw_indices, transparent_indi
         rtvs := [2]d3d12.CPU_DESCRIPTOR_HANDLE{hdr_rtv, renderer_velocity_rtv()}
         r.command_list->OMSetRenderTargets(len(rtvs), &rtvs[0], false, &dsv_handle)
 
-        for draw_index in transparent_indices {
-            draw := &draws[draw_index]
-            r.command_list->SetGraphicsRootDescriptorTable(u32(Root_Slot.Material), draw.material_table)
+        // One draw per call, in sorted order (renderer_batch_draws without merging).
+        for batch in transparent_batches {
+            draw := &draws[batch.draw]
             if draw.variant == .Double_Sided || draw.variant == .Masked_Double_Sided {
                 r.command_list->SetPipelineState(r.transparent_back_pipeline_state)
-                renderer_draw(draws, draw_index)
+                renderer_draw_batch(draws, batch)
             }
             r.command_list->SetPipelineState(r.transparent_front_pipeline_state)
-            renderer_draw(draws, draw_index)
+            renderer_draw_batch(draws, batch)
         }
 
         velocity_barrier.Transition.StateBefore = {.RENDER_TARGET}

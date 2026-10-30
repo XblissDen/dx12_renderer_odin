@@ -371,8 +371,8 @@ renderer_create_shadow_array :: proc(size, slices, srv_index: u32, cube := false
 
 renderer_render_shadow_pass :: proc(
     draws: []Draw,
-    // Casters per shadow view: cascades, then spot slots.
-    view_draws: [SHADOW_VIEW_COUNT][]u32,
+    // Draw calls per shadow view: cascades, spot slots, then point faces.
+    view_batches: [SHADOW_VIEW_COUNT][]DrawBatch,
 ) {
     r := &g_renderer
 
@@ -420,7 +420,7 @@ renderer_render_shadow_pass :: proc(
         // VSShadow reads this cascade's matrix from the frame constants.
         r.command_list->SetGraphicsRoot32BitConstant(u32(Root_Slot.Shadow_Cascade), u32(cascade), 0)
 
-        renderer_draw_list(draws, view_draws[cascade], r.shadow_pipeline_states)
+        renderer_draw_batches(draws, view_batches[cascade], r.shadow_pipeline_states)
     }
 
     shadow_barrier.Transition.StateBefore = {.DEPTH_WRITE}
@@ -446,7 +446,7 @@ renderer_render_shadow_pass :: proc(
         r.command_list->ClearDepthStencilView(dsv_handle, {.DEPTH}, 1.0, 0, 0, nil)
         view := SHADOW_CASCADE_COUNT + slot
         r.command_list->SetGraphicsRoot32BitConstant(u32(Root_Slot.Shadow_Cascade), u32(view), 0)
-        renderer_draw_list(draws, view_draws[view], r.spot_shadow_pipeline_states)
+        renderer_draw_batches(draws, view_batches[view], r.spot_shadow_pipeline_states)
     }
     shadow_barrier.Transition.StateBefore = {.DEPTH_WRITE}
     shadow_barrier.Transition.StateAfter = SHADOW_READ_STATE
@@ -472,7 +472,7 @@ renderer_render_shadow_pass :: proc(
             r.command_list->ClearDepthStencilView(dsv_handle, {.DEPTH}, 1.0, 0, 0, nil)
             view := POINT_SHADOW_FIRST_VIEW + face_index
             r.command_list->SetGraphicsRoot32BitConstant(u32(Root_Slot.Shadow_Cascade), u32(view), 0)
-            renderer_draw_list(draws, view_draws[view], r.spot_shadow_pipeline_states)
+            renderer_draw_batches(draws, view_batches[view], r.spot_shadow_pipeline_states)
         }
     }
     shadow_barrier.Transition.StateBefore = {.DEPTH_WRITE}

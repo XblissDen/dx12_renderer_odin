@@ -32,10 +32,15 @@ renderer_create_frame_constant_buffers :: proc() {
     r := &g_renderer
     mapped: rawptr
 
-    r.object_constant_buffer, mapped = renderer_create_mapped_upload_buffer(
-        u64(FRAME_COUNT * MAX_DRAWS * size_of(ObjectConstants)),
+    r.object_buffer, mapped = renderer_create_mapped_upload_buffer(
+        u64(FRAME_COUNT * MAX_DRAWS * size_of(ObjectData)),
     )
-    r.object_cb_mapped_data = ([^]ObjectConstants)(mapped)
+    r.object_mapped = ([^]ObjectData)(mapped)
+
+    r.instance_buffer, mapped = renderer_create_mapped_upload_buffer(
+        u64(FRAME_COUNT * MAX_INSTANCES * size_of(u32)),
+    )
+    r.instance_mapped = ([^]u32)(mapped)
 
     r.frame_constant_buffer, mapped = renderer_create_mapped_upload_buffer(
         u64(FRAME_COUNT * size_of(FrameConstants)),
@@ -82,11 +87,16 @@ renderer_create_timestamp_resources :: proc() {
     ))
 }
 
-renderer_object_cb_address :: proc(draw_index: int) -> u64 {
+renderer_object_buffer_address :: proc() -> u64 {
     r := &g_renderer
-    index := int(r.frame_slot) * MAX_DRAWS + draw_index
-    return r.object_constant_buffer->GetGPUVirtualAddress() +
-           u64(index * size_of(ObjectConstants))
+    return r.object_buffer->GetGPUVirtualAddress() +
+           u64(int(r.frame_slot) * MAX_DRAWS * size_of(ObjectData))
+}
+
+renderer_instance_buffer_address :: proc() -> u64 {
+    r := &g_renderer
+    return r.instance_buffer->GetGPUVirtualAddress() +
+           u64(int(r.frame_slot) * MAX_INSTANCES * size_of(u32))
 }
 
 renderer_frame_cb_address :: proc() -> u64 {

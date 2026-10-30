@@ -22,6 +22,8 @@ written in Odin on DirectX 12, with a Dear ImGui interface.
   move/rotate/scale gizmos, viewport icons and debug lines (light ranges,
   bounds), an Inspector, undo and redo, and saving and
   loading scenes.
+- **Draws**: frustum culling per view, and instanced batching of draws that
+  share a mesh, textures and pipeline.
 - **Workflow**: shader hot-reload, and GPU timings for every pass.
 
 How each of these works is explained in **[docs/](docs/README.md)**.

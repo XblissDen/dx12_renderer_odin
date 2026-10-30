@@ -8,13 +8,20 @@ import d3d12 "vendor:directx/d3d12"
 CullingStats :: struct {
     scene_visible, scene_total: int,
     shadow_visible, shadow_total: int,
+    // Draw calls after batching: the camera's (prepass and lit pass each
+    // make these) and all shadow views' together.
+    scene_calls, shadow_calls: int,
     // More submesh draws than MAX_DRAWS this frame; the rest were skipped.
     draws_dropped: bool,
 }
 
-// Draws per frame: one per (entity, submesh). Sizes the per-draw constant
-// buffer and material-table rings.
+// Draws per frame: one per (entity, submesh). Sizes the object buffer and
+// the material-table rings.
 MAX_DRAWS :: 4096
+// Instance-list entries per frame: each view lists each draw at most once,
+// and the views are the camera's opaque and blended lists plus every shadow
+// view.
+MAX_INSTANCES :: (SHADOW_VIEW_COUNT + 2) * MAX_DRAWS
 
 // How a draw's material changes its pipelines (one per variant in each mesh
 // pass): cutouts discard pixels in the depth-only passes, and double-sided
@@ -36,6 +43,14 @@ Draw :: struct {
     casts_shadow: bool,
 }
 
+// One draw call: `instance_count` instances of `draw`'s submesh, with its
+// material table and pipeline variant. Instance i draws the object at entry
+// first_instance + i of this frame's instance list.
+DrawBatch :: struct {
+    draw: u32,
+    first_instance, instance_count: u32,
+}
+
 // Rebuilt every frame; lives in the renderer (too large for the stack).
 FrameDraws :: struct {
     draws: [MAX_DRAWS]Draw,
@@ -55,6 +70,62 @@ FrameDraws :: struct {
 
     caster_bounds: [MAX_DRAWS]WorldBounds,
     caster_count: int,
+
+    // The draw calls for those lists (in the frame's temp allocator), and
+    // how much of this frame's instance list they use.
+    scene_batches, transparent_batches: []DrawBatch,
+    shadow_batches: [SHADOW_VIEW_COUNT][]DrawBatch,
+    instance_count: int,
+}
+
+// Turns a view's visible draws into draw calls, appending their instance
+// lists to this frame's. With `merge`, draws of the same submesh range,
+// material table and variant become one call; the calls are sorted by
+// variant, then material, so pipelines and tables change rarely. Without
+// it, every draw is its own call in the given order (blended draws, sorted
+// back to front).
+renderer_batch_draws :: proc(data: ^FrameDraws, indices: []u32, merge: bool) -> []DrawBatch {
+    Batch_Key :: struct {
+        variant: Draw_Variant,
+        table: u64,
+        mesh: MeshHandle,
+        first_index, index_count: u32,
+        draw: u32,
+    }
+    same_batch :: proc(a, b: Batch_Key) -> bool {
+        return a.variant == b.variant && a.table == b.table && a.mesh == b.mesh &&
+               a.first_index == b.first_index && a.index_count == b.index_count
+    }
+
+    keys := make([]Batch_Key, len(indices), context.temp_allocator)
+    for draw_index, i in indices {
+        draw := &data.draws[draw_index]
+        keys[i] = {draw.variant, draw.material_table.ptr, draw.mesh, draw.first_index, draw.index_count, draw_index}
+    }
+    if merge {
+        slice.sort_by(keys, proc(a, b: Batch_Key) -> bool {
+            if a.variant != b.variant do return a.variant < b.variant
+            if a.table != b.table do return a.table < b.table
+            if a.mesh != b.mesh do return a.mesh < b.mesh
+            if a.first_index != b.first_index do return a.first_index < b.first_index
+            if a.index_count != b.index_count do return a.index_count < b.index_count
+            return a.draw < b.draw
+        })
+    }
+
+    r := &g_renderer
+    instances := r.instance_mapped[int(r.frame_slot) * MAX_INSTANCES:]
+    batches := make([dynamic]DrawBatch, 0, len(keys), context.temp_allocator)
+    for key, i in keys {
+        if !merge || i == 0 || !same_batch(key, keys[i - 1]) {
+            append(&batches, DrawBatch{draw = key.draw, first_instance = u32(data.instance_count)})
+        }
+        assert(data.instance_count < MAX_INSTANCES)
+        instances[data.instance_count] = key.draw
+        data.instance_count += 1
+        batches[len(batches) - 1].instance_count += 1
+    }
+    return batches[:]
 }
 
 renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
@@ -66,10 +137,14 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     data.transparent_draw_count = 0
     data.shadow_draw_count = {}
     data.caster_count = 0
+    data.instance_count = 0
 
     post := &r.post_cb_mapped_data[r.frame_slot]
     sky := &r.sky_cb_mapped_data[r.frame_slot]
-    object_cb_base := int(r.frame_slot) * MAX_DRAWS
+    objects := r.object_mapped[int(r.frame_slot) * MAX_DRAWS:]
+    // One material table per distinct set of textures: draws can share a
+    // batch only if they share a table.
+    material_tables := make(map[[MATERIAL_TEXTURE_COUNT]TextureHandle]d3d12.GPU_DESCRIPTOR_HANDLE, context.temp_allocator)
     environment_sin := math.sin(math.to_radians(r.environment_settings.rotation_degrees))
     environment_cos := math.cos(math.to_radians(r.environment_settings.rotation_degrees))
 
@@ -304,12 +379,18 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
                 alpha_cutoff = clamp(0.5 / opacity, 0, 1) if opacity > 0 else 1
             }
 
+            material_table, table_found := material_tables[textures]
+            if !table_found {
+                material_table = renderer_material_table(len(material_tables), textures)
+                material_tables[textures] = material_table
+            }
+
             draw^ = Draw{
                 mesh = mesh,
                 first_index = submesh.first_index,
                 index_count = submesh.index_count,
                 // The depth-only passes bind it too, for cutouts.
-                material_table = renderer_material_table(data.draw_count, textures),
+                material_table = material_table,
                 variant = Draw_Variant(int(cutout) + 2 * int(material.double_sided)),
                 blended = material.alpha_blend,
                 bounds = bounds_to_world(submesh.bounds, model),
@@ -322,7 +403,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
                 data.caster_count += 1
             }
 
-            r.object_cb_mapped_data[object_cb_base + data.draw_count] = ObjectConstants{
+            objects[data.draw_count] = ObjectData{
                 model = alg.transpose(model),
                 previous_model = alg.transpose(previous_model),
                 // transpose(inverse_transpose(M)) is inverse(M).
@@ -483,8 +564,16 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
 
     r.previous_view_projection = view_projection
 
+    data.scene_batches = renderer_batch_draws(data, data.scene_indices[:data.scene_draw_count], merge = true)
+    data.transparent_batches = renderer_batch_draws(data, data.transparent_indices[:data.transparent_draw_count], merge = false)
+    for view in 0..<SHADOW_VIEW_COUNT {
+        data.shadow_batches[view] = renderer_batch_draws(data, data.shadow_indices[view][:data.shadow_draw_count[view]], merge = true)
+        r.culling_stats.shadow_calls += len(data.shadow_batches[view])
+    }
+
     r.culling_stats.scene_total = data.draw_count
     r.culling_stats.scene_visible = data.scene_draw_count + data.transparent_draw_count
+    r.culling_stats.scene_calls = len(data.scene_batches) + len(data.transparent_batches)
     for count in data.shadow_draw_count {
         r.culling_stats.shadow_visible += count
     }

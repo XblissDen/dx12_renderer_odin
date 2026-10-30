@@ -26,8 +26,8 @@ All temporary allocations of a frame are freed at the end of the iteration.
 
 Two frames can be in flight (`FRAME_COUNT`). Each has its own command
 allocator and its own slice of every per-frame upload buffer: frame constants,
-per-draw object constants, post-processing and sky constants, the light buffer,
-and the material descriptor tables. Before recording, the CPU waits on the
+per-draw object data and instance lists, post-processing and sky constants, the
+light buffer, and the material descriptor tables. Before recording, the CPU waits on the
 fence for the frame that last used the same slot (`renderer_begin_frame`). That
 wait is also when it reads that frame's GPU timings and exposure, which are
 therefore two frames old. Presentation uses vsync.
@@ -60,19 +60,21 @@ tone mapping encodes sRGB itself because the UI draws to the same buffer.
 GPU data every frame:
 
 - **Draws**: one per submesh of every visible model entity, up to `MAX_DRAWS`
-  (4096). Each has its object constants (model matrix, the inverse model
-  matrix for normals, last frame's model matrix, and the material's values)
-  in a 256-byte slot of the per-frame object constant buffer.
-- **Material tables**: each draw's six textures (albedo, normal, roughness,
+  (4096). Each has its object data: the model matrix, the inverse model
+  matrix for normals, last frame's model matrix, and the material's values.
+  These are 288-byte `ObjectData` entries in this frame's part of the object
+  buffer, which shaders read as a structured buffer.
+- **Material tables**: the six textures (albedo, normal, roughness,
   metallic, emissive, occlusion) are copied from a CPU-only staging descriptor
   heap into a contiguous table in the shader-visible heap, bound with one root
-  descriptor table. Unused maps get neutral textures (white, or a flat
-  normal), so shaders never branch on missing textures except where a flag
-  saves work.
+  descriptor table. Draws with the same six textures share one table. Unused
+  maps get neutral textures (white, or a flat normal), so shaders never branch
+  on missing textures except where a flag saves work.
 - **Draw variants**: each mesh pass has four pipelines, for opaque, cutout,
   double-sided, and cutout double-sided materials. Cutouts run the alpha test
-  in the depth-only passes; double-sided ones disable culling. Draws keep
-  their order and switch pipelines only when the variant changes.
+  in the depth-only passes; double-sided ones disable culling.
+- **Batches**: after culling, each view's draws become draw calls
+  ([below](#instanced-batching)).
 - **Frame constants** (`FrameConstants`, one 256-byte-aligned block): camera
   matrices (jittered for TAA, and unjittered for motion vectors, this frame
   and last), the sun, environment and ambient settings, shadow matrices and
@@ -93,6 +95,41 @@ separately, so shadow passes draw only their own casters. Blended draws are
 collected separately and sorted back to front by distance to their center. The
 panel shows draw counts before and after culling, and culling can be turned
 off to compare.
+
+### Instanced batching
+
+Draws that could be drawn by the same draw call go out as one instanced call.
+Two draws batch when they share the same mesh and submesh index range, the
+same material table, and the same pipeline variant. Their transforms and material values
+(tint, roughness, and so on) can differ, so copies of a model, or the repeated
+parts of a glTF node tree, become one call. The camera and every shadow view
+batch separately (`renderer_batch_draws` in `src/renderer_frame_data.odin`):
+
+1. The view's visible draws are sorted by variant, then material table, then
+   submesh, so pipelines and tables change rarely.
+2. Each run of draws that batch together becomes a `DrawBatch`. Its draw
+   indices go into this frame's **instance list**, an upload buffer of `u32`s
+   with room for every view to list every draw once.
+3. The call binds the first draw's material table and geometry, sets the
+   batch's start in the instance list as a root constant (`instance_base`),
+   and draws `instance_count` instances.
+
+The vertex shader finds its object as
+`g_objects[g_instance_draws[instance_base + SV_InstanceID]]` and passes the
+index to the pixel shader as a `nointerpolation` value. That way the pixel shader reads the same object's
+material values. The prepass and the lit pass use the same batches.
+
+Blended draws are not merged, because they must stay in back-to-front order:
+each is its own call of one instance.
+
+The panel's **Draw calls** count is the camera's calls per pass, next to the
+visible draws, and the shadow line shows its draws and calls. In the default
+scene, 46 draws take 4 calls per pass, and 214 shadow draws take 30 calls.
+
+Within a pass, the draw order is now the sort order rather than entity
+order. Where two surfaces have exactly the same depth, the one drawn last wins
+the `LESS_EQUAL` test, so the result can differ from before. In Sponza this
+changed about a dozen pixels on overlapping leaves.
 
 ## Depth prepass
 
@@ -127,7 +164,7 @@ assigns registers:
 
 | Slot | Register | Contents |
 | --- | --- | --- |
-| Object constants | b0 | Per-draw transforms and material values |
+| Draw constants | b0 | Root constant: the draw call's first instance-list entry |
 | Post / Sky / Prefilter constants | b1, b2, b3 | Per-pass constants |
 | Frame constants | b4 | Camera, lights, shadows, effect settings |
 | Shadow cascade, Mip constants | b5, b6 | Root constants |
@@ -140,6 +177,7 @@ assigns registers:
 | Exposure buffer | t16 | Root SRV, the automatic exposure |
 | Reflections | t17 | SSR result |
 | Lights, Cluster lights | t18, t19 | Root SRVs, the light buffer and cluster lists |
+| Objects, Instance draws | t20, t21 | Root SRVs, this frame's object data and instance lists |
 
 Static samplers: linear wrap (s0), shadow comparison with a white border (s1),
 16× anisotropic for materials (s2), panoramas wrapping horizontally but

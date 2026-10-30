@@ -192,16 +192,18 @@ debug_ui_update :: proc() {
         for entity in r.point_shadow_entities do if entity >= 0 do point_shadow_count += 1
         debug_ui_text(fmt.bprintf(
             text_buffer[:],
-            "Scene meshes: %d/%d | Culled: %d",
+            "Scene meshes: %d/%d | Culled: %d | Draw calls: %d",
             stats.scene_visible,
             stats.scene_total,
             stats.scene_total - stats.scene_visible,
+            stats.scene_calls,
         ))
 
         debug_ui_text(fmt.bprintf(
             text_buffer[:],
-            "Shadow draws: %d (%d casters; %d cascades, %d spot, %d point)",
+            "Shadow draws: %d in %d calls (%d casters; %d cascades, %d spot, %d point)",
             stats.shadow_visible,
+            stats.shadow_calls,
             stats.shadow_total,
             SHADOW_CASCADE_COUNT,
             spot_shadow_count,
