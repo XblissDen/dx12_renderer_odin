@@ -80,15 +80,17 @@ renderer_render_scene_pass :: proc(draws: []Draw, batches, transparent_batches: 
         rtvs := [2]d3d12.CPU_DESCRIPTOR_HANDLE{hdr_rtv, renderer_velocity_rtv()}
         r.command_list->OMSetRenderTargets(len(rtvs), &rtvs[0], false, &dsv_handle)
 
-        // One draw per call, in sorted order (renderer_batch_draws without merging).
+        // One draw per call, in sorted order (renderer_batch_draws without
+        // merging); culled ones draw no instances.
+        renderer_bind_objects()
         for batch in transparent_batches {
             draw := &draws[batch.draw]
             if draw.variant == .Double_Sided || draw.variant == .Masked_Double_Sided {
                 r.command_list->SetPipelineState(r.transparent_back_pipeline_state)
-                renderer_draw_batch(draws, batch)
+                renderer_execute_draws(batch.command, 1)
             }
             r.command_list->SetPipelineState(r.transparent_front_pipeline_state)
-            renderer_draw_batch(draws, batch)
+            renderer_execute_draws(batch.command, 1)
         }
 
         velocity_barrier.Transition.StateBefore = {.RENDER_TARGET}

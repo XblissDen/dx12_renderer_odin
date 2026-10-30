@@ -118,7 +118,7 @@ renderer_render_depth_prepass :: proc(draws: []Draw, batches: []DrawBatch) {
     r.command_list->ClearRenderTargetView(rtvs[1], &no_surface, 0, nil)
 
     r.command_list->SetGraphicsRootSignature(r.root_signature)
-    // Cutouts read their albedo alpha through the material table.
+    // Cutouts read their albedo alpha from the bindless textures.
     heaps := []^d3d12.IDescriptorHeap{r.srv_heap}
     r.command_list->SetDescriptorHeaps(1, raw_data(heaps))
     r.command_list->RSSetViewports(1, &r.viewport)

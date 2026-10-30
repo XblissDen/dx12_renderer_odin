@@ -190,20 +190,21 @@ debug_ui_update :: proc() {
         for entity in r.spot_shadow_entities do if entity >= 0 do spot_shadow_count += 1
         point_shadow_count := 0
         for entity in r.point_shadow_entities do if entity >= 0 do point_shadow_count += 1
+        // Visible draws and nonempty calls come from the GPU cull pass.
         debug_ui_text(fmt.bprintf(
             text_buffer[:],
             "Scene meshes: %d/%d | Culled: %d | Draw calls: %d",
-            stats.scene_visible,
+            stats.gpu.scene_visible,
             stats.scene_total,
-            stats.scene_total - stats.scene_visible,
-            stats.scene_calls,
+            stats.scene_total - int(stats.gpu.scene_visible),
+            stats.gpu.scene_calls,
         ))
 
         debug_ui_text(fmt.bprintf(
             text_buffer[:],
             "Shadow draws: %d in %d calls (%d casters; %d cascades, %d spot, %d point)",
-            stats.shadow_visible,
-            stats.shadow_calls,
+            stats.gpu.shadow_visible,
+            stats.gpu.shadow_calls,
             stats.shadow_total,
             SHADOW_CASCADE_COUNT,
             spot_shadow_count,
@@ -213,7 +214,7 @@ debug_ui_update :: proc() {
         pass_names := [GPU_PASS_COUNT]string{
             "Shadow", "Scene", "Bloom prefilter", "Bloom downsample",
             "Bloom upsample", "Post + UI", "Depth prepass", "SSAO + blur", "FXAA / sharpen", "TAA resolve",
-            "Auto exposure", "SSR", "Light clusters", "Volumetric fog",
+            "Auto exposure", "SSR", "Light clusters", "Volumetric fog", "GPU culling",
         }
         if ui_begin_table("GPU timings") {
             ui_table_column("GPU pass")

@@ -1,26 +1,79 @@
 package main
 
+import "core:fmt"
 import "core:math"
 import "core:slice"
 import alg "core:math/linalg"
 import d3d12 "vendor:directx/d3d12"
 
 CullingStats :: struct {
-    scene_visible, scene_total: int,
-    shadow_visible, shadow_total: int,
-    // Draw calls after batching: the camera's (prepass and lit pass each
-    // make these) and all shadow views' together.
-    scene_calls, shadow_calls: int,
-    // More submesh draws than MAX_DRAWS this frame; the rest were skipped.
+    // Submesh draws, and those casting shadows.
+    scene_total, shadow_total: int,
+    // From the cull pass, read back a few frames late.
+    gpu: CullCounters,
+    // More submesh draws than MAX_DRAWS, or calls than MAX_DRAW_CALLS, this
+    // frame; the rest were skipped.
     draws_dropped: bool,
+}
+
+// The cull pass's counters, at the start of the indirect call buffer: draws
+// that passed the camera's frustum and the calls they went into (prepass and
+// lit pass each make these), then the same over all shadow views.
+CullCounters :: struct {
+    scene_visible, scene_calls: u32,
+    shadow_visible, shadow_calls: u32,
 }
 
 // Draws per frame: one per (entity, submesh). Sizes the object buffer.
 MAX_DRAWS :: 4096
 // Instance-list entries per frame: each view lists each draw at most once,
 // and the views are the camera's opaque and blended lists plus every shadow
-// view.
+// view. Also bounds the cull entries.
 MAX_INSTANCES :: (SHADOW_VIEW_COUNT + 2) * MAX_DRAWS
+// Indirect draw calls per frame; a view whose calls do not fit is skipped.
+MAX_DRAW_CALLS :: 32768
+
+// Views the cull pass tests against: the camera, then every shadow view.
+// Must match cull.hlsl.
+CULL_VIEW_COUNT :: 1 + SHADOW_VIEW_COUNT
+#assert(CULL_VIEW_COUNT == 33)
+// The counters' space before the calls in the indirect call buffer.
+CULL_HEADER_SIZE :: 64
+// One frame slot of the indirect call upload buffer: header, then calls.
+INDIRECT_SLOT_SIZE :: CULL_HEADER_SIZE + MAX_DRAW_CALLS * size_of(IndirectDraw)
+
+// One draw call as ExecuteIndirect reads it (the command signature in
+// renderer_create_culling; offsets in cull.hlsl): the mesh's buffers, the
+// root constant with the call's first instance-list entry, and the indexed
+// draw, whose instance count the cull pass fills in.
+IndirectDraw :: struct {
+    vertex_buffer: d3d12.VERTEX_BUFFER_VIEW,
+    index_buffer: d3d12.INDEX_BUFFER_VIEW,
+    first_instance: u32,
+    args: d3d12.DRAW_INDEXED_ARGUMENTS,
+}
+#assert(size_of(IndirectDraw) == 56)
+#assert(offset_of(IndirectDraw, first_instance) == 32)
+#assert(offset_of(IndirectDraw, args) + offset_of(d3d12.DRAW_INDEXED_ARGUMENTS, InstanceCount) == 40)
+
+// A draw that a view may draw: the cull pass tests its bounds against the
+// view and, if visible, adds it to the call.
+CullEntry :: struct {
+    draw, command, view: u32,
+}
+
+// A draw's world-space box, for the cull pass (WorldBounds without `valid`).
+CullBounds :: struct {
+    center: [3]f32,
+    half_axes: [3][3]f32,
+}
+
+// Per frame slot, read by the cull pass.
+CullConstants :: struct #align(256) {
+    view_planes: [CULL_VIEW_COUNT][6][4]f32,
+    entry_count: u32,
+    culling_enabled: u32,
+}
 
 // How a draw's material changes its pipelines (one per variant in each mesh
 // pass): cutouts discard pixels in the depth-only passes, and double-sided
@@ -40,12 +93,20 @@ Draw :: struct {
     casts_shadow: bool,
 }
 
-// One draw call: `instance_count` instances of `draw`'s submesh, with its
-// pipeline variant. Each instance's object names its own textures. Instance i draws the object at entry
-// first_instance + i of this frame's instance list.
+// One draw call: indirect call `command`, drawing instances of `draw`'s
+// submesh with its pipeline variant. The cull pass decides how many (none,
+// if every draw it could hold is out of view). A view's calls are
+// consecutive commands.
 DrawBatch :: struct {
     draw: u32,
-    first_instance, instance_count: u32,
+    command: u32,
+}
+
+// A kind of view's candidate draws grouped into calls: call i takes
+// draws[starts[i]:starts[i + 1]]. Every shadow view shares one.
+DrawLayout :: struct {
+    draws: []u32,
+    starts: []u32,
 }
 
 // Rebuilt every frame; lives in the renderer (too large for the stack).
@@ -53,35 +114,25 @@ FrameDraws :: struct {
     draws: [MAX_DRAWS]Draw,
     draw_count: int,
 
-    // Visible opaque and cutout draws.
-    scene_indices: [MAX_DRAWS]u32,
-    scene_draw_count: int,
-
-    // Visible blended draws, farthest first.
-    transparent_indices: [MAX_DRAWS]u32,
-    transparent_draw_count: int,
-
-    // Casters per shadow view: the sun's cascades, then the spot shadow slots.
-    shadow_indices: [SHADOW_VIEW_COUNT][MAX_DRAWS]u32,
-    shadow_draw_count: [SHADOW_VIEW_COUNT]int,
-
     caster_bounds: [MAX_DRAWS]WorldBounds,
     caster_count: int,
 
-    // The draw calls for those lists (in the frame's temp allocator), and
-    // how much of this frame's instance list they use.
+    // The draw calls of the camera's opaque and blended draws and of each
+    // shadow view (in the frame's temp allocator): every draw the view
+    // might see, culled on the GPU. Shadow views without a light have none.
     scene_batches, transparent_batches: []DrawBatch,
     shadow_batches: [SHADOW_VIEW_COUNT][]DrawBatch,
-    instance_count: int,
+    // How much of this frame's instance list, cull entries and indirect
+    // calls those use.
+    instance_count, entry_count, command_count: int,
 }
 
-// Turns a view's visible draws into draw calls, appending their instance
-// lists to this frame's. With `merge`, draws of the same submesh range and
-// variant become one call, whatever their materials (textures are bindless);
-// the calls are sorted by variant, so pipelines change rarely. Without
-// it, every draw is its own call in the given order (blended draws, sorted
-// back to front).
-renderer_batch_draws :: proc(data: ^FrameDraws, indices: []u32, merge: bool) -> []DrawBatch {
+// Groups candidate draws into calls. With `merge`, draws of the same submesh
+// range and variant become one call, whatever their materials (textures are
+// bindless); the calls are sorted by variant, so pipelines change rarely.
+// Without it, every draw is its own call in the given order (blended draws,
+// sorted back to front).
+renderer_batch_draws :: proc(data: ^FrameDraws, indices: []u32, merge: bool) -> DrawLayout {
     Batch_Key :: struct {
         variant: Draw_Variant,
         mesh: MeshHandle,
@@ -108,35 +159,70 @@ renderer_batch_draws :: proc(data: ^FrameDraws, indices: []u32, merge: bool) -> 
         })
     }
 
-    r := &g_renderer
-    instances := r.instance_mapped[int(r.frame_slot) * MAX_INSTANCES:]
-    batches := make([dynamic]DrawBatch, 0, len(keys), context.temp_allocator)
+    layout := DrawLayout{draws = make([]u32, len(keys), context.temp_allocator)}
+    starts := make([dynamic]u32, 0, len(keys) + 1, context.temp_allocator)
     for key, i in keys {
-        if !merge || i == 0 || !same_batch(key, keys[i - 1]) {
-            append(&batches, DrawBatch{draw = key.draw, first_instance = u32(data.instance_count)})
-        }
-        assert(data.instance_count < MAX_INSTANCES)
-        instances[data.instance_count] = key.draw
-        data.instance_count += 1
-        batches[len(batches) - 1].instance_count += 1
+        if !merge || i == 0 || !same_batch(key, keys[i - 1]) do append(&starts, u32(i))
+        layout.draws[i] = key.draw
     }
-    return batches[:]
+    append(&starts, u32(len(keys)))
+    layout.starts = starts[:]
+    return layout
+}
+
+// Gives `view` (0: the camera; 1 + n: shadow view n) its own copy of a
+// layout's calls: one indirect call each, with room in the instance list for
+// all its draws, and a cull entry per draw. Returns nothing, and marks draws
+// as dropped, if the calls do not fit this frame.
+renderer_add_view_batches :: proc(data: ^FrameDraws, layout: DrawLayout, view: u32) -> []DrawBatch {
+    r := &g_renderer
+    call_count := len(layout.starts) - 1
+    if call_count <= 0 do return nil
+    if data.command_count + call_count > MAX_DRAW_CALLS {
+        r.culling_stats.draws_dropped = true
+        return nil
+    }
+    commands := renderer_frame_indirect_draws()
+    entries := r.cull_entry_mapped[int(r.frame_slot) * MAX_INSTANCES:]
+    batches := make([]DrawBatch, call_count, context.temp_allocator)
+    for call in 0..<call_count {
+        first, end := layout.starts[call], layout.starts[call + 1]
+        draw := &data.draws[layout.draws[first]]
+        command := u32(data.command_count)
+        mesh := &r.meshes[draw.mesh]
+        commands[command] = IndirectDraw{
+            vertex_buffer = mesh.vertex_buffer_view,
+            index_buffer = mesh.index_buffer_view,
+            first_instance = u32(data.instance_count) + first,
+            args = {IndexCountPerInstance = draw.index_count, StartIndexLocation = draw.first_index},
+        }
+        for draw_index in layout.draws[first:end] {
+            assert(data.entry_count < MAX_INSTANCES)
+            entries[data.entry_count] = {draw_index, command, view}
+            data.entry_count += 1
+        }
+        batches[call] = {layout.draws[first], command}
+        data.command_count += 1
+    }
+    assert(data.instance_count + len(layout.draws) <= MAX_INSTANCES)
+    data.instance_count += len(layout.draws)
+    return batches
 }
 
 renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     r := &g_renderer
-    r.culling_stats = {}
+    r.culling_stats = {gpu = r.culling_stats.gpu}
     data := &r.frame_draws
     data.draw_count = 0
-    data.scene_draw_count = 0
-    data.transparent_draw_count = 0
-    data.shadow_draw_count = {}
     data.caster_count = 0
     data.instance_count = 0
+    data.entry_count = 0
+    data.command_count = 0
 
     post := &r.post_cb_mapped_data[r.frame_slot]
     sky := &r.sky_cb_mapped_data[r.frame_slot]
     objects := r.object_mapped[int(r.frame_slot) * MAX_DRAWS:]
+    cull_bounds := r.cull_bounds_mapped[int(r.frame_slot) * MAX_DRAWS:]
     environment_sin := math.sin(math.to_radians(r.environment_settings.rotation_degrees))
     environment_cos := math.cos(math.to_radians(r.environment_settings.rotation_degrees))
 
@@ -393,6 +479,11 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
                 data.caster_bounds[data.caster_count] = draw.bounds
                 data.caster_count += 1
             }
+            // Without bounds, huge axes keep the draw in every view.
+            cull_bounds[data.draw_count] = CullBounds{
+                center = draw.bounds.center,
+                half_axes = draw.bounds.half_axes if draw.bounds.valid else {{1e30, 0, 0}, {0, 1e30, 0}, {0, 0, 1e30}},
+            }
 
             objects[data.draw_count] = ObjectData{
                 model = alg.transpose(model),
@@ -499,78 +590,240 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         point_shadow_face_view_projection = point_shadow_face_view_projection,
     }
 
-    // Blended draws with their distance from the camera, for sorting.
+    r.previous_view_projection = view_projection
+
+    // Every draw goes to the GPU as a candidate for each view that could
+    // draw it; the cull pass (renderer_cull_draws) tests them. Blended draws
+    // keep their back-to-front order, so they are sorted here, culled or not.
     Transparent_Draw :: struct {index: u32, distance: f32}
     transparent := make([dynamic]Transparent_Draw, context.temp_allocator)
-
-    for draw_index in 0..<data.draw_count {
-        bounds := data.draws[draw_index].bounds
-
-        if !r.frustum_culling_enabled ||
-           frustum_intersects_bounds(camera_frustum, bounds) {
-            if data.draws[draw_index].blended {
-                append(&transparent, Transparent_Draw{u32(draw_index), alg.length(bounds.center - camera_position)})
-            } else {
-                data.scene_indices[data.scene_draw_count] = u32(draw_index)
-                data.scene_draw_count += 1
-            }
+    opaque := make([dynamic]u32, context.temp_allocator)
+    casters := make([dynamic]u32, context.temp_allocator)
+    for draw, draw_index in data.draws[:data.draw_count] {
+        if draw.blended {
+            append(&transparent, Transparent_Draw{u32(draw_index), alg.length(draw.bounds.center - camera_position)})
+        } else {
+            append(&opaque, u32(draw_index))
         }
-
-        if data.draws[draw_index].casts_shadow {
-            r.culling_stats.shadow_total += 1
-
-            for cascade in 0..<SHADOW_CASCADE_COUNT {
-                if !r.frustum_culling_enabled ||
-                   frustum_intersects_bounds(cascade_frustums[cascade], bounds) {
-                    count := &data.shadow_draw_count[cascade]
-                    data.shadow_indices[cascade][count^] = u32(draw_index)
-                    count^ += 1
-                }
-            }
-            for shadow, slot in spot_shadows {
-                if shadow.entity < 0 do continue
-                if r.frustum_culling_enabled && !frustum_intersects_bounds(spot_shadow_frustums[slot], bounds) do continue
-                view := SHADOW_CASCADE_COUNT + slot
-                data.shadow_indices[view][data.shadow_draw_count[view]] = u32(draw_index)
-                data.shadow_draw_count[view] += 1
-            }
-            for shadow, slot in point_shadows {
-                if shadow.entity < 0 do continue
-                for face in 0..<POINT_SHADOW_FACES {
-                    index := slot * POINT_SHADOW_FACES + face
-                    if r.frustum_culling_enabled && !frustum_intersects_bounds(point_shadow_frustums[index], bounds) do continue
-                    view := POINT_SHADOW_FIRST_VIEW + index
-                    data.shadow_indices[view][data.shadow_draw_count[view]] = u32(draw_index)
-                    data.shadow_draw_count[view] += 1
-                }
-            }
-        }
+        if draw.casts_shadow do append(&casters, u32(draw_index))
     }
 
     // Back to front, so nearer surfaces blend over farther ones. Sorting by
     // submesh center is approximate: interpenetrating or large surfaces can
     // still blend in the wrong order.
     slice.sort_by(transparent[:], proc(a, b: Transparent_Draw) -> bool {return a.distance > b.distance})
-    for draw, i in transparent do data.transparent_indices[i] = draw.index
-    data.transparent_draw_count = len(transparent)
+    transparent_order := make([]u32, len(transparent), context.temp_allocator)
+    for draw, i in transparent do transparent_order[i] = draw.index
 
-    r.previous_view_projection = view_projection
+    data.scene_batches = renderer_add_view_batches(data, renderer_batch_draws(data, opaque[:], merge = true), 0)
+    data.transparent_batches = renderer_add_view_batches(data, renderer_batch_draws(data, transparent_order, merge = false), 0)
 
-    data.scene_batches = renderer_batch_draws(data, data.scene_indices[:data.scene_draw_count], merge = true)
-    data.transparent_batches = renderer_batch_draws(data, data.transparent_indices[:data.transparent_draw_count], merge = false)
-    for view in 0..<SHADOW_VIEW_COUNT {
-        data.shadow_batches[view] = renderer_batch_draws(data, data.shadow_indices[view][:data.shadow_draw_count[view]], merge = true)
-        r.culling_stats.shadow_calls += len(data.shadow_batches[view])
+    // Only shadow views with a light this frame get calls.
+    view_frustums: [CULL_VIEW_COUNT]Frustum
+    view_frustums[0] = camera_frustum
+    view_active: [SHADOW_VIEW_COUNT]bool
+    for cascade in 0..<SHADOW_CASCADE_COUNT {
+        view_frustums[1 + cascade] = cascade_frustums[cascade]
+        view_active[cascade] = true
     }
+    for shadow, slot in spot_shadows {
+        view_frustums[1 + SHADOW_CASCADE_COUNT + slot] = spot_shadow_frustums[slot]
+        view_active[SHADOW_CASCADE_COUNT + slot] = shadow.entity >= 0
+    }
+    for shadow, slot in point_shadows {
+        for face in 0..<POINT_SHADOW_FACES {
+            index := slot * POINT_SHADOW_FACES + face
+            view_frustums[1 + POINT_SHADOW_FIRST_VIEW + index] = point_shadow_frustums[index]
+            view_active[POINT_SHADOW_FIRST_VIEW + index] = shadow.entity >= 0
+        }
+    }
+    caster_layout := renderer_batch_draws(data, casters[:], merge = true)
+    for view in 0..<SHADOW_VIEW_COUNT {
+        data.shadow_batches[view] = renderer_add_view_batches(data, caster_layout, u32(1 + view)) if view_active[view] else nil
+    }
+
+    cull := &r.cull_constants_mapped[r.frame_slot]
+    for frustum, view in view_frustums do cull.view_planes[view] = transmute([6][4]f32)frustum.planes
+    cull.entry_count = u32(data.entry_count)
+    cull.culling_enabled = u32(r.frustum_culling_enabled)
+    // The counters start at zero; the calls follow them.
+    (^CullCounters)(renderer_frame_indirect_header())^ = {}
 
     r.culling_stats.scene_total = data.draw_count
-    r.culling_stats.scene_visible = data.scene_draw_count + data.transparent_draw_count
-    r.culling_stats.scene_calls = len(data.scene_batches) + len(data.transparent_batches)
-    for count in data.shadow_draw_count {
-        r.culling_stats.shadow_visible += count
+    r.culling_stats.shadow_total = len(casters)
+    return data
+}
+
+// This frame slot's indirect calls in the upload buffer, which
+// renderer_cull_draws copies to the GPU's.
+renderer_frame_indirect_draws :: proc() -> [^]IndirectDraw {
+    return ([^]IndirectDraw)(renderer_frame_indirect_header()[CULL_HEADER_SIZE:])
+}
+
+renderer_frame_indirect_header :: proc() -> [^]u8 {
+    r := &g_renderer
+    return r.indirect_upload_mapped[int(r.frame_slot) * INDIRECT_SLOT_SIZE:]
+}
+
+// Culls this frame's candidate draws on the GPU (cull.hlsl): fills in the
+// indirect calls' instance counts and the instance list the mesh passes
+// read, and copies the counters for the panel. Runs before the shadow pass.
+renderer_cull_draws :: proc(data: ^FrameDraws) {
+    r := &g_renderer
+    renderer_begin_gpu_pass(.Culling)
+    defer renderer_end_gpu_pass(.Culling)
+
+    // Both buffers decay to the common state after each frame's commands.
+    barriers := [2]d3d12.RESOURCE_BARRIER{{Type = .TRANSITION}, {Type = .TRANSITION}}
+    barriers[0].Transition = {
+        pResource = r.indirect_buffer, StateBefore = d3d12.RESOURCE_STATE_COMMON,
+        StateAfter = {.COPY_DEST}, Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+    }
+    barriers[1].Transition = {
+        pResource = r.instance_buffer, StateBefore = d3d12.RESOURCE_STATE_COMMON,
+        StateAfter = {.UNORDERED_ACCESS}, Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+    }
+    r.command_list->ResourceBarrier(len(barriers), &barriers[0])
+    r.command_list->CopyBufferRegion(
+        r.indirect_buffer, 0, r.indirect_upload_buffer, u64(int(r.frame_slot) * INDIRECT_SLOT_SIZE),
+        u64(CULL_HEADER_SIZE + data.command_count * size_of(IndirectDraw)),
+    )
+    barriers[0].Transition.StateBefore = {.COPY_DEST}
+    barriers[0].Transition.StateAfter = {.UNORDERED_ACCESS}
+    r.command_list->ResourceBarrier(1, &barriers[0])
+
+    if data.entry_count > 0 {
+        r.command_list->SetComputeRootSignature(r.cull_root_signature)
+        r.command_list->SetPipelineState(r.cull_pipeline_state)
+        r.command_list->SetComputeRootConstantBufferView(u32(Cull_Root_Slot.Constants),
+            r.cull_constant_buffer->GetGPUVirtualAddress() + u64(r.frame_slot) * size_of(CullConstants))
+        r.command_list->SetComputeRootShaderResourceView(u32(Cull_Root_Slot.Entries),
+            r.cull_entry_buffer->GetGPUVirtualAddress() + u64(int(r.frame_slot) * MAX_INSTANCES * size_of(CullEntry)))
+        r.command_list->SetComputeRootShaderResourceView(u32(Cull_Root_Slot.Bounds),
+            r.cull_bounds_buffer->GetGPUVirtualAddress() + u64(int(r.frame_slot) * MAX_DRAWS * size_of(CullBounds)))
+        r.command_list->SetComputeRootUnorderedAccessView(u32(Cull_Root_Slot.Commands), r.indirect_buffer->GetGPUVirtualAddress())
+        r.command_list->SetComputeRootUnorderedAccessView(u32(Cull_Root_Slot.Instances), r.instance_buffer->GetGPUVirtualAddress())
+        r.command_list->Dispatch(u32(data.entry_count + 63) / 64, 1, 1)
     }
 
-    return data
+    barriers[0].Transition.StateBefore = {.UNORDERED_ACCESS}
+    barriers[0].Transition.StateAfter = {.INDIRECT_ARGUMENT, .COPY_SOURCE}
+    barriers[1].Transition.StateBefore = {.UNORDERED_ACCESS}
+    barriers[1].Transition.StateAfter = {.NON_PIXEL_SHADER_RESOURCE}
+    r.command_list->ResourceBarrier(len(barriers), &barriers[0])
+    r.command_list->CopyBufferRegion(r.cull_readback, u64(r.frame_slot) * size_of(CullCounters), r.indirect_buffer, 0, size_of(CullCounters))
+}
+
+// The counters frame `slot` counted, once the GPU has finished it.
+renderer_read_cull_counters :: proc(slot: u32) {
+    r := &g_renderer
+    read_range := d3d12.RANGE{Begin = uint(slot) * size_of(CullCounters), End = uint(slot + 1) * size_of(CullCounters)}
+    mapped: rawptr
+    dx_check(r.cull_readback->Map(0, &read_range, &mapped))
+    // Map returns the buffer's start.
+    r.culling_stats.gpu = ([^]CullCounters)(mapped)[slot]
+    written_range := d3d12.RANGE{}
+    r.cull_readback->Unmap(0, &written_range)
+}
+
+Cull_Root_Slot :: enum u32 {
+    Constants, // b0
+    Entries,   // t0: root SRV
+    Bounds,    // t1: root SRV
+    Commands,  // u0: root UAV, the indirect calls
+    Instances, // u1: root UAV, the instance list
+}
+
+// The cull pass's buffers and root signature, and the command signature the
+// mesh passes draw with. The pipeline is built with the others
+// (renderer_build_pipelines). Needs the main root signature.
+renderer_create_culling :: proc() {
+    r := &g_renderer
+    mapped: rawptr
+    r.cull_constant_buffer, mapped = renderer_create_mapped_upload_buffer(u64(FRAME_COUNT * size_of(CullConstants)))
+    r.cull_constants_mapped = ([^]CullConstants)(mapped)
+    r.cull_entry_buffer, mapped = renderer_create_mapped_upload_buffer(u64(FRAME_COUNT * MAX_INSTANCES * size_of(CullEntry)))
+    r.cull_entry_mapped = ([^]CullEntry)(mapped)
+    r.cull_bounds_buffer, mapped = renderer_create_mapped_upload_buffer(u64(FRAME_COUNT * MAX_DRAWS * size_of(CullBounds)))
+    r.cull_bounds_mapped = ([^]CullBounds)(mapped)
+    r.indirect_upload_buffer, mapped = renderer_create_mapped_upload_buffer(u64(FRAME_COUNT * INDIRECT_SLOT_SIZE))
+    r.indirect_upload_mapped = ([^]u8)(mapped)
+
+    buffer :: proc(size: u64, heap_type: d3d12.HEAP_TYPE, flags: d3d12.RESOURCE_FLAGS, state: d3d12.RESOURCE_STATES) -> (resource: ^d3d12.IResource) {
+        heap := d3d12.HEAP_PROPERTIES{Type = heap_type}
+        desc := d3d12.RESOURCE_DESC{
+            Dimension = .BUFFER, Width = size, Height = 1, DepthOrArraySize = 1,
+            MipLevels = 1, SampleDesc = {Count = 1}, Layout = .ROW_MAJOR, Flags = flags,
+        }
+        dx_check(g_renderer.device->CreateCommittedResource(&heap, {}, &desc, state, nil, d3d12.IResource_UUID, (^rawptr)(&resource)))
+        return
+    }
+    // One of each on the GPU: frames run in order on the one queue.
+    r.indirect_buffer = buffer(INDIRECT_SLOT_SIZE, .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON)
+    r.instance_buffer = buffer(MAX_INSTANCES * size_of(u32), .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON)
+    r.cull_readback = buffer(FRAME_COUNT * size_of(CullCounters), .READBACK, {}, {.COPY_DEST})
+
+    params: [Cull_Root_Slot]d3d12.ROOT_PARAMETER
+    params[.Constants] = {ParameterType = .CBV, Descriptor = {ShaderRegister = 0}}
+    params[.Entries] = {ParameterType = .SRV, Descriptor = {ShaderRegister = 0}}
+    params[.Bounds] = {ParameterType = .SRV, Descriptor = {ShaderRegister = 1}}
+    params[.Commands] = {ParameterType = .UAV, Descriptor = {ShaderRegister = 0}}
+    params[.Instances] = {ParameterType = .UAV, Descriptor = {ShaderRegister = 1}}
+    rs_desc := d3d12.ROOT_SIGNATURE_DESC{NumParameters = len(params), pParameters = &params[Cull_Root_Slot(0)]}
+    signature, errors: ^d3d12.IBlob
+    hr := d3d12.SerializeRootSignature(&rs_desc, ._1, &signature, &errors)
+    if errors != nil {
+        fmt.println("Cull root signature:", cstring(errors->GetBufferPointer()))
+        errors->Release()
+    }
+    dx_check(hr)
+    defer signature->Release()
+    dx_check(r.device->CreateRootSignature(
+        0, signature->GetBufferPointer(), signature->GetBufferSize(),
+        d3d12.IRootSignature_UUID, (^rawptr)(&r.cull_root_signature),
+    ))
+
+    // IndirectDraw's fields, in order.
+    arguments := [4]d3d12.INDIRECT_ARGUMENT_DESC{
+        {Type = .VERTEX_BUFFER_VIEW},
+        {Type = .INDEX_BUFFER_VIEW},
+        {Type = .CONSTANT},
+        {Type = .DRAW_INDEXED},
+    }
+    arguments[0].VertexBuffer = {Slot = 0}
+    arguments[2].Constant = {RootParameterIndex = u32(Root_Slot.Draw_Constants), Num32BitValuesToSet = 1}
+    signature_desc := d3d12.COMMAND_SIGNATURE_DESC{
+        ByteStride = size_of(IndirectDraw),
+        NumArgumentDescs = len(arguments),
+        pArgumentDescs = &arguments[0],
+    }
+    dx_check(r.device->CreateCommandSignature(
+        &signature_desc, r.root_signature, d3d12.ICommandSignature_UUID, (^rawptr)(&r.draw_command_signature),
+    ))
+}
+
+// The cull pipeline is released with the others (renderer_pipeline_slots).
+renderer_release_culling :: proc() {
+    r := &g_renderer
+    r.cull_constant_buffer->Release()
+    r.cull_entry_buffer->Release()
+    r.cull_bounds_buffer->Release()
+    r.indirect_upload_buffer->Release()
+    r.indirect_buffer->Release()
+    r.instance_buffer->Release()
+    r.cull_readback->Release()
+    r.cull_root_signature->Release()
+    r.draw_command_signature->Release()
+}
+
+// The cull pipeline; rebuilt by shader hot-reload.
+renderer_create_cull_pipeline :: proc() {
+    r := &g_renderer
+    cs := renderer_compile_shader("shaders/cull.hlsl", "CSCull", "cs_5_1")
+    defer cs->Release()
+    if renderer_skip_pipeline() do return
+    desc := d3d12.COMPUTE_PIPELINE_STATE_DESC{pRootSignature = r.cull_root_signature, CS = shader_bytecode(cs)}
+    renderer_check_pipeline(r.device->CreateComputePipelineState(&desc, d3d12.IPipelineState_UUID, (^rawptr)(&r.cull_pipeline_state)))
 }
 
 TAA_JITTER_SAMPLES :: 8

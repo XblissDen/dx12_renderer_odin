@@ -5,7 +5,8 @@ does, in what order, and why it is built that way. The [project
 README](../README.md) covers building and running.
 
 - [Frame structure](frame.md): the main loop, frames in flight, the order of
-  GPU passes, per-frame data, culling, instanced batching, bindless textures,
+  GPU passes, per-frame data, instanced batching, GPU culling and indirect
+  draws, bindless textures,
   the depth prepass, the root signature, GPU timings, and shader hot-reload.
 - [Lighting](lighting.md): surface shading, materials, the sun, point and spot
   lights, clustered lighting, shadows, image-based lighting and the sky,
@@ -44,7 +45,7 @@ README](../README.md) covers building and running.
 | `src/window.odin` | Win32 window, input, cursor capture, file dialogs |
 | `src/renderer.odin` | Device, swap chain, root signature, pipelines, hot-reload, frame pass order, resize, shutdown |
 | `src/renderer_frames.odin` | Frames in flight, upload buffers, GPU timestamps |
-| `src/renderer_frame_data.odin` | Per-frame draws, culling, constants, light buffer, TAA jitter |
+| `src/renderer_frame_data.odin` | Per-frame draws, batching, GPU culling, constants, light buffer, TAA jitter |
 | `src/renderer_scene_pass.odin` | Sky, lit opaque and blended passes; tone mapping, FXAA/sharpen, UI |
 | `src/renderer_shadow.odin` | Sun cascades, spot and point light shadow maps |
 | `src/renderer_ssao.odin` | Depth prepass and SSAO |
@@ -63,5 +64,6 @@ README](../README.md) covers building and running.
 | `shaders/scene.hlsl` | Mesh shading, prepass, shadows, SSAO, SSR, light clusters, fog |
 | `shaders/post_process.hlsl` | Full-screen triangle, bloom, TAA, tone mapping, FXAA, sharpening |
 | `shaders/auto_exposure.hlsl` | Luminance histogram and exposure adaptation |
+| `shaders/cull.hlsl` | GPU frustum culling of the draws |
 | `shaders/sky.hlsl`, `irradiance.hlsl`, `environment_prefilter.hlsl` | Sky and IBL baking |
 | `shaders/texture_mips.hlsl`, `selection.hlsl` | Mip generation; selection outline and debug lines |

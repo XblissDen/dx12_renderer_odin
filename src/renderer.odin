@@ -53,6 +53,7 @@ GPU_Pass :: enum u32{
     SSR,
     Light_Clusters,
     Fog,
+    Culling,
 }
 
 Vertex :: struct {
@@ -314,12 +315,25 @@ Renderer :: struct {
     viewport: d3d12.VIEWPORT,
     scissor_rect: d3d12.RECT,
 
-    // Per frame slot: MAX_DRAWS objects, and the instance lists that say
-    // which objects each draw call draws.
+    // Per frame slot: MAX_DRAWS objects.
     object_buffer: ^d3d12.IResource,
     object_mapped: [^]ObjectData,
-    instance_buffer: ^d3d12.IResource,
-    instance_mapped: [^]u32,
+
+    // GPU culling (renderer_frame_data.odin). Per frame slot, as the CPU
+    // writes them: the views' planes, the cull entries, each draw's bounds,
+    // and the indirect calls. Then the calls and the instance lists (which
+    // objects each call draws) as the cull pass fills them in, and per-slot
+    // copies of its counters for the panel.
+    cull_constant_buffer, cull_entry_buffer, cull_bounds_buffer, indirect_upload_buffer: ^d3d12.IResource,
+    cull_constants_mapped: [^]CullConstants,
+    cull_entry_mapped: [^]CullEntry,
+    cull_bounds_mapped: [^]CullBounds,
+    indirect_upload_mapped: [^]u8,
+    indirect_buffer, instance_buffer, cull_readback: ^d3d12.IResource,
+    cull_root_signature: ^d3d12.IRootSignature,
+    cull_pipeline_state: ^d3d12.IPipelineState,
+    // ExecuteIndirect's layout of IndirectDraw.
+    draw_command_signature: ^d3d12.ICommandSignature,
 
     frame_constant_buffer: ^d3d12.IResource,
     frame_cb_mapped_data: [^]FrameConstants,
@@ -714,6 +728,7 @@ renderer_build_pipelines :: proc() -> (error: string) {
         renderer_create_exposure_pipelines()
         renderer_create_light_cluster_pipeline()
         renderer_create_fog_pipelines()
+        renderer_create_cull_pipeline()
     }
     r.shader_collecting = true
     create()
@@ -749,7 +764,7 @@ renderer_pipeline_slots :: proc() -> []^^d3d12.IPipelineState {
         &r.taa_resolve_pipeline_state, &r.sky_pipeline_state,
         &r.irradiance_pipeline_state, &r.prefilter_pipeline_state,
         &r.ssao_pipeline_state, &r.ssao_blur_pipeline_state, &r.ssr_pipeline_state, &r.mip_pipeline,
-        &r.cluster_pipeline_state,
+        &r.cluster_pipeline_state, &r.cull_pipeline_state,
         &r.fog_inject_pipeline_state, &r.fog_integrate_pipeline_state, &r.fog_apply_pipeline_state,
         &r.selection_pipeline_state, &r.selection_outline_pipeline_state,
         &r.debug_line_pipeline_states[0], &r.debug_line_pipeline_states[1],
@@ -1070,38 +1085,35 @@ ROOT_LAYOUT := [Root_Slot]Root_Param{
 // they index, for the mesh passes. The SRV heap must be set.
 renderer_bind_objects :: proc() {
     renderer_bind_buffer_srv(.Objects, renderer_object_buffer_address())
-    renderer_bind_buffer_srv(.Instance_Draws, renderer_instance_buffer_address())
+    renderer_bind_buffer_srv(.Instance_Draws, g_renderer.instance_buffer->GetGPUVirtualAddress())
     renderer_bind_srv(.Textures, 0)
 }
 
-// Draws a batch's instances: its first draw's geometry and submesh range,
-// once per instance. renderer_bind_objects must have run.
-renderer_draw_batch :: proc(draws: []Draw, batch: DrawBatch) {
+// Draws `count` consecutive indirect calls from `first`, each setting its
+// mesh's buffers and first instance (left changed afterwards) and drawing
+// the instances the cull pass gave it. renderer_bind_objects must have run.
+renderer_execute_draws :: proc(first, count: u32) {
     r := &g_renderer
-    draw := draws[batch.draw]
-    r.command_list->SetGraphicsRoot32BitConstant(u32(Root_Slot.Draw_Constants), batch.first_instance, 0)
-
-    assert(int(draw.mesh) > 0 && int(draw.mesh) < len(r.meshes))
-    gpu_mesh := &r.meshes[draw.mesh]
-    r.command_list->IASetVertexBuffers(0, 1, &gpu_mesh.vertex_buffer_view)
-    r.command_list->IASetIndexBuffer(&gpu_mesh.index_buffer_view)
-    r.command_list->DrawIndexedInstanced(draw.index_count, batch.instance_count, draw.first_index, 0, 0)
+    r.command_list->ExecuteIndirect(
+        r.draw_command_signature, count, r.indirect_buffer,
+        u64(CULL_HEADER_SIZE + int(first) * size_of(IndirectDraw)), nil, 0,
+    )
 }
 
-// Draws a pass's batches, switching to each batch's pipeline variant from
-// `pipelines` when it changes. Batches come sorted by variant, so that is
-// rare. The SRV heap must be set.
+// Draws a pass's batches, one ExecuteIndirect per run of the same pipeline
+// variant from `pipelines`. Batches come sorted by variant, so runs are
+// long. The SRV heap must be set.
 renderer_draw_batches :: proc(draws: []Draw, batches: []DrawBatch, pipelines: [Draw_Variant]^d3d12.IPipelineState) {
     r := &g_renderer
     renderer_bind_objects()
-    current: Maybe(Draw_Variant)
-    for batch in batches {
-        variant := draws[batch.draw].variant
-        if current != variant {
-            r.command_list->SetPipelineState(pipelines[variant])
-            current = variant
-        }
-        renderer_draw_batch(draws, batch)
+    for start := 0; start < len(batches); {
+        variant := draws[batches[start].draw].variant
+        end := start + 1
+        for end < len(batches) && draws[batches[end].draw].variant == variant do end += 1
+        assert(batches[end - 1].command == batches[start].command + u32(end - start - 1))
+        r.command_list->SetPipelineState(pipelines[variant])
+        renderer_execute_draws(batches[start].command, u32(end - start))
+        start = end
     }
 }
 
@@ -1939,6 +1951,7 @@ renderer_render_frame :: proc(scene: ^Scene) {
     renderer_begin_frame()
 
     frame := renderer_prepare_frame(scene)
+    renderer_cull_draws(frame)
 
     draws := frame.draws[:frame.draw_count]
     renderer_render_shadow_pass(draws, frame.shadow_batches)
@@ -2048,7 +2061,7 @@ renderer_destroy :: proc(){
     r.root_signature->Release()
 
     r.object_buffer->Release()
-    r.instance_buffer->Release()
+    renderer_release_culling()
     r.frame_constant_buffer->Release()
 
     r.depth_buffer->Release()

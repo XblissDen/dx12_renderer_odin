@@ -401,7 +401,7 @@ renderer_render_shadow_pass :: proc(
     r.command_list->RSSetViewports(1, &shadow_viewport)
     r.command_list->RSSetScissorRects(1, &shadow_scissor)
     r.command_list->SetGraphicsRootSignature(r.root_signature)
-    // Cutouts read their albedo alpha through the material table.
+    // Cutouts read their albedo alpha from the bindless textures.
     shadow_heaps := []^d3d12.IDescriptorHeap{r.srv_heap}
     r.command_list->SetDescriptorHeaps(1, raw_data(shadow_heaps))
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)

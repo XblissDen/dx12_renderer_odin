@@ -37,11 +37,6 @@ renderer_create_frame_constant_buffers :: proc() {
     )
     r.object_mapped = ([^]ObjectData)(mapped)
 
-    r.instance_buffer, mapped = renderer_create_mapped_upload_buffer(
-        u64(FRAME_COUNT * MAX_INSTANCES * size_of(u32)),
-    )
-    r.instance_mapped = ([^]u32)(mapped)
-
     r.frame_constant_buffer, mapped = renderer_create_mapped_upload_buffer(
         u64(FRAME_COUNT * size_of(FrameConstants)),
     )
@@ -93,12 +88,6 @@ renderer_object_buffer_address :: proc() -> u64 {
            u64(int(r.frame_slot) * MAX_DRAWS * size_of(ObjectData))
 }
 
-renderer_instance_buffer_address :: proc() -> u64 {
-    r := &g_renderer
-    return r.instance_buffer->GetGPUVirtualAddress() +
-           u64(int(r.frame_slot) * MAX_INSTANCES * size_of(u32))
-}
-
 renderer_frame_cb_address :: proc() -> u64 {
     r := &g_renderer
     return r.frame_constant_buffer->GetGPUVirtualAddress() +
@@ -138,6 +127,7 @@ renderer_begin_frame :: proc() {
     if completed_frame != 0 {
         renderer_read_gpu_timings(r.frame_slot)
         renderer_read_auto_exposure(r.frame_slot)
+        renderer_read_cull_counters(r.frame_slot)
     }
 
     allocator := r.command_allocators[r.frame_slot]

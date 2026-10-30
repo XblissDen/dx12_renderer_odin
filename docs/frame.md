@@ -26,11 +26,17 @@ All temporary allocations of a frame are freed at the end of the iteration.
 
 Two frames can be in flight (`FRAME_COUNT`). Each has its own command
 allocator and its own slice of every per-frame upload buffer: frame constants,
-per-draw object data and instance lists, post-processing and sky constants,
-and the light buffer. Before recording, the CPU waits on the
-fence for the frame that last used the same slot (`renderer_begin_frame`). That
-wait is also when it reads that frame's GPU timings and exposure, which are
-therefore two frames old. Presentation uses vsync.
+per-draw object data and bounds, the cull entries and indirect draw calls,
+post-processing and sky constants, and the light buffer. Before recording,
+the CPU waits on the fence for the frame that last used the same slot
+(`renderer_begin_frame`). That wait is also when it reads that frame's GPU
+timings, exposure and culling counters, which are therefore two frames old.
+Presentation uses vsync.
+
+The buffers the GPU itself writes each frame (the indirect calls after
+culling, the instance lists) exist once: frames run in order on the one
+queue, so a frame never overwrites them while an earlier one still reads
+them.
 
 ## Pass order
 
@@ -38,6 +44,7 @@ therefore two frames old. Presentation uses vsync.
 
 | Pass | What it does | Details |
 | --- | --- | --- |
+| GPU culling | Compute pass testing every draw against every view, filling in the draw calls | [below](#gpu-culling) |
 | Shadows | Sun cascades, then spot shadow slots, then point shadow cube faces | [Lighting](lighting.md#shadows) |
 | Depth prepass | Depth, motion vectors, and the surface buffer (normal, roughness) | [below](#depth-prepass) |
 | SSAO | Ambient occlusion from depth, then a depth-aware blur | [Lighting](lighting.md#ambient-occlusion-ssao) |
@@ -72,8 +79,9 @@ GPU data every frame:
 - **Draw variants**: each mesh pass has four pipelines, for opaque, cutout,
   double-sided, and cutout double-sided materials. Cutouts run the alpha test
   in the depth-only passes; double-sided ones disable culling.
-- **Batches**: after culling, each view's draws become draw calls
-  ([below](#instanced-batching)).
+- **Batches**: each view's candidate draws become indirect draw calls
+  ([below](#instanced-batching)), which the GPU fills in as it culls
+  ([below](#gpu-culling)).
 - **Frame constants** (`FrameConstants`, one 256-byte-aligned block): camera
   matrices (jittered for TAA, and unjittered for motion vectors, this frame
   and last), the sun, environment and ambient settings, shadow matrices and
@@ -83,18 +91,6 @@ GPU data every frame:
   frame's slice of the light buffer (see [Clustered
   lighting](lighting.md#clustered-lighting)).
 
-### Culling
-
-Every draw has a world-space bounding box: the mesh's local box under the
-entity's transform, kept as a center and three half axes so rotation does not
-inflate it. A box is tested against the six planes of each view's frustum and
-rejected only if it lies entirely outside one plane. The camera view, each sun
-cascade, each spot shadow slot, and each point shadow cube face cull
-separately, so shadow passes draw only their own casters. Blended draws are
-collected separately and sorted back to front by distance to their center. The
-panel shows draw counts before and after culling, and culling can be turned
-off to compare.
-
 ### Instanced batching
 
 Draws that could be drawn by the same draw call go out as one instanced call.
@@ -102,37 +98,91 @@ Two draws batch when they share the same mesh and submesh index range and the
 same pipeline variant. Everything else can differ: transforms, material values
 (tint, roughness, and so on), and textures, which are bindless. Copies of a
 model, the repeated parts of a glTF node tree, and different objects that use
-the same mesh (the cube, say) all become one call. The camera and every shadow view
-batch separately (`renderer_batch_draws` in `src/renderer_frame_data.odin`):
+the same mesh (the cube, say) all become one call.
 
-1. The view's visible draws are sorted by variant, then submesh, so
-   pipelines change rarely.
-2. Each run of draws that batch together becomes a `DrawBatch`. Its draw
-   indices go into this frame's **instance list**, an upload buffer of `u32`s
-   with room for every view to list every draw once.
-3. The call binds the first draw's geometry, sets the batch's start in the
-   instance list as a root constant (`instance_base`), and draws
-   `instance_count` instances.
+The CPU batches every draw a view *might* draw, before knowing which are in
+view (`renderer_batch_draws` and `renderer_add_view_batches` in
+`src/renderer_frame_data.odin`):
+
+1. **Candidates.** The camera gets every opaque and cutout draw, plus every
+   blended one; each shadow view with a light this frame gets every draw that
+   casts shadows.
+2. **Grouping.** Candidates are sorted by variant, then submesh, so pipelines
+   change rarely, and each run that batches together becomes one call. The
+   grouping is done once for the camera and once for all shadow views, which
+   share it.
+3. **Calls.** Each view gets its own copy of the calls. Each call is an
+   `IndirectDraw` in this frame's indirect call buffer: the mesh's vertex
+   and index buffer views, a root constant (`instance_base`) with the call's
+   start in the **instance list**, and the indexed draw's arguments, with an
+   instance count of zero. The call has room in the instance list for all its
+   candidates.
+
+The GPU then culls ([below](#gpu-culling)), which fills in each call's
+instances. A pass draws its calls with `ExecuteIndirect`, one per run of the
+same pipeline variant (`renderer_draw_batches`). The command signature
+(`draw_command_signature`) sets the vertex buffer, index buffer and root
+constant per call, so one `ExecuteIndirect` covers calls of different meshes.
 
 The vertex shader finds its object as
 `g_objects[g_instance_draws[instance_base + SV_InstanceID]]` and passes the
 index to the pixel shader as a `nointerpolation` value. That way the pixel
 shader reads the same object's material values and textures. The prepass and
-the lit pass use the same batches.
+the lit pass use the same calls.
 
 Blended draws are not merged, because they must stay in back-to-front order:
-each is its own call of one instance.
+the CPU sorts all of them by distance to their center, in view or not, and
+each is its own call of at most one instance.
 
-The panel's **Draw calls** count is the camera's calls per pass, next to the
-visible draws, and the shadow line shows its draws and calls. With 40 extra
-cubes in the default scene, the 46 draws take 2 calls per pass: every
-cube-shaped object (portrait cubes, the stone ground, the light markers),
-then the pyramid. The 214 shadow draws take 21 calls. Sponza gains little,
-because its submeshes are different index ranges.
+The panel's **Draw calls** count is the camera's calls that drew something,
+per pass, next to the visible draws, and the shadow line shows its draws and
+calls. With 40 extra cubes in the default scene, the 46 draws take 2 calls per
+pass: every cube-shaped object (portrait cubes, the stone ground, the light
+markers), then the pyramid. The 214 shadow draws take 21 calls. Sponza gains
+little, because its submeshes are different index ranges.
 
-Within a pass, draws go in sort order rather than entity order. Where two
-surfaces have exactly the same depth (overlapping leaves in Sponza), the one
-drawn last wins the `LESS_EQUAL` test.
+Within a call, instances land in whatever order the cull pass's threads
+reach them, not in entity order. Where two surfaces have exactly the same
+depth (overlapping leaves in Sponza), the one drawn last wins the
+`LESS_EQUAL` test, so which one shows can change from frame to frame.
+
+### GPU culling
+
+Every draw has a world-space bounding box: the mesh's local box under the
+entity's transform, kept as a center and three half axes so rotation does not
+inflate it. A box is tested against the six planes of a view's frustum and
+rejected only if it lies entirely outside one plane. The camera, each sun
+cascade, each spot shadow slot, and each point shadow cube face cull
+separately, so shadow passes draw only their own casters.
+
+The test runs on the GPU, in a compute pass before the shadow pass
+(`renderer_cull_draws`, `shaders/cull.hlsl`). The CPU writes three things
+per frame:
+
+- **Bounds**: each draw's box. Draws without bounds get huge boxes, so they
+  pass every test.
+- **View planes**: the six planes of all 33 views (the camera, then the 32
+  shadow views), in `CullConstants`.
+- **Cull entries**: one per candidate of each view's calls, naming the draw,
+  its call, and the view.
+
+The pass copies the calls into a GPU buffer and runs one thread per entry.
+A thread whose box is in view adds one to its call's instance count with an
+atomic add. The count before the add is its place in the call's part of the
+instance list, so it writes its draw index there. Calls with no visible
+draws keep zero instances and draw nothing. The buffer then serves as
+`ExecuteIndirect`'s argument buffer, and the instance list as the vertex
+shaders' `g_instance_draws`.
+
+The CPU never learns what is visible. The pass also counts visible draws and
+calls that drew something, for the camera and for the shadow views, at the
+start of the call buffer. These counts are copied to a readback buffer and
+shown in the panel two frames late. Frustum culling can be turned off in the
+panel to compare; the cull pass then keeps every candidate.
+
+Limits: 32,768 calls per frame (`MAX_DRAW_CALLS`). A view whose calls do not
+fit is skipped that frame. Point and spot lights are still culled on the CPU
+(their range against the camera), since the light list is built there.
 
 ### Bindless textures
 
@@ -204,14 +254,17 @@ assigns registers:
 | Exposure buffer | t16 | Root SRV, the automatic exposure |
 | Reflections | t17 | SSR result |
 | Lights, Cluster lights | t18, t19 | Root SRVs, the light buffer and cluster lists |
-| Objects, Instance draws | t20, t21 | Root SRVs, this frame's object data and instance lists |
+| Objects, Instance draws | t20, t21 | Root SRVs, this frame's object data and the instance lists the cull pass wrote |
 
 Static samplers: linear wrap (s0), shadow comparison with a white border (s1),
 16× anisotropic for materials (s2), panoramas wrapping horizontally but
 clamped at the poles (s3), and clamp-to-edge for screen-space lookups (s4).
 
-Compute passes (auto exposure, light clusters, fog) have their own small root
-signatures, and so do the selection outline and debug lines, which share one.
+Compute passes (GPU culling, auto exposure, light clusters, fog) have their
+own small root signatures, and so do the selection outline and debug lines,
+which share one. The indirect draws' command signature is built against the
+main root signature, because each call sets the `Draw constants` root
+constant.
 
 ## GPU timings
 

@@ -21,6 +21,7 @@ main :: proc(){
     renderer_create_selection_root_signature()
     renderer_create_auto_exposure()
     renderer_create_light_clusters()
+    renderer_create_culling()
     renderer_create_fog_root_signature()
     if error := renderer_build_pipelines(); error != "" do panic(error)
     renderer_load_textures()
