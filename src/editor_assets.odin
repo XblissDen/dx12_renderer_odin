@@ -224,7 +224,8 @@ editor_model_picker :: proc(label: cstring, selected: ^MeshHandle) -> bool {
     changed := false
     if ui_begin_combo(label, preview) {
         for i in 1..<len(g_assets.meshes) {
-            if g_assets.meshes[i].removed do continue
+            // Parts are added with their model (as its node tree).
+            if g_assets.meshes[i].removed || g_assets.meshes[i].part_of != 0 do continue
             ui_push_id(i32(i))
             if ui_selectable(g_assets.meshes[i].label, selected^ == MeshHandle(i)) {
                 selected^ = MeshHandle(i)
@@ -286,17 +287,61 @@ editor_draw_texture_controls :: proc(scene: ^Scene, index: int) {
     editor_texture_picker(scene, index, .Material_Occlusion_Map, "Occlusion map", .occlusion)
 }
 
+// Add Model brings a glTF model with several nodes in as its node tree:
+// one entity per node, under an empty entity named after the model.
+// Otherwise (or with this off) the model is one entity.
+g_editor_add_node_tree := true
+
+editor_model_has_tree :: proc(model: MeshHandle) -> bool {
+    return assets_mesh_valid(model) && len(g_assets.meshes[model].nodes) > 1
+}
+
 editor_add_model :: proc(scene: ^Scene, model: MeshHandle) {
     if !assets_mesh_valid(model) do return
     editor_finish_edit()
     asset := &g_assets.meshes[model]
     name, ok := scene_store_owned_name(asset.desc.name if asset.desc.name != "" else asset.desc.id)
     if !ok do return
+    // Three units in front of the camera, centered on the model's bounds.
     transform := Transform{scale = {1, 1, 1}}
     camera := camera_find_active(scene)
     if camera >= 0 {
         transform.position = scene.transforms[camera].position + camera_forward(&scene.cameras[camera]) * 3 - (asset.bounds.minimum + asset.bounds.maximum) * 0.5
     }
-    snapshot := EditorMeshSnapshot{name = name, transform = transform, mesh_renderer = {mesh = model}, material = asset.material, material_slots = asset.material_slots}
-    editor_create_entity(scene, snapshot, g_editor_selected)
+    if !g_editor_add_node_tree || !editor_model_has_tree(model) {
+        snapshot := EditorMeshSnapshot{name = name, transform = transform, mesh_renderer = MeshRenderer{mesh = model}, material = asset.material, material_slots = asset.material_slots}
+        editor_create_entity(scene, snapshot, g_editor_selected)
+        return
+    }
+
+    // The root, then the nodes in order (parents before children), as one
+    // undo step. All or nothing: if the entity slots run out, the entities
+    // made so far are removed again.
+    commands := make([dynamic]EditorCommand, context.temp_allocator)
+    entities := make([]Entity, len(asset.nodes), context.temp_allocator)
+    root, root_ok := editor_create_entity_command(scene, EditorMeshSnapshot{name = name, transform = transform}, g_editor_selected)
+    if !root_ok do return
+    append(&commands, root)
+    for node, i in asset.nodes {
+        node_name, name_ok := scene_store_owned_name(node.name)
+        snapshot := EditorMeshSnapshot{
+            name = node_name if name_ok else "",
+            transform = node.transform,
+            parent = entities[node.parent] if node.parent >= 0 else root.entity,
+        }
+        if node.part != 0 {
+            snapshot.mesh_renderer = MeshRenderer{mesh = node.part}
+            snapshot.material = asset.material
+            snapshot.material_slots = asset.material_slots
+        }
+        command, created := editor_create_entity_command(scene, snapshot, Entity(-1))
+        if !created {
+            for j := len(commands) - 1; j >= 0; j -= 1 do editor_remove_created_mesh(scene, commands[j].entity)
+            return
+        }
+        append(&commands, command)
+        entities[i] = command.entity
+    }
+    editor_push_commands(commands[:], root.entity)
+    editor_select(root.entity)
 }

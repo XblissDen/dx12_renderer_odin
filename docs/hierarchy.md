@@ -19,6 +19,27 @@ are in the parent's space, and a root's transform is in world space.
   or an equivalent check.
 - **Dead links**: a link to a slot that is not alive counts as no parent. This
   only happens for a moment while a deleted subtree is being restored.
+- **Empty entities**: an entity can have just a transform, with no mesh and
+  no light. It groups its children and places them, like a glTF node without
+  geometry. It is listed, selected and edited like any other entity, but it
+  cannot be clicked in the viewport. Selecting it outlines its descendants,
+  and Focus Selected frames them.
+
+## glTF node trees
+
+**Add Model** brings in a glTF model that has more than one node as its node
+tree: an empty entity named after the model, three units in front of the
+camera, with one child entity per node. Nodes with geometry draw their part;
+nodes without geometry become empty entities. Clear **As its node tree**
+beside the button to add the flattened model as one entity instead. That has
+fewer draws, which is better for a large static model such as Sponza.
+
+Every node entity's placement is in its parent's space, so moving, hiding
+under a collapsed row, duplicating or deleting the group takes the whole
+model along. The parts placed by their entities land exactly on the flattened
+model's geometry, mirrored nodes included ([Assets](assets.md#gltf-node-trees)).
+The whole model is added as one undo step. If the entity slots run out
+partway, none of it is added.
 
 ## World matrices
 

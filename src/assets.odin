@@ -73,6 +73,21 @@ MeshAsset :: struct {
     // Removed from the catalog this session. The handle stays reserved, so
     // handles held elsewhere never shift; it is simply no longer valid.
     removed: bool,
+    // glTF models: the node tree, parents before children, for adding the
+    // model as one entity per node.
+    nodes: []ModelNode,
+    // A part (one glTF mesh in its own space, which nodes draw) belongs to
+    // this model. Parts are registered with their model, are not in the
+    // catalog file, and have ids "<model id>#<glTF mesh index>", plus "m"
+    // for the mirrored version.
+    part_of: MeshHandle,
+}
+
+ModelNode :: struct {
+    name: string,
+    parent: int, // Index into nodes, or -1.
+    transform: Transform,
+    part: MeshHandle, // 0 for a node without geometry.
 }
 // `removed`: as for MeshAsset.
 TextureAsset :: struct {
@@ -151,7 +166,8 @@ assets_prepare_catalog :: proc(
     textures := make([dynamic]TextureDesc, context.temp_allocator)
     environments := make([dynamic]EnvironmentDesc, context.temp_allocator)
     for asset in g_assets.meshes[1:] {
-        if !asset.removed do append(&models, asset.desc)
+        // Parts come back from their model's file.
+        if !asset.removed && asset.part_of == 0 do append(&models, asset.desc)
     }
     for asset in g_assets.textures[1:] {
         if !asset.hidden && !asset.removed do append(&textures, asset.desc)
@@ -373,7 +389,10 @@ assets_import_gltf :: proc(request: AssetImportRequest) -> (model: MeshHandle, m
     gltf, load_error := gltf_load(model_path)
     if load_error != "" do return 0, load_error
     mesh_data := gltf.mesh
-    defer if !committed do mesh_destroy(mesh_data)
+    defer if !committed {
+        mesh_destroy(mesh_data)
+        for part in gltf.parts do mesh_destroy(part.mesh)
+    }
 
     // Embedded images (GLB, data URIs) become files beside the model.
     image_paths := make([]string, len(gltf.images), context.temp_allocator)
@@ -463,13 +482,23 @@ assets_import_gltf :: proc(request: AssetImportRequest) -> (model: MeshHandle, m
     // GPU uploads. Startup uploads reuse allocator 0; drain prior frame work first.
     renderer_wait_for_gpu()
     gpu_mesh: GpuMesh
+    // The model's, then one per part.
+    gpu_meshes := make([dynamic]GpuMesh, context.temp_allocator)
     gpu_textures := make([dynamic]GpuTexture, context.temp_allocator)
     defer if !committed {
-        if gpu_mesh.vertex_buffer != nil do gpu_mesh.vertex_buffer->Release()
-        if gpu_mesh.index_buffer != nil do gpu_mesh.index_buffer->Release()
+        for mesh in gpu_meshes {
+            if mesh.vertex_buffer != nil do mesh.vertex_buffer->Release()
+            if mesh.index_buffer != nil do mesh.index_buffer->Release()
+        }
         for texture in gpu_textures do if texture.resource != nil do texture.resource->Release()
     }
     if renderer_upload_mesh(&gpu_mesh, mesh_data) < 0 do return 0, "GPU model upload failed."
+    append(&gpu_meshes, gpu_mesh)
+    for part in gltf.parts {
+        gpu_part: GpuMesh
+        if renderer_upload_mesh(&gpu_part, part.mesh) < 0 do return 0, "GPU model upload failed."
+        append(&gpu_meshes, gpu_part)
+    }
     alphas := make([]TextureAlpha, len(texture_descs), context.temp_allocator)
     defer if !committed do for &alpha in alphas do assets_free_texture_alpha(&alpha)
     batch := assets_decode_batch_size()
@@ -519,9 +548,10 @@ assets_import_gltf :: proc(request: AssetImportRequest) -> (model: MeshHandle, m
         material_names = names,
     })
     g_assets.mesh_ids[mesh_desc.id] = model
-    meshes := make([]GpuMesh, len(g_renderer.meshes) + 1)
+    assets_register_parts(model, gltf.parts, gltf.nodes, allocator)
+    meshes := make([]GpuMesh, len(g_renderer.meshes) + len(gpu_meshes))
     copy(meshes, g_renderer.meshes)
-    meshes[len(meshes) - 1] = gpu_mesh
+    copy(meshes[len(g_renderer.meshes):], gpu_meshes[:])
     delete(g_renderer.meshes)
     g_renderer.meshes = meshes
 
@@ -597,20 +627,72 @@ assets_model_materials :: proc(desc: MeshDesc, mesh: MeshData) -> (
     return material, slots, names, true
 }
 
-// OBJ or glTF geometry for a catalog entry.
-assets_load_mesh :: proc(desc: MeshDesc) -> (mesh: MeshData, error: string) {
+// OBJ or glTF geometry for a catalog entry; glTF models also bring their
+// parts and node tree (in the temporary allocator, except the part meshes).
+assets_load_mesh :: proc(desc: MeshDesc) -> (mesh: MeshData, parts: []Gltf_Part, nodes: []Gltf_Node, error: string) {
     extension := strings.to_lower(os.ext(desc.path), context.temp_allocator)
     switch extension {
         case ".gltf", ".glb":
             model: Gltf_Model
             model, error = gltf_load(desc.path)
-            return model.mesh, error
+            return model.mesh, model.parts, model.nodes, error
         case:
             ok: bool
             mesh, ok = mesh_load_obj(desc.path, flip_v = desc.settings.flip_v)
-            if !ok do return {}, "Invalid or empty OBJ geometry."
-            return mesh, ""
+            if !ok do return {}, nil, nil, "Invalid or empty OBJ geometry."
+            return mesh, nil, nil, ""
     }
+}
+
+// Registers a glTF model's parts, as the handles right after the model's
+// own, and stores its node tree. They take the model's default materials;
+// names are copied into `allocator`.
+assets_register_parts :: proc(model: MeshHandle, parts: []Gltf_Part, nodes: []Gltf_Node, allocator: mem.Allocator) {
+    // Copied: appending the parts may move the model's entry.
+    owner := g_assets.meshes[model]
+    first := MeshHandle(len(g_assets.meshes))
+    for part, i in parts {
+        id := fmt.aprintf("%s#%d%s", owner.desc.id, part.mesh_index, "m" if part.mirrored else "", allocator = allocator)
+        name := fmt.aprintf("%s%s", part.name, " (mirrored)" if part.mirrored else "", allocator = allocator)
+        label := fmt.ctprintf("%s / %s", owner.label, name)
+        append(&g_assets.meshes, MeshAsset{
+            desc = {id = id, name = name},
+            label = strings.clone_to_cstring(string(label), allocator) or_else panic("Asset label allocation failed"),
+            data = part.mesh,
+            bounds = mesh_compute_bounds(part.mesh),
+            material = owner.material,
+            material_slots = owner.material_slots,
+            material_names = owner.material_names,
+            part_of = model,
+        })
+        g_assets.mesh_ids[id] = first + MeshHandle(i)
+    }
+
+    tree := make([]ModelNode, len(nodes), allocator)
+    for node, i in nodes {
+        transform := transform_from_matrix(node.local)
+        // A degenerate node (zero scale) would make its children's
+        // placements meaningless; keep the editor's limits.
+        for axis in 0..<3 {
+            if !(transform.scale[axis] >= MIN_TRANSFORM_SCALE) do transform.scale[axis] = MIN_TRANSFORM_SCALE
+            if !(abs(transform.position[axis]) < 1e9) do transform.position[axis] = 0
+            if !(abs(transform.rotation[axis]) < 1e9) do transform.rotation[axis] = 0
+        }
+        tree[i] = {
+            name = strings.clone(node.name, allocator),
+            parent = node.parent,
+            transform = transform,
+            part = first + MeshHandle(node.part) if node.part >= 0 else 0,
+        }
+    }
+    g_assets.meshes[model].nodes = tree
+}
+
+// The parts registered with a model.
+assets_model_parts :: proc(model: MeshHandle) -> []MeshHandle {
+    parts := make([dynamic]MeshHandle, context.temp_allocator)
+    for asset, i in g_assets.meshes do if asset.part_of == model && model != 0 do append(&parts, MeshHandle(i))
+    return parts[:]
 }
 
 assets_material :: proc(desc: AssetMaterial) -> (material: Material, ok: bool) {
@@ -789,20 +871,17 @@ assets_init :: proc(path: string) -> (message: string) {
     }
     for desc in manifest.models {
         if desc.id == "" || desc.path == "" || assets_mesh(desc.id) != 0 do return "Empty/duplicate model ID or missing path."
-        mesh, mesh_error := assets_load_mesh(desc)
+        mesh, parts, nodes, mesh_error := assets_load_mesh(desc)
         if mesh_error != "" {
             fmt.eprintln("Model", desc.id, ":", mesh_error)
             return "Failed to import model."
         }
         material, slots, names, material_ok := assets_model_materials(desc, mesh)
-        if !material_ok {
-            mesh_destroy(mesh)
-            return "Invalid model default material reference."
-        }
         bounds := mesh_compute_bounds(mesh)
-        if !bounds.valid {
+        if !material_ok || !bounds.valid {
             mesh_destroy(mesh)
-            return "Model has no geometry."
+            for part in parts do mesh_destroy(part.mesh)
+            return "Invalid model default material reference." if !material_ok else "Model has no geometry."
         }
         handle := MeshHandle(len(g_assets.meshes))
         append(&g_assets.meshes, MeshAsset{
@@ -810,6 +889,7 @@ assets_init :: proc(path: string) -> (message: string) {
             material = material, material_slots = slots, material_names = names,
         })
         g_assets.mesh_ids[desc.id] = handle
+        assets_register_parts(handle, parts, nodes, allocator)
     }
     assets_json_init()
     return ""
@@ -1021,7 +1101,9 @@ assets_model_material_count :: proc(asset: ^MeshAsset) -> int {
 assets_user :: proc(scene: ^Scene, mesh: MeshHandle, texture: TextureHandle, ignore: MeshHandle = 0) -> string {
     for i in 0..<scene.entity_count {
         if !scene.alive[i] do continue
-        used := mesh != 0 && scene.has_mesh_renderer[i] && scene.mesh_renderers[i].mesh == mesh
+        // A model is also used through its parts.
+        used := mesh != 0 && scene.has_mesh_renderer[i] &&
+                (scene.mesh_renderers[i].mesh == mesh || g_assets.meshes[scene.mesh_renderers[i].mesh].part_of == mesh)
         if texture != 0 && scene.has_material[i] {
             for slot in 0..<scene_material_count(scene, i) {
                 used ||= assets_material_uses(scene_material(scene, i, slot)^, texture)
@@ -1035,7 +1117,8 @@ assets_user :: proc(scene: ^Scene, mesh: MeshHandle, texture: TextureHandle, ign
     if texture == 0 do return ""
     for &asset, i in g_assets.meshes[1:] {
         handle := MeshHandle(i + 1)
-        if asset.removed || handle == ignore do continue
+        // Parts share their model's materials.
+        if asset.removed || handle == ignore || asset.part_of != 0 do continue
         for slot in 0..<assets_model_material_count(&asset) {
             if assets_material_uses(assets_model_material(&asset, slot), texture) {
                 return fmt.tprintf("Used by the default material of model \"%s\".", asset.label)
@@ -1097,13 +1180,15 @@ assets_remove :: proc(scene: ^Scene, mesh: MeshHandle, texture: TextureHandle) -
     textures, refusal := assets_plan_removal(scene, mesh, texture)
     if refusal != "" do return refusal
 
-    set_removed :: proc(mesh: MeshHandle, textures: []TextureHandle, removed: bool) {
+    parts := assets_model_parts(mesh)
+    set_removed :: proc(mesh: MeshHandle, parts: []MeshHandle, textures: []TextureHandle, removed: bool) {
         if mesh != 0 do g_assets.meshes[mesh].removed = removed
+        for handle in parts do g_assets.meshes[handle].removed = removed
         for handle in textures do g_assets.textures[handle].removed = removed
     }
-    set_removed(mesh, textures, true)
+    set_removed(mesh, parts, textures, true)
     committed := false
-    defer if !committed do set_removed(mesh, textures, false)
+    defer if !committed do set_removed(mesh, parts, textures, false)
 
     catalog_tmp, catalog_contents, prepared := assets_prepare_catalog()
     if !prepared do return "Could not write the updated asset catalog."
@@ -1130,6 +1215,13 @@ assets_remove :: proc(scene: ^Scene, mesh: MeshHandle, texture: TextureHandle) -
         mesh_destroy(asset.data)
         asset.data = {}
         assets_delete_imported(asset.desc.path, true)
+        for handle in parts {
+            part := &g_assets.meshes[handle]
+            delete_key(&g_assets.mesh_ids, part.desc.id)
+            renderer_release_mesh(handle)
+            mesh_destroy(part.data)
+            part.data = {}
+        }
     }
     for handle in textures {
         asset := &g_assets.textures[handle]

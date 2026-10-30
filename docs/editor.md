@@ -34,8 +34,10 @@ so text stays sharp.
   anti-aliasing, the environment, shadows, SSAO, SSR, light clusters, fog,
   statistics, and GPU timings per pass. **Show ImGui demo** opens ImGui's
   own demo window.
-- **Scene**: add models and lights, undo and redo, duplicate, delete, focus,
-  save and load, and the entity tree (drag a row onto another to parent it).
+- **Scene**: add models (a glTF model with several nodes as its node tree,
+  see [Hierarchy](hierarchy.md#gltf-node-trees)) and lights, undo and redo,
+  duplicate, delete, focus, save and load, and the entity tree (drag a row
+  onto another to parent it).
 - **Inspector**: the primary selected entity's parent, transform, material
   slot, light settings, and the gizmo's options.
 - **Assets...**: import and remove models and textures ([Assets](assets.md)).
@@ -122,8 +124,8 @@ Removing the primary makes the first remaining selected entity primary.
   part cannot be redone (a light past the limit), the parts already done are
   reverted.
 
-Each selected entity with a mesh gets a box around its local bounds: orange
-for the primary, darker for the rest. The boxes are slightly enlarged so
+Each selected entity with a mesh, and each of their descendants, gets a box
+around its local bounds: orange for the primary, darker for the rest. The boxes are slightly enlarged so
 their lines do not fight the surface, depth-tested against the scene, and
 drawn after anti-aliasing. **Focus Selected** keeps the camera's direction
 and moves it back until a sphere around everything selected fits in the view,

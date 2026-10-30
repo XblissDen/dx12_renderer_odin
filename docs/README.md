@@ -16,8 +16,9 @@ README](../README.md) covers building and running.
   textures and their mips, environments, and removing assets.
 - [Editor](editor.md): the UI, camera and shortcuts, picking and selection,
   gizmos, undo and redo, lights, and scene files.
-- [Hierarchy](hierarchy.md): parents and children, world matrices,
-  reparenting, and how the gizmo, duplicate and delete handle subtrees.
+- [Hierarchy](hierarchy.md): parents and children, empty entities, glTF node
+  trees, world matrices, reparenting, and how the gizmo, duplicate and delete
+  handle subtrees.
 
 ## Conventions
 

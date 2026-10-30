@@ -748,6 +748,194 @@
           "double_sided": false
         }
       ]
+    },
+    {
+      "id": "model.flighthelmet",
+      "name": "FlightHelmet",
+      "path": "models/imported/model.flighthelmet/FlightHelmet.gltf",
+      "import": {
+        "flip_v": false
+      },
+      "material": {
+        "name": "",
+        "albedo": "",
+        "normal": "",
+        "roughness_map": "",
+        "metallic_map": "",
+        "emissive_map": "",
+        "occlusion_map": "",
+        "roughness": null,
+        "metallic": null,
+        "normal_strength": null,
+        "uv_scale": null,
+        "emissive_strength": null,
+        "occlusion_strength": null,
+        "alpha_cutoff": null,
+        "transparency": null,
+        "tint": null,
+        "emissive": null,
+        "alpha_mask": false,
+        "alpha_blend": false,
+        "double_sided": false
+      },
+      "materials": [
+        {
+          "name": "HoseMat",
+          "albedo": "model.flighthelmet.image2.albedo",
+          "normal": "model.flighthelmet.image0.normal",
+          "roughness_map": "model.flighthelmet.image1.roughness",
+          "metallic_map": "model.flighthelmet.image1.metallic",
+          "emissive_map": "",
+          "occlusion_map": "model.flighthelmet.image1.occlusion",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
+          "transparency": null,
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "alpha_blend": false,
+          "double_sided": true
+        },
+        {
+          "name": "RubberWoodMat",
+          "albedo": "model.flighthelmet.image2.albedo",
+          "normal": "model.flighthelmet.image0.normal",
+          "roughness_map": "model.flighthelmet.image1.roughness",
+          "metallic_map": "model.flighthelmet.image1.metallic",
+          "emissive_map": "",
+          "occlusion_map": "model.flighthelmet.image1.occlusion",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
+          "transparency": null,
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "alpha_blend": false,
+          "double_sided": false
+        },
+        {
+          "name": "GlassPlasticMat",
+          "albedo": "model.flighthelmet.image5.albedo",
+          "normal": "model.flighthelmet.image3.normal",
+          "roughness_map": "model.flighthelmet.image4.roughness",
+          "metallic_map": "model.flighthelmet.image4.metallic",
+          "emissive_map": "",
+          "occlusion_map": "model.flighthelmet.image4.occlusion",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
+          "transparency": null,
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "alpha_blend": false,
+          "double_sided": false
+        },
+        {
+          "name": "MetalPartsMat",
+          "albedo": "model.flighthelmet.image8.albedo",
+          "normal": "model.flighthelmet.image6.normal",
+          "roughness_map": "model.flighthelmet.image7.roughness",
+          "metallic_map": "model.flighthelmet.image7.metallic",
+          "emissive_map": "",
+          "occlusion_map": "model.flighthelmet.image7.occlusion",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
+          "transparency": null,
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "alpha_blend": false,
+          "double_sided": false
+        },
+        {
+          "name": "LeatherPartsMat",
+          "albedo": "model.flighthelmet.image11.albedo",
+          "normal": "model.flighthelmet.image9.normal",
+          "roughness_map": "model.flighthelmet.image10.roughness",
+          "metallic_map": "model.flighthelmet.image10.metallic",
+          "emissive_map": "",
+          "occlusion_map": "model.flighthelmet.image10.occlusion",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
+          "transparency": null,
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "alpha_blend": false,
+          "double_sided": false
+        },
+        {
+          "name": "LensesMat",
+          "albedo": "model.flighthelmet.image14.albedo",
+          "normal": "model.flighthelmet.image12.normal",
+          "roughness_map": "model.flighthelmet.image13.roughness",
+          "metallic_map": "model.flighthelmet.image13.metallic",
+          "emissive_map": "",
+          "occlusion_map": "model.flighthelmet.image13.occlusion",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "emissive_strength": null,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
+          "transparency": 0.00000000,
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "emissive": null,
+          "alpha_mask": false,
+          "alpha_blend": true,
+          "double_sided": false
+        }
+      ]
     }
   ],
   "textures": [
@@ -2620,6 +2808,506 @@
       "import": {
         "flip_green": false,
         "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image2.albedo",
+      "name": "FlightHelmet_Materials_RubberWoodMat_BaseColor",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_RubberWoodMat_BaseColor.png",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image0.normal",
+      "name": "FlightHelmet_Materials_RubberWoodMat_Normal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_RubberWoodMat_Normal.png",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image1.roughness",
+      "name": "FlightHelmet_Materials_RubberWoodMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_RubberWoodMat_OcclusionRoughMetal.png",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image1.metallic",
+      "name": "FlightHelmet_Materials_RubberWoodMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_RubberWoodMat_OcclusionRoughMetal.png",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image1.occlusion",
+      "name": "FlightHelmet_Materials_RubberWoodMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_RubberWoodMat_OcclusionRoughMetal.png",
+      "usage": "occlusion",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 0
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image5.albedo",
+      "name": "FlightHelmet_Materials_GlassPlasticMat_BaseColor",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_GlassPlasticMat_BaseColor.png",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image3.normal",
+      "name": "FlightHelmet_Materials_GlassPlasticMat_Normal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_GlassPlasticMat_Normal.png",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image4.roughness",
+      "name": "FlightHelmet_Materials_GlassPlasticMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_GlassPlasticMat_OcclusionRoughMetal.png",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image4.metallic",
+      "name": "FlightHelmet_Materials_GlassPlasticMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_GlassPlasticMat_OcclusionRoughMetal.png",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image4.occlusion",
+      "name": "FlightHelmet_Materials_GlassPlasticMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_GlassPlasticMat_OcclusionRoughMetal.png",
+      "usage": "occlusion",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 0
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image8.albedo",
+      "name": "FlightHelmet_Materials_MetalPartsMat_BaseColor",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_MetalPartsMat_BaseColor.png",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image6.normal",
+      "name": "FlightHelmet_Materials_MetalPartsMat_Normal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_MetalPartsMat_Normal.png",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image7.roughness",
+      "name": "FlightHelmet_Materials_MetalPartsMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_MetalPartsMat_OcclusionRoughMetal.png",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image7.metallic",
+      "name": "FlightHelmet_Materials_MetalPartsMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_MetalPartsMat_OcclusionRoughMetal.png",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image7.occlusion",
+      "name": "FlightHelmet_Materials_MetalPartsMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_MetalPartsMat_OcclusionRoughMetal.png",
+      "usage": "occlusion",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 0
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image11.albedo",
+      "name": "FlightHelmet_Materials_LeatherPartsMat_BaseColor",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_LeatherPartsMat_BaseColor.png",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image9.normal",
+      "name": "FlightHelmet_Materials_LeatherPartsMat_Normal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_LeatherPartsMat_Normal.png",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image10.roughness",
+      "name": "FlightHelmet_Materials_LeatherPartsMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_LeatherPartsMat_OcclusionRoughMetal.png",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image10.metallic",
+      "name": "FlightHelmet_Materials_LeatherPartsMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_LeatherPartsMat_OcclusionRoughMetal.png",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image10.occlusion",
+      "name": "FlightHelmet_Materials_LeatherPartsMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_LeatherPartsMat_OcclusionRoughMetal.png",
+      "usage": "occlusion",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 0
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image14.albedo",
+      "name": "FlightHelmet_Materials_LensesMat_BaseColor",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_LensesMat_BaseColor.png",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image12.normal",
+      "name": "FlightHelmet_Materials_LensesMat_Normal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_LensesMat_Normal.png",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image13.roughness",
+      "name": "FlightHelmet_Materials_LensesMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_LensesMat_OcclusionRoughMetal.png",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image13.metallic",
+      "name": "FlightHelmet_Materials_LensesMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_LensesMat_OcclusionRoughMetal.png",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.flighthelmet.image13.occlusion",
+      "name": "FlightHelmet_Materials_LensesMat_OcclusionRoughMetal",
+      "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_LensesMat_OcclusionRoughMetal.png",
+      "usage": "occlusion",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 0
       },
       "width": 0,
       "height": 0,

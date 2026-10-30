@@ -70,10 +70,11 @@ editor_prune_selection :: proc(scene: ^Scene) {
     if !editor_is_selected(g_editor_selected) do g_editor_selected = editor_first_selected()
 }
 
-// The entities the Scene panel lists: models and lights (not the camera).
+// The entities the Scene panel lists: models, lights and empty (group)
+// entities; not the camera.
 editor_listed :: proc(scene: ^Scene, index: int) -> bool {
-    return scene.alive[index] && (scene.has_mesh_renderer[index] || scene.has_directional_light[index] ||
-        scene.has_point_light[index] || scene.has_spot_light[index])
+    return scene.alive[index] && !scene.has_camera[index] && (scene.has_mesh_renderer[index] ||
+        scene.has_directional_light[index] || scene.has_transform[index])
 }
 
 // Entities whose children the Scene panel hides.
@@ -171,6 +172,10 @@ editor_draw_scene :: proc(scene: ^Scene){
         ui_begin_disabled(!assets_mesh_valid(g_editor_model_to_add) || editor_find_available_mesh_slot(scene) < 0)
         if ui_button("Add Model") do editor_add_model(scene, g_editor_model_to_add)
         ui_end_disabled()
+        if editor_model_has_tree(g_editor_model_to_add) {
+            ui_same_line()
+            ui_checkbox("As its node tree", &g_editor_add_node_tree)
+        }
         ui_begin_disabled(editor_find_available_mesh_slot(scene) < 0 || scene_local_light_count(scene) >= MAX_LIGHTS)
         if ui_button("Add Point Light") do editor_add_point_light(scene)
         ui_same_line()
@@ -354,12 +359,31 @@ editor_draw_material_controls :: proc(scene: ^Scene, index: int) {
     }
     slot_count := scene_material_count(scene, index)
     g_editor_material_slot = clamp(g_editor_material_slot, 0, slot_count - 1)
-    if slot_count > 1 {
+    // A glTF node's part has every material slot of its model, but draws
+    // with only some of them; list those.
+    used: [MAX_MODEL_MATERIALS]bool
+    used_count := 0
+    for submesh in g_assets.meshes[scene.mesh_renderers[index].mesh].data.submeshes {
+        slot := int(submesh.material_slot)
+        if slot < slot_count && !used[slot] {
+            used[slot] = true
+            used_count += 1
+        }
+    }
+    if used_count == 0 do used[0], used_count = true, 1
+    if !used[g_editor_material_slot] {
+        for slot in 0..<slot_count do if used[slot] {
+            g_editor_material_slot = slot
+            break
+        }
+    }
+    if used_count > 1 {
         names := &g_assets.meshes[scene.mesh_renderers[index].mesh].material_names
         preview := names[g_editor_material_slot]
         if preview == nil do preview = "Material"
         if ui_begin_combo("Slot", preview) {
             for slot in 0..<slot_count {
+                if !used[slot] do continue
                 label := names[slot] if names[slot] != nil else "Material"
                 ui_push_id(i32(slot))
                 if ui_selectable(label, slot == g_editor_material_slot) {

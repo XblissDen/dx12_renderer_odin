@@ -49,10 +49,10 @@ editor_mesh_snapshot :: proc(scene: ^Scene, index: int) -> EditorMeshSnapshot {
     snapshot := EditorMeshSnapshot{
         name = scene.names[index],
         transform = scene.transforms[index],
-        mesh_renderer = scene.mesh_renderers[index],
         material = scene.materials[index],
         material_slots = scene.material_slots[index],
     }
+    if scene.has_mesh_renderer[index] do snapshot.mesh_renderer = scene.mesh_renderers[index]
     if scene.has_point_light[index] do snapshot.point_light = scene.point_lights[index]
     if scene.has_spot_light[index] do snapshot.spot_light = scene.spot_lights[index]
     // The link itself, even to a parent deleted a moment ago in the same step.
@@ -63,8 +63,10 @@ editor_mesh_snapshot :: proc(scene: ^Scene, index: int) -> EditorMeshSnapshot {
 // Adds the snapshot's components to an entity slot that is (being made) alive.
 editor_add_snapshot_components :: proc(scene: ^Scene, entity: Entity, snapshot: EditorMeshSnapshot) {
     scene_add_transform(scene, entity, snapshot.transform)
-    scene_add_mesh_renderer(scene, entity, snapshot.mesh_renderer)
-    scene_set_materials(scene, entity, snapshot.material, snapshot.material_slots)
+    if mesh_renderer, ok := snapshot.mesh_renderer.?; ok {
+        scene_add_mesh_renderer(scene, entity, mesh_renderer)
+        scene_set_materials(scene, entity, snapshot.material, snapshot.material_slots)
+    }
     if light, ok := snapshot.point_light.?; ok do scene_add_point_light(scene, entity, light)
     if light, ok := snapshot.spot_light.?; ok do scene_add_spot_light(scene, entity, light)
     if parent, ok := snapshot.parent.?; ok do scene_set_parent(scene, int(entity), int(parent))
@@ -356,15 +358,15 @@ editor_add_light :: proc(scene: ^Scene, marker_id, name: string, point: Maybe(Po
     editor_create_entity(scene, EditorMeshSnapshot{
         name = owned_name,
         transform = transform,
-        mesh_renderer = {mesh = marker},
+        mesh_renderer = MeshRenderer{mesh = marker},
         material = marker_material,
         point_light = point,
         spot_light = spot,
     }, g_editor_selected)
 }
 
-// Models, and point and spot lights. The sun (the renderer needs exactly one)
-// and the camera stay.
+// Models, point and spot lights, and empty entities. The sun (the renderer
+// needs exactly one) and the camera stay.
 editor_can_delete_mesh :: proc(scene: ^Scene, entity: Entity) -> bool {
     if !scene_entity_is_alive(scene, entity) {
         return false
@@ -373,8 +375,7 @@ editor_can_delete_mesh :: proc(scene: ^Scene, entity: Entity) -> bool {
     index := int(entity)
 
     return scene.has_transform[index] &&
-           scene.has_mesh_renderer[index] &&
-           scene.has_material[index] &&
+           scene.has_mesh_renderer[index] == scene.has_material[index] &&
            !scene.has_directional_light[index] &&
            !scene.has_camera[index]
 }

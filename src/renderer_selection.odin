@@ -94,7 +94,8 @@ renderer_create_selection_pso :: proc() {
     renderer_create_pso(&desc, &r.selection_pipeline_state)
 }
 
-// A box around each selected entity; the primary one is brighter.
+// A box around each selected entity and its descendants; the primary one is
+// brighter.
 renderer_render_selection :: proc(scene: ^Scene) {
     camera_index := camera_find_active(scene)
     if camera_index < 0 || editor_selection_count() == 0 {
@@ -117,8 +118,9 @@ renderer_render_selection :: proc(scene: ^Scene) {
     r.command_list->SetPipelineState(r.selection_pipeline_state)
     r.command_list->IASetPrimitiveTopology(.LINELIST)
 
-    for selected, index in g_editor_selection {
-        if !selected do continue
+    // Children too, so that a selected group (an empty entity) shows what it
+    // holds.
+    for index in editor_selected_subtrees(scene) {
         bounds, world := editor_entity_bounds(scene, Entity(index)) or_continue
 
         // Slightly expand the box so its lines do not fight the mesh surface.

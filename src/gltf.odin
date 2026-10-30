@@ -9,14 +9,13 @@ import "core:os"
 import "core:strings"
 
 // glTF 2.0 loading (.gltf with external or embedded buffers, and .glb).
-// A model is flattened: node transforms are baked into the vertices, and all
-// primitives sharing a material become one submesh. Geometry is converted
-// from glTF's right-handed space (+Y up, +Z toward the viewer) to this
-// renderer's left-handed space by negating Z and reversing the triangle
+// A model comes out two ways. Flattened: node transforms are baked into the
+// vertices, and all primitives sharing a material become one submesh. And as
+// its node tree: each node's placement relative to its parent, and the parts
+// (one per glTF mesh, in the mesh's own space) the nodes draw. Geometry is
+// converted from glTF's right-handed space (+Y up, +Z toward the viewer) to
+// this renderer's left-handed space by negating Z and reversing the triangle
 // winding to the clockwise front faces D3D expects.
-
-
-
 
 Gltf_Material :: struct {
     name: string,
@@ -41,11 +40,34 @@ Gltf_Model :: struct {
     mesh: MeshData,             // Owned by the caller's allocator.
     materials: []Gltf_Material, // One per material slot, in slot order.
     images: []Gltf_Image,
+    // The node tree, parents before children, and the parts its nodes draw.
+    nodes: []Gltf_Node,
+    parts: []Gltf_Part,
     warnings: []string,
+}
+
+Gltf_Node :: struct {
+    name: string,
+    parent: int, // Index into Gltf_Model.nodes, or -1 for a root.
+    // Placement relative to the parent node, in left-handed space. Always
+    // keeps handedness: a mirroring node draws a mirrored part instead.
+    local: alg.Matrix4f32,
+    part: int,   // Index into Gltf_Model.parts, or -1 for none.
+}
+
+// One glTF mesh in its own space, with submeshes numbered by the model's
+// material slots. `mirrored` parts are reflected across X, for nodes whose
+// transform mirrors.
+Gltf_Part :: struct {
+    name: string,
+    mesh_index: int,
+    mirrored: bool,
+    mesh: MeshData, // Owned by the caller's allocator.
 }
 
 @(private="file")
 Doc_Node :: struct {
+    name: string,
     mesh: Maybe(int),
     children: []int,
     matrix_: Maybe([16]f32) `json:"matrix"`,
@@ -188,19 +210,25 @@ gltf_load :: proc(path: string, allocator := context.allocator) -> (model: Gltf_
         }
     }
 
-    loader := Gltf_Loader{doc = &doc, buffers = buffers, slot_of_material = make(map[int]int, allocator = context.temp_allocator)}
+    loader := Gltf_Loader{
+        doc = &doc, buffers = buffers,
+        slot_of_material = make(map[int]int, allocator = context.temp_allocator),
+        nodes = make([dynamic]Gltf_Node, context.temp_allocator),
+        parts = make([dynamic]Gltf_Loader_Part, context.temp_allocator),
+        part_of_mesh = make(map[[2]int]int, allocator = context.temp_allocator),
+    }
     scene_index := doc.scene.? or_else 0
     if scene_index < 0 || scene_index >= len(doc.scenes) {
         if len(doc.scenes) > 0 do return {}, "Invalid glTF scene index."
         // No scenes: treat every root node as part of the model.
         for node in 0..<len(doc.nodes) {
             if gltf_is_child(&doc, node) do continue
-            error = gltf_visit_node(&loader, node, 1, 0)
+            error = gltf_visit_node(&loader, node, 1, 1, -1, 0)
             if error != "" do return
         }
     } else {
         for node in doc.scenes[scene_index].nodes {
-            error = gltf_visit_node(&loader, node, 1, 0)
+            error = gltf_visit_node(&loader, node, 1, 1, -1, 0)
             if error != "" do return
         }
     }
@@ -209,7 +237,16 @@ gltf_load :: proc(path: string, allocator := context.allocator) -> (model: Gltf_
         return {}, fmt.tprintf("The model uses %d materials; at most %d are supported.", len(loader.slot_materials), MAX_MODEL_MATERIALS)
     }
 
-    model.mesh = gltf_merge_by_slot(&loader, allocator)
+    model.mesh = gltf_merge_by_slot(loader.primitives[:], len(loader.slot_materials), allocator)
+    parts := make([]Gltf_Part, len(loader.parts), context.temp_allocator)
+    for part, i in loader.parts {
+        parts[i] = {
+            name = part.name, mesh_index = part.mesh_index, mirrored = part.mirrored,
+            mesh = gltf_merge_by_slot(part.primitives[:], len(loader.slot_materials), allocator),
+        }
+    }
+    model.parts = parts
+    model.nodes = loader.nodes[:]
     model.images = images
 
     materials := make([]Gltf_Material, len(loader.slot_materials), context.temp_allocator)
@@ -261,10 +298,24 @@ Gltf_Primitive_Out :: struct {
 }
 
 @(private="file")
+Gltf_Loader_Part :: struct {
+    name: string,
+    mesh_index: int,
+    mirrored: bool,
+    primitives: [dynamic]Gltf_Primitive_Out,
+}
+
+@(private="file")
 Gltf_Loader :: struct {
     doc: ^Doc,
     buffers: [][]u8,
+    // The flattened model's primitives, in model space.
     primitives: [dynamic]Gltf_Primitive_Out,
+    nodes: [dynamic]Gltf_Node,
+    parts: [dynamic]Gltf_Loader_Part,
+    // (mesh index, mirrored) -> index into parts, or -1 for a mesh without
+    // triangles.
+    part_of_mesh: map[[2]int]int,
     // glTF material index (-1 for "no material") -> slot, and the reverse.
     slot_of_material: map[int]int,
     slot_materials: [dynamic]int,
@@ -363,24 +414,81 @@ gltf_node_matrix :: proc(node: Doc_Node) -> alg.Matrix4f32 {
     return alg.matrix4_translate_f32(t) * rotation * alg.matrix4_scale_f32(s)
 }
 
+// Adds a node's primitives to the flattened model and the node to the tree,
+// then its children. `parent` is the parent's model-space matrix (glTF's
+// right-handed space); `parent_entity` is the parent node's placement as an
+// entity would have it (left-handed, never mirroring).
 @(private="file")
-gltf_visit_node :: proc(loader: ^Gltf_Loader, node_index: int, parent: alg.Matrix4f32, depth: int) -> string {
+gltf_visit_node :: proc(
+    loader: ^Gltf_Loader, node_index: int, parent, parent_entity: alg.Matrix4f32,
+    parent_out, depth: int,
+) -> string {
     doc := loader.doc
     if node_index < 0 || node_index >= len(doc.nodes) do return "Invalid glTF node index."
     if depth > 64 do return "The glTF node hierarchy is too deep (or cyclic)."
     node := doc.nodes[node_index]
     world := parent * gltf_node_matrix(node)
 
+    // Left-handed: Z is negated on both sides (flip * world * flip). An
+    // entity's scale stays positive, so a mirroring node keeps a mirror (in
+    // X) for its part to undo: entity * mirror * mirrored part = the node.
+    flip_z := alg.matrix4_scale_f32({1, 1, -1})
+    mirror_x := alg.matrix4_scale_f32({-1, 1, 1})
+    mirrored := alg.determinant(alg.Matrix3f32(world)) < 0
+    entity := flip_z * world * flip_z
+    if mirrored do entity = entity * mirror_x
+    out := Gltf_Node{
+        name = node.name,
+        parent = parent_out,
+        local = alg.matrix4_inverse_f32(parent_entity) * entity,
+        part = -1,
+    }
+
     if mesh_index, has_mesh := node.mesh.?; has_mesh {
         if mesh_index < 0 || mesh_index >= len(doc.meshes) do return "Invalid glTF mesh index."
         for primitive in doc.meshes[mesh_index].primitives {
-            if error := gltf_add_primitive(loader, primitive, world); error != "" do return error
+            if error := gltf_add_primitive(loader, primitive, world, &loader.primitives); error != "" do return error
         }
+        part, error := gltf_node_part(loader, mesh_index, mirrored, node.name)
+        if error != "" do return error
+        out.part = part
     }
+    if out.name == "" do out.name = fmt.tprintf("Node %d", node_index)
+    index := len(loader.nodes)
+    append(&loader.nodes, out)
+
     for child in node.children {
-        if error := gltf_visit_node(loader, child, world, depth + 1); error != "" do return error
+        if error := gltf_visit_node(loader, child, world, entity, index, depth + 1); error != "" do return error
     }
     return ""
+}
+
+// The part drawing a glTF mesh in its own space, mirrored or not; parts are
+// shared by every node that draws the same mesh.
+@(private="file")
+gltf_node_part :: proc(loader: ^Gltf_Loader, mesh_index: int, mirrored: bool, node_name: string) -> (part: int, error: string) {
+    key := [2]int{mesh_index, int(mirrored)}
+    if existing, found := loader.part_of_mesh[key]; found do return existing, ""
+
+    mesh := loader.doc.meshes[mesh_index]
+    result := Gltf_Loader_Part{
+        name = mesh.name if mesh.name != "" else node_name,
+        mesh_index = mesh_index,
+        mirrored = mirrored,
+        primitives = make([dynamic]Gltf_Primitive_Out, context.temp_allocator),
+    }
+    if result.name == "" do result.name = fmt.tprintf("Mesh %d", mesh_index)
+    basis := alg.matrix4_scale_f32({-1, 1, 1}) if mirrored else alg.MATRIX4F32_IDENTITY
+    for primitive in mesh.primitives {
+        if error = gltf_add_primitive(loader, primitive, basis, &result.primitives); error != "" do return
+    }
+    part = -1
+    if len(result.primitives) > 0 {
+        part = len(loader.parts)
+        append(&loader.parts, result)
+    }
+    loader.part_of_mesh[key] = part
+    return part, ""
 }
 
 @(private="file")
@@ -467,9 +575,12 @@ gltf_read_component :: proc(data: Gltf_Accessor_Data, element, component: int) -
 }
 
 @(private="file")
-gltf_add_primitive :: proc(loader: ^Gltf_Loader, primitive: Doc_Primitive, world: alg.Matrix4f32) -> string {
+gltf_add_primitive :: proc(loader: ^Gltf_Loader, primitive: Doc_Primitive, world: alg.Matrix4f32, out: ^[dynamic]Gltf_Primitive_Out) -> string {
     if mode := primitive.mode.? or_else 4; mode != 4 {
-        append(&loader.warnings, fmt.tprintf("Skipped a primitive with draw mode %d (only triangles are supported).", mode))
+        // Once, for the flattened model; parts see the same primitives again.
+        if out == &loader.primitives {
+            append(&loader.warnings, fmt.tprintf("Skipped a primitive with draw mode %d (only triangles are supported).", mode))
+        }
         return ""
     }
 
@@ -577,7 +688,7 @@ gltf_add_primitive :: proc(loader: ^Gltf_Loader, primitive: Doc_Primitive, world
         loader.slot_of_material[material] = slot
         append(&loader.slot_materials, material)
     }
-    append(&loader.primitives, Gltf_Primitive_Out{vertices = vertices, indices = indices, slot = slot})
+    append(out, Gltf_Primitive_Out{vertices = vertices, indices = indices, slot = slot})
     return ""
 }
 
@@ -599,28 +710,30 @@ gltf_compute_normals :: proc(vertices: []Vertex, indices: []u32) {
     }
 }
 
-// Concatenates primitives grouped by material slot: one submesh per slot.
+// Concatenates primitives grouped by material slot: one submesh per slot
+// they use.
 @(private="file")
-gltf_merge_by_slot :: proc(loader: ^Gltf_Loader, allocator := context.allocator) -> MeshData {
+gltf_merge_by_slot :: proc(primitives: []Gltf_Primitive_Out, slot_count: int, allocator := context.allocator) -> MeshData {
     vertex_total, index_total := 0, 0
-    for primitive in loader.primitives {
+    for primitive in primitives {
         vertex_total += len(primitive.vertices)
         index_total += len(primitive.indices)
     }
 
     vertices := make([]Vertex, vertex_total, allocator)
     indices := make([]u32, index_total, allocator)
-    submeshes := make([dynamic]Submesh, 0, len(loader.slot_materials), allocator)
+    submeshes := make([dynamic]Submesh, 0, slot_count, allocator)
     vertex_at, index_at := 0, 0
-    for slot in 0..<len(loader.slot_materials) {
+    for slot in 0..<slot_count {
         first_index := index_at
-        for primitive in loader.primitives {
+        for primitive in primitives {
             if primitive.slot != slot do continue
             copy(vertices[vertex_at:], primitive.vertices)
             for index, i in primitive.indices do indices[index_at + i] = index + u32(vertex_at)
             vertex_at += len(primitive.vertices)
             index_at += len(primitive.indices)
         }
+        if index_at == first_index do continue
         append(&submeshes, Submesh{
             first_index = u32(first_index),
             index_count = u32(index_at - first_index),

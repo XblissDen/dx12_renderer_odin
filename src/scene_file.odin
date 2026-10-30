@@ -236,6 +236,12 @@ scene_file_validate :: proc(scene: ^Scene) -> string{
             }
         }
 
+        // Every placed entity, not just meshes: a group's scale places its
+        // children. (The camera ignores its scale.)
+        if scene.has_transform[i] && !scene.has_camera[i] && !transform_scale_valid(scene.transforms[i].scale) {
+            return "Scale must be positive on every axis."
+        }
+
         if scene.has_parent[i] {
             parent := int(scene.parents[i])
             if !scene_parentable(scene, i) || parent < 0 || parent >= scene.entity_count || !scene_parentable(scene, parent) {

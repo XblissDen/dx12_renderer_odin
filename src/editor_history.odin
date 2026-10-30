@@ -83,12 +83,14 @@ EditorAssetValue :: struct {
     enabled: bool,
 }
 
-// An entity the editor creates or deletes: a model, or a point light with its
-// marker mesh.
+// An entity the editor creates or deletes: a model, a point light with its
+// marker mesh, or an empty one (a group, such as a glTF node without
+// geometry).
 EditorMeshSnapshot :: struct {
     name: string,
     transform: Transform,
-    mesh_renderer: MeshRenderer,
+    // With a mesh, the entity also gets the materials.
+    mesh_renderer: Maybe(MeshRenderer),
     material: Material,
     material_slots: MaterialSlots,
     point_light: Maybe(PointLight),

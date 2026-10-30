@@ -25,15 +25,15 @@ editor_entity_bounds :: proc(scene: ^Scene, entity: Entity) -> (
     return bounds, scene_world_matrix(scene, index), bounds.valid
 }
 
-// A sphere around every selected entity with a mesh.
+// A sphere around every selected entity with a mesh, and their descendants
+// (a selected group frames what it holds).
 editor_selection_sphere :: proc(scene: ^Scene) -> (center: alg.Vector3f32, radius: f32, ok: bool) {
     // A sphere per entity: around its local box, scaled by the largest axis,
     // so it also encloses every rotated and non-uniformly scaled version.
     spheres := make([dynamic][4]f32, context.temp_allocator)
     box_min := alg.Vector3f32(max(f32))
     box_max := alg.Vector3f32(-max(f32))
-    for selected, index in g_editor_selection {
-        if !selected do continue
+    for index in editor_selected_subtrees(scene) {
         bounds, world := editor_entity_bounds(scene, Entity(index)) or_continue
 
         local_center := (bounds.minimum + bounds.maximum) * 0.5

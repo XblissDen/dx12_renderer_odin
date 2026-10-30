@@ -49,14 +49,49 @@ A glTF import copies the model and every file it references into
 registers the model and one texture per (image, use) in a single catalog write.
 If any step fails, nothing is registered and the folder is removed again.
 
-- **Geometry**: the node hierarchy is flattened into one entity. Node
-  transforms are baked into the vertices, and primitives sharing a material
-  become one submesh. Positions and normals are converted from right-handed to
-  left-handed by negating Z, and triangle winding is reversed, except under a
-  mirroring node transform, which already reverses it. Missing normals and
-  tangents are generated.
+- **Geometry**: a glTF model loads two ways.
+  - **Flattened**: node transforms are baked into the vertices, and
+    primitives sharing a material become one submesh: one entity, few draws.
+  - **As its node tree**: each node keeps its placement, and each glTF mesh
+    becomes a **part**, in the mesh's own space.
+
+  Both convert from right-handed to left-handed by negating Z and reversing
+  triangle winding, except under a mirroring transform, which already
+  reverses it. Missing normals and tangents are generated. See
+  [glTF node trees](#gltf-node-trees).
 - **Not supported yet**: animation and skinning (the static pose loads), and
   compressed meshes (Draco, meshopt), which are rejected.
+
+### glTF node trees
+
+`gltf_load` also returns the node tree, parents before children, and the
+parts its nodes draw. The catalog registers them with the model at startup and
+on import (`assets_register_parts`).
+
+- **Parts** are mesh assets of their own, with ids `<model id>#<mesh index>`.
+  Nodes that draw the same glTF mesh share one part. Parts take the model's
+  material slots and default materials. Each part's submeshes keep the
+  model's slot numbers, so the Inspector's slot list shows only the slots the
+  part uses.
+- **Hidden**: parts are not written to `assets.json`, since they come back
+  from the model's file. They are not listed in the model pickers either, and
+  they are removed together with their model. A model is in use, and cannot
+  be removed, while any entity draws one of its parts.
+- **Node placement**: each node is stored as an entity transform relative to
+  its parent node, converted to left-handed space. Placements are split into
+  position, rotation and scale, which is exact unless a rotated node sits
+  under an unevenly scaled one (see [Hierarchy](hierarchy.md#shear)).
+- **Mirroring nodes**: an entity's scale must be positive, so a node whose
+  transform mirrors (negative determinant) gets its mirror removed from the
+  transform. It draws a mirrored copy of its mesh instead, reflected across X
+  (id `…#<index>m`). The node's children are placed relative to the unmirrored
+  transform, so they end up exactly where the file puts them.
+- **Memory**: geometry is kept twice for glTF models, flattened and as parts,
+  on the CPU and the GPU. This keeps scenes that use the flattened model
+  loading unchanged.
+
+Saved scenes refer to parts by id, so re-exporting a model with its meshes in
+a different order changes which part each node entity draws.
 
 ## Materials
 
@@ -124,8 +159,9 @@ confirmation step.
 - **Refused while in use**: by an entity in the scene (for textures, in any
   material slot or map, including disabled maps) or by another model's default
   material. The panel names the user.
-- **Dependent textures**: removing a model also removes the textures its import
-  registered (`<model id>.…`) that nothing else uses.
+- **Dependent textures and parts**: removing a model also removes its parts
+  and the textures its import registered (`<model id>.…`) that nothing else
+  uses.
 - **Files**: `assets.json` is rewritten without them, and their GPU data is
   freed. Files the importer copied are deleted: a glTF model's
   `models/imported/<id>/` folder, or an imported OBJ or texture file. Files
