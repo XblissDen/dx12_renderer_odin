@@ -32,8 +32,11 @@ so text stays sharp.
 
 - **Renderer controls**: shader reload status, exposure, bloom, tone mapping,
   anti-aliasing, the environment, shadows, SSAO, SSR, light clusters, fog,
-  statistics, and GPU timings per pass. **Show ImGui demo** opens ImGui's
-  own demo window.
+  and the frustum and occlusion culling switches. **Show ImGui demo** opens
+  ImGui's own demo window.
+- **Profiler**: frame rate and frame time, the camera's and shadow views'
+  draws and calls after culling (with how many were occluded), and the
+  [GPU timings](frame.md#gpu-timings) of every pass.
 - **Scene**: add models (a glTF model with several nodes as its node tree,
   see [Hierarchy](hierarchy.md#gltf-node-trees)) and lights, undo and redo,
   duplicate, delete, focus, save and load, and the entity tree (drag a row

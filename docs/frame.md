@@ -135,7 +135,7 @@ Blended draws are not merged, because they must stay in back-to-front order:
 the CPU sorts all of them by distance to their center, in view or not, and
 each is its own call of at most one instance.
 
-The panel's **Draw calls** count is the camera's calls that drew something,
+The Profiler panel's **Draw calls** count is the camera's calls that drew something,
 per pass (early and late together), next to the visible draws, and the
 shadow line shows its draws and calls. With 40 extra cubes in the default scene, the 46 draws take 2 calls per
 pass: every cube-shaped object (portrait cubes, the stone ground, the light
@@ -179,8 +179,9 @@ shaders' `g_instance_draws`.
 The CPU never learns what is visible. The pass also counts visible draws and
 calls that drew something, for the camera and for the shadow views, and the
 camera's draws hidden by occlusion culling, at the start of the call buffer.
-These counts are copied to a readback buffer and shown in the panel two
-frames late. Frustum culling can be turned off in the panel to compare; the
+These counts are copied to a readback buffer and shown in the Profiler panel
+two frames late. Frustum culling can be turned off in Renderer controls to
+compare; the
 cull pass then keeps every candidate.
 
 Limits: 32,768 calls per frame (`MAX_DRAW_CALLS`). A view whose calls do not
@@ -224,7 +225,7 @@ behind the camera. Shadow views test only their frustums. On the first frame,
 and for a draw newly added, there are no flags yet, so everything is drawn
 late.
 
-Occlusion culling can be turned off in the panel. Every draw in the frustum
+Occlusion culling can be turned off in Renderer controls. Every draw in the frustum
 is then drawn early, and the pyramid is not built. Its GPU timing row covers
 the pyramid and the late cull, and the depth prepass row includes them too.
 With a wall in front of the 40-cube scene, 34 of its 47 draws are culled as
@@ -322,7 +323,7 @@ Every pass is bracketed by a pair of timestamp queries, resolved into a
 readback buffer at the end of the frame and read when that frame slot comes
 around again. A pass that is switched off still records its two timestamps,
 so every pass has a value each frame (zero when skipped). The **GPU timings**
-table in Renderer controls lists them; "Post + UI" includes tone mapping and
+table in the Profiler panel lists them; "Post + UI" includes tone mapping and
 the UI draw.
 
 ## Shader hot-reload

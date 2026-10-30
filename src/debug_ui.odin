@@ -147,7 +147,6 @@ debug_ui_update :: proc() {
 
     r := &g_renderer
     changed := false
-    text_buffer: [256]u8
     ui_next_window(16, 16, 360, 430)
     if ui_begin_panel("Renderer controls") {
         if g_cursor_locked {
@@ -181,10 +180,38 @@ debug_ui_update :: proc() {
         debug_ui_environment_controls()
 
         ui_separator()
-        debug_ui_text(fmt.bprintf(text_buffer[:], "FPS: %.0f | Frame: %.2f ms", r.fps, r.frame_ms))
-
         ui_checkbox("Frustum culling", &r.frustum_culling_enabled)
         ui_checkbox("Occlusion culling", &r.occlusion_culling_enabled)
+        ui_checkbox("Show ImGui demo", &g_debug_ui_demo)
+    }
+    ui_end_panel()
+
+    debug_ui_draw_profiler()
+    editor_draw_scene(&g_scene)
+    editor_draw_inspector(&g_scene)
+    editor_draw_import_panel()
+    // Before the gizmo, which then draws over the icons.
+    editor_draw_icons(&g_scene)
+    editor_update_gizmo(&g_scene)
+
+    if g_debug_ui_demo {
+        ui_show_demo(&g_debug_ui_demo)
+    }
+    if changed {
+        renderer_update_post_title()
+    }
+
+    editor_finish_idle_edit()
+}
+
+// Frame rate, what culling kept, and the GPU time of each pass.
+debug_ui_draw_profiler :: proc() {
+    r := &g_renderer
+    text_buffer: [256]u8
+    ui_next_window(f32(WINDOW_WIDTH) - 436, 16, 420, 520)
+    if ui_begin_panel("Profiler") {
+        debug_ui_text(fmt.bprintf(text_buffer[:], "FPS: %.0f | Frame: %.2f ms", r.fps, r.frame_ms))
+        ui_separator()
 
         stats := r.culling_stats
         spot_shadow_count := 0
@@ -194,24 +221,32 @@ debug_ui_update :: proc() {
         // Visible draws and nonempty calls come from the GPU cull pass.
         debug_ui_text(fmt.bprintf(
             text_buffer[:],
-            "Scene meshes: %d/%d | Culled: %d (%d occluded) | Draw calls: %d",
+            "Scene meshes: %d/%d | Draw calls: %d",
             stats.gpu.scene_visible,
             stats.scene_total,
-            stats.scene_total - int(stats.gpu.scene_visible),
-            stats.gpu.scene_occluded,
             stats.gpu.scene_calls,
         ))
-
         debug_ui_text(fmt.bprintf(
             text_buffer[:],
-            "Shadow draws: %d in %d calls (%d casters; %d cascades, %d spot, %d point)",
+            "Culled: %d (%d occluded)",
+            stats.scene_total - int(stats.gpu.scene_visible),
+            stats.gpu.scene_occluded,
+        ))
+        debug_ui_text(fmt.bprintf(
+            text_buffer[:],
+            "Shadow draws: %d in %d calls (%d casters)",
             stats.gpu.shadow_visible,
             stats.gpu.shadow_calls,
             stats.shadow_total,
+        ))
+        debug_ui_text(fmt.bprintf(
+            text_buffer[:],
+            "Shadow views: %d cascades, %d spot, %d point",
             SHADOW_CASCADE_COUNT,
             spot_shadow_count,
             point_shadow_count,
         ))
+        ui_separator()
 
         pass_names := [GPU_PASS_COUNT]string{
             "Shadow", "Scene", "Bloom prefilter", "Bloom downsample",
@@ -231,25 +266,8 @@ debug_ui_update :: proc() {
             }
             ui_end_table()
         }
-        ui_checkbox("Show ImGui demo", &g_debug_ui_demo)
     }
     ui_end_panel()
-
-    editor_draw_scene(&g_scene)
-    editor_draw_inspector(&g_scene)
-    editor_draw_import_panel()
-    // Before the gizmo, which then draws over the icons.
-    editor_draw_icons(&g_scene)
-    editor_update_gizmo(&g_scene)
-
-    if g_debug_ui_demo {
-        ui_show_demo(&g_debug_ui_demo)
-    }
-    if changed {
-        renderer_update_post_title()
-    }
-
-    editor_finish_idle_edit()
 }
 
 // Shaders reload by themselves when a file in shaders/ is saved; the button
