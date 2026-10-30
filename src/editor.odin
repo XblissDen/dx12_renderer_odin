@@ -2,6 +2,7 @@ package main
 
 import "core:fmt"
 import "core:math"
+import "core:slice"
 import win32 "core:sys/windows"
 
 // The selection can hold any number of entities. g_editor_selected is the
@@ -75,18 +76,74 @@ editor_listed :: proc(scene: ^Scene, index: int) -> bool {
         scene.has_point_light[index] || scene.has_spot_light[index])
 }
 
-// Shift+click in the list: everything listed from the anchor to `entity`.
-editor_select_range :: proc(scene: ^Scene, entity: Entity) {
-    anchor := g_editor_selection_anchor
-    if !scene_entity_is_alive(scene, anchor) {
+// Entities whose children the Scene panel hides.
+g_editor_collapsed: [MAX_ENTITIES]bool
+
+EditorListRow :: struct {
+    index, depth: int,
+    has_children: bool,
+}
+
+// The Scene panel's rows: each listed entity followed by its children
+// (unless collapsed), siblings in index order. A child of an unlisted
+// entity is shown as a root.
+editor_list_rows :: proc(scene: ^Scene) -> []EditorListRow {
+    first_child := make([]int, scene.entity_count, context.temp_allocator)
+    next_sibling := make([]int, scene.entity_count, context.temp_allocator)
+    is_root := make([]bool, scene.entity_count, context.temp_allocator)
+    slice.fill(first_child, -1)
+    slice.fill(next_sibling, -1)
+    // Backwards, so that pushing onto each list leaves it in index order.
+    for i := scene.entity_count - 1; i >= 0; i -= 1 {
+        if !editor_listed(scene, i) do continue
+        parent, ok := scene_parent(scene, i)
+        if ok && editor_listed(scene, parent) {
+            next_sibling[i] = first_child[parent]
+            first_child[parent] = i
+        } else {
+            is_root[i] = true
+        }
+    }
+
+    rows := make([dynamic]EditorListRow, context.temp_allocator)
+    add_row :: proc(rows: ^[dynamic]EditorListRow, first_child, next_sibling: []int, index, depth: int) {
+        append(rows, EditorListRow{index, depth, first_child[index] >= 0})
+        if g_editor_collapsed[index] do return
+        for child := first_child[index]; child >= 0; child = next_sibling[child] {
+            add_row(rows, first_child, next_sibling, child, depth + 1)
+        }
+    }
+    for root, i in is_root do if root do add_row(&rows, first_child, next_sibling, i, 0)
+    return rows[:]
+}
+
+// Shift+click in the list: every row from the anchor's to `entity`'s.
+editor_select_range :: proc(rows: []EditorListRow, entity: Entity) {
+    anchor_row, entity_row := -1, -1
+    for row, i in rows {
+        if row.index == int(g_editor_selection_anchor) do anchor_row = i
+        if row.index == int(entity) do entity_row = i
+    }
+    // The anchor is gone, or hidden under a collapsed parent.
+    if anchor_row < 0 {
         editor_select(entity)
         return
     }
     g_editor_selection = {}
-    for i in min(int(anchor), int(entity))..=max(int(anchor), int(entity)) {
-        if editor_listed(scene, i) do g_editor_selection[i] = true
+    for row in rows[min(anchor_row, entity_row):max(anchor_row, entity_row) + 1] {
+        g_editor_selection[row.index] = true
     }
     g_editor_selected = entity
+}
+
+// Dropping an entity on a row (or on the unparent row, -1) makes it that
+// row's child. A selected entity takes the rest of the selection along.
+editor_drop_on :: proc(scene: ^Scene, dragged, parent: int) {
+    dragged_only := []int{dragged}
+    entities := editor_selected_tops(scene) if editor_is_selected(Entity(dragged)) else dragged_only
+    if editor_set_parents(scene, entities, parent, g_editor_selected) == 0 && parent >= 0 {
+        g_editor_file_status = "Can't parent there (a loop, or the sun)."
+    }
 }
 
 // Ctrl+A: every listed entity, keeping the primary if there is one.
@@ -214,13 +271,13 @@ editor_draw_scene :: proc(scene: ^Scene){
         ui_separator()
 
         debug_ui_text("Ctrl+click toggles, Shift+click a range.")
+        debug_ui_text("Drag one onto another to parent it.")
         label_buffer: [128]u8
+        dropped: i32
 
-        for i in 0..<scene.entity_count{
-            if !editor_listed(scene, i) {
-                continue
-            }
-
+        rows := editor_list_rows(scene)
+        for row in rows {
+            i := row.index
             name := scene.names[i]
             if len(name) == 0{
                 name = "Entity"
@@ -230,20 +287,56 @@ editor_draw_scene :: proc(scene: ^Scene){
             label := fmt.bprintf(label_buffer[:127], "%s###entity_%d", name, i,)
             label_buffer[len(label)] = 0
 
-            if ui_selectable(cstring(raw_data(label_buffer[:])), editor_is_selected(Entity(i))){
+            open := !g_editor_collapsed[i]
+            clicked := ui_tree_row(cstring(raw_data(label_buffer[:])), editor_is_selected(Entity(i)), i32(row.depth), row.has_children, &open)
+            g_editor_collapsed[i] = !open
+            ui_drag_entity(i32(i), fmt.ctprintf("%s", name))
+            if ui_drop_entity(&dropped) do editor_drop_on(scene, int(dropped), i)
+
+            if clicked {
                 editor_finish_edit()
                 if key_down(win32.VK_CONTROL) {
                     editor_toggle_selection(Entity(i))
                 } else if key_down(win32.VK_SHIFT) {
-                    editor_select_range(scene, Entity(i))
+                    editor_select_range(rows, Entity(i))
                 } else {
                     editor_select(Entity(i))
                 }
             }
         }
+
+        // Clicking it does nothing; it is only somewhere to drop.
+        ui_selectable("(drop here to unparent)###unparent", false)
+        if ui_drop_entity(&dropped) do editor_drop_on(scene, int(dropped), -1)
     }
 
     ui_end_panel()
+}
+
+// Picks the entity's parent from those it can go under; the entity keeps
+// its place in the world.
+editor_draw_parent_controls :: proc(scene: ^Scene, index: int) {
+    if !scene_parentable(scene, index) do return
+
+    parent := int(editor_value(scene, index, .Parent)[0])
+    entity_name :: proc(scene: ^Scene, index: int) -> cstring {
+        return fmt.ctprintf("%s", scene.names[index] if len(scene.names[index]) > 0 else "Entity")
+    }
+    if ui_begin_combo("Parent", entity_name(scene, parent) if parent >= 0 else "(none)") {
+        if ui_selectable("(none)", parent < 0) {
+            editor_set_parents(scene, {index}, -1, Entity(index))
+        }
+        for candidate in 0..<scene.entity_count {
+            if !editor_listed(scene, candidate) || !scene_can_parent(scene, index, candidate) do continue
+            ui_push_id(i32(candidate))
+            if ui_selectable(entity_name(scene, candidate), candidate == parent) {
+                editor_set_parents(scene, {index}, candidate, Entity(index))
+            }
+            ui_pop_id()
+        }
+        ui_end_combo()
+    }
+    if parent >= 0 do debug_ui_text("The transform is relative to the parent.")
 }
 
 editor_draw_material_controls :: proc(scene: ^Scene, index: int) {
@@ -455,6 +548,8 @@ editor_draw_inspector :: proc(scene: ^Scene) {
                     editor_draw_gizmo_controls()
                     ui_separator()
                 }
+
+                editor_draw_parent_controls(scene, index)
 
                 orbiting := scene.has_point_light[index] &&
                             scene.point_lights[index].orbit_enabled

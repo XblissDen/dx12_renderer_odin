@@ -177,10 +177,12 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         r.scene_light_count += 1
 
         light: GpuLight
+        world := scene_world_matrix(scene, i)
+        world_position := alg.Vector3f32{world[0, 3], world[1, 3], world[2, 3]}
         if scene.has_point_light[i] {
             point := scene.point_lights[i]
             light = GpuLight{
-                position = scene.transforms[i].position,
+                position = world_position,
                 range = point.range,
                 radiance = point.color * point.intensity,
                 spot_offset = 1,
@@ -199,10 +201,10 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
             cos_outer := math.cos(spot.outer_angle)
             scale := 1 / max(cos_inner - cos_outer, 0.0001)
             light = GpuLight{
-                position = scene.transforms[i].position,
+                position = world_position,
                 range = spot.range,
                 radiance = spot.color * spot.intensity,
-                direction = spot_light_direction(scene.transforms[i]),
+                direction = spot_light_direction(world),
                 spot_scale = scale,
                 spot_offset = -cos_outer * scale,
                 shadow_index = -1,
@@ -263,7 +265,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
             continue
         }
 
-        model := transform_matrix(scene.transforms[i])
+        model := scene_world_matrix(scene, i)
         // A slot not recorded last frame (new, reused, or just shown) has no motion.
         previous_model := model
         // Frames count from 1, so 0 means never recorded.

@@ -9,7 +9,8 @@ light, directional light, and camera. An entity is just its index, plus an
 `alive` flag and a name. Deleted slots are reused by later entities.
 
 - **Transform**: position, Euler rotation, and per-axis scale (positive on
-  every axis, which keeps winding, culling and picking consistent). A rotation
+  every axis, which keeps winding, culling and picking consistent), relative
+  to the entity's parent if it has one ([Hierarchy](hierarchy.md)). A rotation
   speed spins the entity around Y, for the demo scene.
 - **Materials**: slot 0 is stored with the entity; models with several
   material slots keep the rest alongside it.
@@ -34,9 +35,9 @@ so text stays sharp.
   statistics, and GPU timings per pass. **Show ImGui demo** opens ImGui's
   own demo window.
 - **Scene**: add models and lights, undo and redo, duplicate, delete, focus,
-  save and load, and the entity list.
-- **Inspector**: the primary selected entity's transform, material slot,
-  light settings, and the gizmo's options.
+  save and load, and the entity tree (drag a row onto another to parent it).
+- **Inspector**: the primary selected entity's parent, transform, material
+  slot, light settings, and the gizmo's options.
 - **Assets...**: import and remove models and textures ([Assets](assets.md)).
 
 ## Camera and shortcuts
@@ -66,7 +67,8 @@ With the mouse released, clicking in the viewport selects what is under the
 cursor (`src/editor_picking.odin`):
 
 1. The click becomes a ray from the camera through the pixel.
-2. For each model entity, the ray is moved into the entity's local space and
+2. For each model entity, the ray is moved into the entity's local space
+   (through the inverse of its world matrix, parents included) and
    tested against every triangle (Möller–Trumbore), keeping the nearest hit.
 3. Cutout materials are tested at the hit's texture coordinate against the
    full-size albedo alpha kept for picking, so clicks go through holes. Back
@@ -96,7 +98,7 @@ Inspector shows the primary, and the gizmo sits on it.
 | --- | --- | --- |
 | Click | Select only this (empty background: nothing); again at the same spot: the next one behind | Select only this |
 | **Ctrl**+click | Add, or remove if already selected | Add or remove |
-| **Shift**+click | Add | Select the range from the last plain or Ctrl click |
+| **Shift**+click | Add | Select the rows from the last plain or Ctrl click |
 | **Ctrl+A** (mouse released) | Select everything in the list | |
 
 Removing the primary makes the first remaining selected entity primary.
@@ -109,10 +111,11 @@ Removing the primary makes the first remaining selected entity primary.
   Scale multiplies every entity's own scale by the same factors, and moves
   the others away from (or towards) the primary along the gizmo's axes.
   Orbiting lights follow by moving their orbit center. The sun and camera do
-  not follow.
-- **Duplicate Selected** copies every selected model and light and selects
-  the copies; **Delete Selected** deletes them. The sun and camera are
-  skipped, and stay selected after a delete.
+  not follow, and a selected child of another selected entity moves only with
+  its parent.
+- **Duplicate Selected** copies every selected model and light, with its
+  children, and selects the copies; **Delete Selected** deletes them and their
+  children. The sun and camera are skipped, and stay selected after a delete.
 - **Undo**: a gizmo drag, a duplicate or a delete on several entities is one
   undo step (`Edit_Fields` or `Group` in `src/editor_history.odin`). Undo and
   redo select what the step touched again. A group is all or nothing: if one
@@ -143,7 +146,9 @@ several](#selecting-several)).
   uniform scale (×e per 100 pixels of horizontal drag). Scale always uses the
   entity's local axes: scale applies before rotation, so scaling along world
   axes would shear.
-- **Space** (Q): move and rotate along world or local axes.
+- **Space** (Q): move and rotate along world or local axes. Local axes
+  include the parents' rotation, and drags of children work in world space
+  ([Hierarchy](hierarchy.md#editing)).
 - **Snap**: drags move, rotate and scale in whole steps counted from where the
   drag started (defaults: 0.25 units, 15°, 0.1, or 10% for uniform scale).
   Holding **Ctrl** during a drag flips snapping.
@@ -202,7 +207,9 @@ exposure). Assets are referenced by catalog ID.
   albedo is expected, and so on), values must be in range, and there must be
   one sun, one camera, and at most 1024 lights. Then the scene is replaced, and
   its names are kept in their own arena.
-- **Versions**: the format is at version 15. Newer settings are optional
+- **Parents** are saved as positions in the file's entity list, and loading
+  rejects cycles ([Hierarchy](hierarchy.md#scene-files)).
+- **Versions**: the format is at version 16. Newer settings are optional
   sections or fields, and a file without one gets a default. Where a feature
   changed how existing scenes look, the default keeps the old look: Reinhard
   tone mapping, FXAA, no sharpening, auto exposure off, no volumetric fog,

@@ -17,8 +17,9 @@ written in Odin on DirectX 12, with a Dear ImGui interface.
 - **Assets**: OBJ and glTF 2.0 import with materials (normal, roughness and
   metallic, emissive and occlusion maps; cutout, blended and double-sided
   materials); textures with mips built on the GPU.
-- **Editor**: picking and multiple selection, move/rotate/scale gizmos, an Inspector, undo and redo,
-  and saving and loading scenes.
+- **Editor**: picking and multiple selection, parent/child hierarchies,
+  move/rotate/scale gizmos, an Inspector, undo and redo, and saving and
+  loading scenes.
 - **Workflow**: shader hot-reload, and GPU timings for every pass.
 
 How each of these works is explained in **[docs/](docs/README.md)**.

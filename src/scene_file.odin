@@ -10,8 +10,8 @@ SCENE_FILE_PATH :: "scene.json"
 // 7: extra material slots per entity. 8: emission, occlusion, cutouts.
 // 9: blending. 10: auto-exposure. 11: light ranges, spot lights.
 // 12: spot light shadows. 13: point light shadows. 14: orbit centers.
-// 15: TAA sharpening.
-SCENE_FILE_VERSION :: 15
+// 15: TAA sharpening. 16: parents.
+SCENE_FILE_VERSION :: 16
 
 ScenePostSettings :: struct{
     exposure: f32,
@@ -45,6 +45,9 @@ SceneFileEntity :: struct {
     spot_light: Maybe(SpotLight),
     directional_light: Maybe(DirectionalLight),
     camera: Maybe(Camera),
+    // Version 16+: the parent's position in `entities`; absent for roots
+    // (and in older files, where everything is one).
+    parent: Maybe(int),
 }
 
 SceneFile :: struct {
@@ -233,6 +236,16 @@ scene_file_validate :: proc(scene: ^Scene) -> string{
             }
         }
 
+        if scene.has_parent[i] {
+            parent := int(scene.parents[i])
+            if !scene_parentable(scene, i) || parent < 0 || parent >= scene.entity_count || !scene_parentable(scene, parent) {
+                return "Invalid parent."
+            }
+            if scene_is_ancestor(scene, i, i) {
+                return "An entity is its own ancestor."
+            }
+        }
+
         if scene.has_material[i]{
             count := scene.material_slots[i].count
             if count < 0 || count > MAX_MODEL_MATERIALS {
@@ -270,6 +283,15 @@ scene_save_to_file :: proc(scene: ^Scene, path: string) -> (ok: bool, message: s
     // Inactive slots are dropped, so entity indices are compacted on reload.
     entities := make([dynamic]SceneFileEntity, 0, scene.entity_count)
     defer delete(entities)
+    // Each live slot's position in `entities`, for the parent links.
+    saved_index := make([]int, scene.entity_count, context.temp_allocator)
+    live := 0
+    for i in 0..<scene.entity_count {
+        if scene.alive[i] {
+            saved_index[i] = live
+            live += 1
+        }
+    }
 
     for i in 0..<scene.entity_count {
         if !scene.alive[i] {
@@ -277,6 +299,7 @@ scene_save_to_file :: proc(scene: ^Scene, path: string) -> (ok: bool, message: s
         }
 
         entity := SceneFileEntity{name = scene.names[i]}
+        if parent, ok := scene_parent(scene, i); ok do entity.parent = saved_index[parent]
         if scene.has_transform[i] do entity.transform = scene.transforms[i]
         if scene.has_mesh_renderer[i] do entity.mesh_renderer = scene.mesh_renderers[i]
         if scene.has_material[i] {
@@ -434,6 +457,13 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
             }
             copy(staged.material_slots[index].extra[:], source.extra_materials)
             staged.material_slots[index].count = 1 + len(source.extra_materials)
+        }
+    }
+    // Every entity exists by now; validation checks where the links point.
+    for source, i in file.entities {
+        if parent, ok := source.parent.?; ok {
+            staged.parents[i] = Entity(parent)
+            staged.has_parent[i] = true
         }
     }
 

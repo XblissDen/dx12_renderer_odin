@@ -53,6 +53,9 @@ EditorField :: enum {
     Material_Metallic_Map,
     Material_Emissive_Map,
     Material_Occlusion_Map,
+
+    // The parent's index in the first value; -1 for none.
+    Parent,
 }
 
 EditorCommandKind :: enum {
@@ -90,6 +93,9 @@ EditorMeshSnapshot :: struct {
     material_slots: MaterialSlots,
     point_light: Maybe(PointLight),
     spot_light: Maybe(SpotLight),
+    // Restored as a link even while the parent is not alive yet: undoing a
+    // deleted subtree restores the children before their parents.
+    parent: Maybe(Entity),
 }
 
 // The Inspector edits one material slot at a time; each undo step records
@@ -202,6 +208,9 @@ editor_field_exists :: proc(
 
         case .Mesh_Asset:
             return scene.has_mesh_renderer[index]
+
+        case .Parent:
+            return scene_parentable(scene, index)
     }
 
     return false
@@ -292,6 +301,10 @@ editor_value :: proc(
             return {scene.directional_lights[index].intensity, 0, 0}
         case .Sun_Direction:
             return scene.directional_lights[index].direction
+
+        case .Parent:
+            parent, ok := scene_parent(scene, index)
+            return {f32(parent) if ok else -1, 0, 0}
     }
 
     return {}
@@ -401,6 +414,12 @@ editor_apply_value :: proc(
                 return false
             }
             scene.directional_lights[index].direction = alg.normalize(direction)
+
+        // Only the link; editor_set_parents also keeps the world placement.
+        case .Parent:
+            parent := int(value[0])
+            if !scene_can_parent(scene, index, parent) do return false
+            scene_set_parent(scene, index, parent)
     }
 
     return true
@@ -556,7 +575,16 @@ editor_command_references :: proc(command: EditorCommand, slot: int) -> bool {
     if int(command.entity) == slot do return true
     // Undoing a duplicate selects its original source, too.
     if command.kind == .Create_Mesh && int(command.source_entity) == slot do return true
-    for edit in command.edits do if int(edit.entity) == slot do return true
+    if parent, ok := command.mesh_snapshot.parent.?; ok && int(parent) == slot do return true
+    // A reparenting names the parents in its values.
+    if command.kind == .Edit_Field && command.field == .Parent &&
+       (int(command.before[0]) == slot || int(command.after[0]) == slot) {
+        return true
+    }
+    for edit in command.edits {
+        if int(edit.entity) == slot do return true
+        if edit.field == .Parent && (int(edit.before[0]) == slot || int(edit.after[0]) == slot) do return true
+    }
     for part in command.group do if editor_command_references(part, slot) do return true
     return false
 }

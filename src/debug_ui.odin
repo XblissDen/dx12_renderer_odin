@@ -81,6 +81,10 @@ foreign imgui_lib {
         buffer: [^]u8,
         capacity: uint,
     ) -> bool ---
+
+    ui_tree_row :: proc(label: cstring, selected: bool, depth: i32, has_children: bool, open: ^bool) -> bool ---
+    ui_drag_entity :: proc(entity: i32, label: cstring) ---
+    ui_drop_entity :: proc(entity: ^i32) -> bool ---
 }
 
 // Matches SceneMouse in vendor/imgui/bridge.cpp.

@@ -16,6 +16,8 @@ README](../README.md) covers building and running.
   textures and their mips, environments, and removing assets.
 - [Editor](editor.md): the UI, camera and shortcuts, picking and selection,
   gizmos, undo and redo, lights, and scene files.
+- [Hierarchy](hierarchy.md): parents and children, world matrices,
+  reparenting, and how the gizmo, duplicate and delete handle subtrees.
 
 ## Conventions
 
@@ -53,7 +55,7 @@ README](../README.md) covers building and running.
 | `src/renderer_selection.odin` | Selection boxes |
 | `src/texture_mips.odin` | GPU mip generation |
 | `src/assets.odin`, `src/gltf.odin`, `src/mesh.odin` | Asset catalog, glTF and OBJ loading |
-| `src/scene.odin`, `src/scene_file.odin` | Entities and components; saving and loading scenes |
+| `src/scene.odin`, `src/scene_file.odin` | Entities, components and parents; saving and loading scenes |
 | `src/camera.odin`, `src/frustum.odin` | Fly camera; frustum culling |
 | `src/editor*.odin`, `src/debug_ui.odin` | Panels, picking, gizmos, undo history |
 | `shaders/scene.hlsl` | Mesh shading, prepass, shadows, SSAO, SSR, light clusters, fog |

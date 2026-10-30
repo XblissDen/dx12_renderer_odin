@@ -3,11 +3,11 @@ package main
 import "core:math"
 import alg "core:math/linalg"
 
-// An entity's local mesh bounds and transform, for the selection box and
+// An entity's local mesh bounds and world matrix, for the selection box and
 // focusing; not ok for entities without a drawable mesh.
 editor_entity_bounds :: proc(scene: ^Scene, entity: Entity) -> (
     bounds: MeshBounds,
-    transform: Transform,
+    world: alg.Matrix4f32,
     ok: bool,
 ) {
     if !scene_entity_is_alive(scene, entity) {
@@ -22,7 +22,7 @@ editor_entity_bounds :: proc(scene: ^Scene, entity: Entity) -> (
     }
 
     bounds = g_assets.meshes[scene.mesh_renderers[index].mesh].bounds
-    return bounds, scene.transforms[index], bounds.valid
+    return bounds, scene_world_matrix(scene, index), bounds.valid
 }
 
 // A sphere around every selected entity with a mesh.
@@ -34,14 +34,18 @@ editor_selection_sphere :: proc(scene: ^Scene) -> (center: alg.Vector3f32, radiu
     box_max := alg.Vector3f32(-max(f32))
     for selected, index in g_editor_selection {
         if !selected do continue
-        bounds, transform := editor_entity_bounds(scene, Entity(index)) or_continue
+        bounds, world := editor_entity_bounds(scene, Entity(index)) or_continue
 
         local_center := (bounds.minimum + bounds.maximum) * 0.5
-        center4 := alg.mul(transform_matrix(transform), alg.Vector4f32{
+        center4 := alg.mul(world, alg.Vector4f32{
             local_center.x, local_center.y, local_center.z, 1,
         })
         sphere_center := alg.Vector3f32{center4.x, center4.y, center4.z}
-        largest_scale := max(transform.scale.x, transform.scale.y, transform.scale.z)
+        // The longest world axis, including the ancestors' scale.
+        largest_scale: f32
+        for axis in 0..<3 {
+            largest_scale = max(largest_scale, alg.length(alg.Vector3f32{world[0, axis], world[1, axis], world[2, axis]}))
+        }
         sphere_radius := alg.length(bounds.maximum - bounds.minimum) * largest_scale * 0.5
 
         append(&spheres, [4]f32{sphere_center.x, sphere_center.y, sphere_center.z, sphere_radius})

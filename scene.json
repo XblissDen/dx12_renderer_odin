@@ -1,5 +1,5 @@
 {
-  "version": 15,
+  "version": 16,
   "entities": [
     {
       "name": "Cube (left)",
@@ -11,7 +11,7 @@
         ],
         "rotation": [
           0.00000000,
-          194.09194946,
+          32.92104340,
           0.00000000
         ],
         "rotation_speed": 0.60000002,
@@ -64,19 +64,20 @@
       "point_light": null,
       "spot_light": null,
       "directional_light": null,
-      "camera": null
+      "camera": null,
+      "parent": null
     },
     {
       "name": "Pyramid",
       "transform": {
         "position": [
-          0.00000000,
+          1.15848696,
           0.00000000,
           0.00000000
         ],
         "rotation": [
           0.00000000,
-          194.09194946,
+          32.92104340,
           0.00000000
         ],
         "rotation_speed": 0.60000002,
@@ -129,26 +130,27 @@
       "point_light": null,
       "spot_light": null,
       "directional_light": null,
-      "camera": null
+      "camera": null,
+      "parent": null
     },
     {
       "name": "Cube (right)",
       "transform": {
         "position": [
-          2.00000000,
+          1.22649050,
           0.00000000,
-          0.00000000
+          1.57978487
         ],
         "rotation": [
-          0.00000000,
-          194.09194946,
+          -0.00000000,
+          25.72718239,
           0.00000000
         ],
         "rotation_speed": 0.60000002,
         "scale": [
+          0.99999994,
           1.00000000,
-          1.00000000,
-          1.00000000
+          0.99999994
         ]
       },
       "mesh_renderer": {
@@ -194,7 +196,8 @@
       "point_light": null,
       "spot_light": null,
       "directional_light": null,
-      "camera": null
+      "camera": null,
+      "parent": 1
     },
     {
       "name": "Ground",
@@ -259,7 +262,8 @@
       "point_light": null,
       "spot_light": null,
       "directional_light": null,
-      "camera": null
+      "camera": null,
+      "parent": null
     },
     {
       "name": "Sun",
@@ -284,15 +288,16 @@
         ],
         "intensity": 0.80000001
       },
-      "camera": null
+      "camera": null,
+      "parent": null
     },
     {
       "name": "Warm point light",
       "transform": {
         "position": [
-          1.54656422,
+          0.13126451,
           1.50000000,
-          -1.26812422
+          1.99568772
         ],
         "rotation": [
           0.00000000,
@@ -354,7 +359,7 @@
         ],
         "intensity": 3.00000000,
         "orbit_radius": 2.00000000,
-        "orbit_angle": 194.09194946,
+        "orbit_angle": 32.92104340,
         "orbit_speed": 0.60000002,
         "orbit_enabled": true,
         "orbit_center": [
@@ -367,15 +372,16 @@
       },
       "spot_light": null,
       "directional_light": null,
-      "camera": null
+      "camera": null,
+      "parent": null
     },
     {
       "name": "Cool point light",
       "transform": {
         "position": [
-          -1.54669166,
+          -0.13118583,
           1.50000000,
-          1.26796889
+          -1.99569297
         ],
         "rotation": [
           0.00000000,
@@ -437,7 +443,7 @@
         ],
         "intensity": 3.00000000,
         "orbit_radius": 2.00000000,
-        "orbit_angle": 197.23364258,
+        "orbit_angle": 36.06267548,
         "orbit_speed": 0.60000002,
         "orbit_enabled": true,
         "orbit_center": [
@@ -450,15 +456,16 @@
       },
       "spot_light": null,
       "directional_light": null,
-      "camera": null
+      "camera": null,
+      "parent": null
     },
     {
       "name": "",
       "transform": {
         "position": [
-          29.13460541,
-          -3.23222518,
-          -1.99778652
+          -1.55979550,
+          1.21190822,
+          -6.92887211
         ],
         "rotation": [
           0.00000000,
@@ -481,1058 +488,13 @@
       "spot_light": null,
       "directional_light": null,
       "camera": {
-        "yaw": 15.81459045,
-        "pitch": -0.00337783,
+        "yaw": 1.42379475,
+        "pitch": -0.20999980,
         "speed": 3.00000000,
         "sensitivity": 0.00300000,
         "far_clip": 0.00000000
-      }
-    },
-    {
-      "name": "Sponza",
-      "transform": {
-        "position": [
-          29.77700043,
-          -4.49109697,
-          -2.19153547
-        ],
-        "rotation": [
-          0.00000000,
-          0.00000000,
-          0.00000000
-        ],
-        "rotation_speed": 0.00000000,
-        "scale": [
-          1.00000000,
-          1.00000000,
-          1.00000000
-        ]
       },
-      "mesh_renderer": {
-        "mesh": "model.sponza"
-      },
-      "material": {
-        "tint": [
-          0.58800000,
-          0.58800000,
-          0.58800000
-        ],
-        "texture": "model.sponza.image1.albedo",
-        "unlit": false,
-        "roughness": 1.00000000,
-        "metallic": 1.00000000,
-        "normal_texture": "model.sponza.image0.normal",
-        "normal_strength": 1.00000000,
-        "uv_scale": 1.00000000,
-        "roughness_texture": "model.sponza.image2.roughness",
-        "use_roughness_map": true,
-        "metallic_texture": "model.sponza.image2.metallic",
-        "use_metallic_map": true,
-        "emissive": [
-          0.00000000,
-          0.00000000,
-          0.00000000
-        ],
-        "emissive_strength": 0.00000000,
-        "emissive_texture": "",
-        "use_emissive_map": false,
-        "occlusion_texture": "",
-        "use_occlusion_map": false,
-        "occlusion_strength": 0.00000000,
-        "alpha_mask": true,
-        "alpha_cutoff": 0.50000000,
-        "alpha_blend": false,
-        "transparency": 0.00000000,
-        "double_sided": true
-      },
-      "extra_materials": [
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image4.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image3.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image5.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image5.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": true,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": true
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image7.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image6.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image8.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image8.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": false,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": false
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image10.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image9.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image11.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image11.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": false,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": false
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image13.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image12.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image14.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image14.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": false,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": false
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image16.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image15.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image17.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image17.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": false,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": false
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image19.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image18.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image20.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image20.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": false,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": false
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image22.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image21.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image23.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image23.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": false,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": false
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image25.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image24.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image26.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image26.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": false,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": false
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image28.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image27.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image29.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image29.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": false,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": false
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image31.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image30.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image32.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image32.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": false,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": false
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image34.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image33.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image35.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image35.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": false,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": false
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image68.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 0.00000000,
-          "normal_texture": "",
-          "normal_strength": 0.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "",
-          "use_roughness_map": false,
-          "metallic_texture": "",
-          "use_metallic_map": false,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": false,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": false
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image37.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image36.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image38.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image38.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": false,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": false
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image40.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image39.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image41.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image41.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": false,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": false
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image43.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image42.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image41.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image41.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": false,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": false
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image45.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image44.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image41.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image41.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": false,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": false
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image47.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image46.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image48.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image48.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": false,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": false
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image50.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image49.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image48.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image48.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": false,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": false
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image52.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image51.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image48.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image48.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": false,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": false
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image54.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image53.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image55.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image55.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": true,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": true
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image57.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image56.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image58.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image58.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": false,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": false
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image60.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image59.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image61.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image61.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": false,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": false
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image63.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image62.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image64.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image64.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": false,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": false
-        },
-        {
-          "tint": [
-            0.58800000,
-            0.58800000,
-            0.58800000
-          ],
-          "texture": "model.sponza.image66.albedo",
-          "unlit": false,
-          "roughness": 1.00000000,
-          "metallic": 1.00000000,
-          "normal_texture": "model.sponza.image65.normal",
-          "normal_strength": 1.00000000,
-          "uv_scale": 1.00000000,
-          "roughness_texture": "model.sponza.image67.roughness",
-          "use_roughness_map": true,
-          "metallic_texture": "model.sponza.image67.metallic",
-          "use_metallic_map": true,
-          "emissive": [
-            0.00000000,
-            0.00000000,
-            0.00000000
-          ],
-          "emissive_strength": 0.00000000,
-          "emissive_texture": "",
-          "use_emissive_map": false,
-          "occlusion_texture": "",
-          "use_occlusion_map": false,
-          "occlusion_strength": 0.00000000,
-          "alpha_mask": false,
-          "alpha_cutoff": 0.50000000,
-          "alpha_blend": false,
-          "transparency": 0.00000000,
-          "double_sided": false
-        }
-      ],
-      "point_light": null,
-      "spot_light": null,
-      "directional_light": null,
-      "camera": null
-    },
-    {
-      "name": "Point light",
-      "transform": {
-        "position": [
-          26.71643829,
-          -2.77622247,
-          -1.86115336
-        ],
-        "rotation": [
-          0.00000000,
-          0.00000000,
-          0.00000000
-        ],
-        "rotation_speed": 0.00000000,
-        "scale": [
-          0.20000000,
-          0.20000000,
-          0.20000000
-        ]
-      },
-      "mesh_renderer": {
-        "mesh": "cube"
-      },
-      "material": {
-        "tint": [
-          1.00000000,
-          1.00000000,
-          1.00000000
-        ],
-        "texture": "checkerboard",
-        "unlit": true,
-        "roughness": 0.00000000,
-        "metallic": 0.00000000,
-        "normal_texture": "",
-        "normal_strength": 0.00000000,
-        "uv_scale": 1.00000000,
-        "roughness_texture": "",
-        "use_roughness_map": false,
-        "metallic_texture": "",
-        "use_metallic_map": false,
-        "emissive": [
-          0.00000000,
-          0.00000000,
-          0.00000000
-        ],
-        "emissive_strength": 0.00000000,
-        "emissive_texture": "",
-        "use_emissive_map": false,
-        "occlusion_texture": "",
-        "use_occlusion_map": false,
-        "occlusion_strength": 0.00000000,
-        "alpha_mask": false,
-        "alpha_cutoff": 0.00000000,
-        "alpha_blend": false,
-        "transparency": 0.00000000,
-        "double_sided": false
-      },
-      "extra_materials": [
-
-      ],
-      "point_light": {
-        "color": [
-          1.00000000,
-          1.00000000,
-          1.00000000
-        ],
-        "intensity": 3.00000000,
-        "orbit_radius": 1.25000000,
-        "orbit_angle": 411.86859131,
-        "orbit_speed": 1.55997527,
-        "orbit_enabled": true,
-        "orbit_center": [
-          27.90299988,
-          -2.77622247,
-          -1.46800005
-        ],
-        "range": 17.29161644,
-        "cast_shadows": true
-      },
-      "spot_light": null,
-      "directional_light": null,
-      "camera": null
-    },
-    {
-      "name": "Point light",
-      "transform": {
-        "position": [
-          35.11193848,
-          -2.93449116,
-          -1.74512458
-        ],
-        "rotation": [
-          0.00000000,
-          0.00000000,
-          0.00000000
-        ],
-        "rotation_speed": 0.00000000,
-        "scale": [
-          0.20000000,
-          0.20000000,
-          0.20000000
-        ]
-      },
-      "mesh_renderer": {
-        "mesh": "cube"
-      },
-      "material": {
-        "tint": [
-          0.00000000,
-          1.00000000,
-          0.93643320
-        ],
-        "texture": "checkerboard",
-        "unlit": true,
-        "roughness": 0.00000000,
-        "metallic": 0.00000000,
-        "normal_texture": "",
-        "normal_strength": 0.00000000,
-        "uv_scale": 1.00000000,
-        "roughness_texture": "",
-        "use_roughness_map": false,
-        "metallic_texture": "",
-        "use_metallic_map": false,
-        "emissive": [
-          0.00000000,
-          0.00000000,
-          0.00000000
-        ],
-        "emissive_strength": 0.00000000,
-        "emissive_texture": "",
-        "use_emissive_map": false,
-        "occlusion_texture": "",
-        "use_occlusion_map": false,
-        "occlusion_strength": 0.00000000,
-        "alpha_mask": false,
-        "alpha_cutoff": 0.00000000,
-        "alpha_blend": false,
-        "transparency": 0.00000000,
-        "double_sided": false
-      },
-      "extra_materials": [
-
-      ],
-      "point_light": {
-        "color": [
-          0.00000000,
-          1.00000000,
-          0.93643320
-        ],
-        "intensity": 8.22000027,
-        "orbit_radius": 2.00000000,
-        "orbit_angle": 0.00000000,
-        "orbit_speed": 0.60000002,
-        "orbit_enabled": false,
-        "orbit_center": [
-          0.00000000,
-          0.00000000,
-          0.00000000
-        ],
-        "range": 17.29161644,
-        "cast_shadows": true
-      },
-      "spot_light": null,
-      "directional_light": null,
-      "camera": null
+      "parent": null
     }
   ],
   "post_process": {
@@ -1580,5 +542,25 @@
     "max_ev": 6.00000000,
     "adapt_dark": 1.00000000,
     "adapt_bright": 3.00000000
+  },
+  "reflections": {
+    "enabled": true,
+    "max_distance": 30.00000000,
+    "thickness": 0.50000000,
+    "max_roughness": 0.60000002
+  },
+  "fog": {
+    "enabled": true,
+    "density": 0.01000000,
+    "height": 0.00000000,
+    "height_falloff": 0.15000001,
+    "color": [
+      1.00000000,
+      1.00000000,
+      1.00000000
+    ],
+    "anisotropy": 0.60000002,
+    "ambient": 1.00000000,
+    "distance": 64.00000000
   }
 }

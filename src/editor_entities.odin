@@ -2,6 +2,8 @@ package main
 
 import "core:fmt"
 import "core:math"
+import alg "core:math/linalg"
+import "core:slice"
 
 editor_find_available_mesh_slot :: proc(scene: ^Scene) -> int {
     for i in 0..<scene.entity_count {
@@ -53,6 +55,8 @@ editor_mesh_snapshot :: proc(scene: ^Scene, index: int) -> EditorMeshSnapshot {
     }
     if scene.has_point_light[index] do snapshot.point_light = scene.point_lights[index]
     if scene.has_spot_light[index] do snapshot.spot_light = scene.spot_lights[index]
+    // The link itself, even to a parent deleted a moment ago in the same step.
+    if scene.has_parent[index] do snapshot.parent = scene.parents[index]
     return snapshot
 }
 
@@ -63,6 +67,7 @@ editor_add_snapshot_components :: proc(scene: ^Scene, entity: Entity, snapshot: 
     scene_set_materials(scene, entity, snapshot.material, snapshot.material_slots)
     if light, ok := snapshot.point_light.?; ok do scene_add_point_light(scene, entity, light)
     if light, ok := snapshot.spot_light.?; ok do scene_add_spot_light(scene, entity, light)
+    if parent, ok := snapshot.parent.?; ok do scene_set_parent(scene, int(entity), int(parent))
 }
 
 editor_restore_created_mesh :: proc(
@@ -133,18 +138,53 @@ editor_create_entity :: proc(scene: ^Scene, snapshot: EditorMeshSnapshot, source
     return true
 }
 
-// Copies every selected model and light (not the sun or camera) as one
-// undoable step, and selects the copies.
+// The selected entities and all their descendants, parents before children.
+editor_selected_subtrees :: proc(scene: ^Scene) -> []int {
+    Item :: struct {index, depth: int}
+    items := make([dynamic]Item, context.temp_allocator)
+    for i in 0..<scene.entity_count {
+        if !scene.alive[i] do continue
+        in_subtree := editor_is_selected(Entity(i))
+        depth := 0
+        current := i
+        for _ in 0..<MAX_ENTITIES {
+            parent := scene_parent(scene, current) or_break
+            in_subtree ||= editor_is_selected(Entity(parent))
+            depth += 1
+            current = parent
+        }
+        if in_subtree do append(&items, Item{i, depth})
+    }
+    slice.stable_sort_by(items[:], proc(a, b: Item) -> bool {return a.depth < b.depth})
+    order := make([]int, len(items), context.temp_allocator)
+    for item, i in items do order[i] = item.index
+    return order
+}
+
+// Copies every selected model and light (not the sun or camera) with its
+// descendants as one undoable step, and selects the copies. Each copy sits
+// beside its source, under the same parent; copied children go under the
+// copied parent.
 editor_duplicate_selected :: proc(scene: ^Scene) {
     editor_finish_edit()
 
     commands := make([dynamic]EditorCommand, context.temp_allocator)
+    copies := make(map[int]Entity, context.temp_allocator)
+    tops := make([dynamic]Entity, context.temp_allocator)
+    subtrees := editor_selected_subtrees(scene)
+    in_subtrees := make(map[int]bool, context.temp_allocator)
+    for index in subtrees do in_subtrees[index] = true
     primary := Entity(-1)
-    for selected, index in g_editor_selection {
+    for index in subtrees {
         source := Entity(index)
-        if !selected || !editor_can_delete_mesh(scene, source) {
+        if !editor_can_delete_mesh(scene, source) {
             continue
         }
+        parent, has_parent := scene_parent(scene, index)
+        top := !has_parent || !in_subtrees[parent]
+        parent_copy, parent_copied := copies[parent]
+        // Under a parent that could not be copied: left out with it.
+        if !top && !parent_copied do continue
 
         source_name := scene.names[index]
         if len(source_name) == 0 {
@@ -163,24 +203,95 @@ editor_duplicate_selected :: proc(scene: ^Scene) {
         snapshot := editor_mesh_snapshot(scene, index)
         snapshot.name = owned_name
 
-        // Make the copy easier to distinguish from its source. An orbiting
-        // light's position follows its orbit, so start it further along instead.
-        snapshot.transform.position.x += 1.5
-        if light, ok := &snapshot.point_light.?; ok && light.orbit_enabled {
-            light.orbit_angle += math.PI / 4
+        if top {
+            // Make the copy easier to distinguish from its source: 1.5 world
+            // units along X. An orbiting light's position follows its orbit,
+            // so start it further along instead.
+            offset := alg.mul(alg.matrix4_inverse_f32(scene_parent_matrix(scene, index)), alg.Vector4f32{1.5, 0, 0, 0})
+            snapshot.transform.position += offset.xyz
+            if light, ok := &snapshot.point_light.?; ok && light.orbit_enabled {
+                light.orbit_angle += math.PI / 4
+            }
+        } else {
+            snapshot.parent = parent_copy
         }
 
         // Stops at the entity or light limit; the copies made so far stay.
-        command := editor_create_entity_command(scene, snapshot, source) or_break
+        // Undoing selects the sources of the top copies only.
+        command := editor_create_entity_command(scene, snapshot, source if top else Entity(-1)) or_break
         append(&commands, command)
-        if source == g_editor_selected || primary < 0 do primary = command.entity
+        copies[index] = command.entity
+        if top {
+            append(&tops, command.entity)
+            if source == g_editor_selected || primary < 0 do primary = command.entity
+        }
     }
 
     editor_push_commands(commands[:], primary)
     if len(commands) == 0 do return
     editor_clear_selection()
-    for command in commands do editor_add_to_selection(command.entity)
+    for entity in tops do editor_add_to_selection(entity)
     g_editor_selected = primary
+}
+
+// Gives each entity a new parent (-1: none) as one undoable step, keeping it
+// where it is in the world. Entities that cannot take that parent (it is
+// themselves or one of their descendants) are left alone. Returns how many
+// changed.
+editor_set_parents :: proc(scene: ^Scene, entities: []int, parent: int, primary: Entity) -> int {
+    editor_finish_edit()
+
+    edits := make([dynamic]EditorFieldEdit, context.temp_allocator)
+    changed := 0
+    for index in entities {
+        before_parent := editor_value(scene, index, .Parent)
+        if int(before_parent[0]) == parent || !scene_can_parent(scene, index, parent) do continue
+
+        world := scene_world_matrix(scene, index)
+        old_space := scene_parent_matrix(scene, index)
+        position_field := editor_position_field(scene, index)
+        fields := [4]EditorField{.Parent, position_field, .Rotation, .Scale}
+        before: [4][3]f32
+        for field, i in fields do before[i] = editor_value(scene, index, field)
+
+        scene_set_parent(scene, index, parent)
+        to_new_space := alg.matrix4_inverse_f32(scene_parent_matrix(scene, index))
+        local := transform_from_matrix(to_new_space * world)
+        if position_field == .Point_Orbit_Center {
+            // The orbit's center moves into the new space; the light follows.
+            center := scene.point_lights[index].orbit_center
+            moved := alg.mul(to_new_space * old_space, alg.Vector4f32{center.x, center.y, center.z, 1})
+            editor_apply_value(scene, Entity(index), .Point_Orbit_Center, moved.xyz)
+        } else {
+            editor_apply_value(scene, Entity(index), .Position, local.position)
+        }
+        editor_apply_value(scene, Entity(index), .Rotation, local.rotation)
+        editor_apply_value(scene, Entity(index), .Scale, local.scale)
+
+        for field, i in fields {
+            append(&edits, EditorFieldEdit{Entity(index), field, before[i], editor_value(scene, index, field)})
+        }
+        changed += 1
+    }
+    editor_push_field_edits(edits[:], primary)
+    return changed
+}
+
+// The selected entities with no selected ancestor: reparenting those keeps
+// the rest of the selection under them.
+editor_selected_tops :: proc(scene: ^Scene) -> []int {
+    tops := make([dynamic]int, context.temp_allocator)
+    outer: for selected, index in g_editor_selection {
+        if !selected do continue
+        current := index
+        for _ in 0..<MAX_ENTITIES {
+            parent := scene_parent(scene, current) or_break
+            if editor_is_selected(Entity(parent)) do continue outer
+            current = parent
+        }
+        append(&tops, index)
+    }
+    return tops[:]
 }
 
 // A white point light (marker: a small cube) three units in front of the
@@ -301,16 +412,18 @@ editor_restore_deleted_mesh :: proc(
     return true
 }
 
-// Deletes every selected model and light as one undoable step. The sun and
-// camera cannot be deleted and stay selected.
+// Deletes every selected model and light, with its descendants, as one
+// undoable step. The sun and camera cannot be deleted and stay selected.
 editor_delete_selected :: proc(scene: ^Scene) {
     editor_finish_edit()
 
     primary := g_editor_selected
     commands := make([dynamic]EditorCommand, context.temp_allocator)
-    for selected, index in g_editor_selection {
+    // Parents first: undoing restores in reverse, children before parents,
+    // and their links come back with them.
+    for index in editor_selected_subtrees(scene) {
         entity := Entity(index)
-        if !selected || !editor_can_delete_mesh(scene, entity) {
+        if !editor_can_delete_mesh(scene, entity) {
             continue
         }
 

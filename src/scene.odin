@@ -34,7 +34,7 @@ PointLight :: struct{
     orbit_speed: f32,
     orbit_enabled: bool,
     // The light circles this point horizontally, orbit_radius away; its y is
-    // the orbit's height.
+    // the orbit's height. Like the position, it is in the parent's space.
     orbit_center: [3]f32,
     // Distance at which the light has faded out completely. Zero in scenes
     // saved before ranges existed; loading derives one (light_default_range).
@@ -83,9 +83,9 @@ light_default_range :: proc(intensity: f32) -> f32 {
     return math.sqrt(max(intensity * 100 - 1, 1))
 }
 
-spot_light_direction :: proc(transform: Transform) -> alg.Vector3f32 {
-    r := transform_rotation_matrix(transform.rotation)
-    return alg.normalize(alg.Vector3f32{-r[0, 1], -r[1, 1], -r[2, 1]})
+// The world matrix's local -Y axis.
+spot_light_direction :: proc(world: alg.Matrix4f32) -> alg.Vector3f32 {
+    return alg.normalize(alg.Vector3f32{-world[0, 1], -world[1, 1], -world[2, 1]})
 }
 
 spot_light_valid :: proc(light: SpotLight) -> bool {
@@ -163,8 +163,12 @@ Scene :: struct{
     alive: [MAX_ENTITIES]bool,
     names: [MAX_ENTITIES]string,
 
+    // Relative to the parent, when there is one: see scene_world_matrix.
     transforms: [MAX_ENTITIES]Transform,
     has_transform: [MAX_ENTITIES]bool,
+
+    parents: [MAX_ENTITIES]Entity,
+    has_parent: [MAX_ENTITIES]bool,
 
     mesh_renderers: [MAX_ENTITIES]MeshRenderer,
     has_mesh_renderer: [MAX_ENTITIES]bool,
@@ -200,6 +204,84 @@ transform_matrix :: proc(transform: Transform) -> alg.Matrix4f32 {
            alg.matrix4_scale_f32(transform.scale)
 }
 
+// The transform whose matrix is nearest `m`: exact unless `m` is sheared
+// (rotated under an unevenly scaled ancestor). Spin is left at zero.
+transform_from_matrix :: proc(m: alg.Matrix4f32) -> (transform: Transform) {
+    rotation := m
+    for column in 0..<3 {
+        axis := alg.Vector3f32{m[0, column], m[1, column], m[2, column]}
+        transform.scale[column] = alg.length(axis)
+        if transform.scale[column] > 0 do axis /= transform.scale[column]
+        for row in 0..<3 do rotation[row, column] = axis[row]
+    }
+    transform.position = {m[0, 3], m[1, 3], m[2, 3]}
+    transform.rotation = transform_rotation_from_matrix(rotation)
+    return
+}
+
+// An entity's parent; none for a root, or when the parent's slot is dead.
+scene_parent :: proc(scene: ^Scene, index: int) -> (parent: int, ok: bool) {
+    if !scene.has_parent[index] do return -1, false
+    parent = int(scene.parents[index])
+    return parent, scene_entity_is_alive(scene, Entity(parent)) && scene.has_transform[parent]
+}
+
+scene_set_parent :: proc(scene: ^Scene, index, parent: int) {
+    scene.has_parent[index] = parent >= 0
+    scene.parents[index] = Entity(max(parent, 0))
+}
+
+// Where an entity is in the world: its transform, then each ancestor's in
+// turn. Computed when asked, so it never lags behind an edit.
+scene_world_matrix :: proc(scene: ^Scene, index: int) -> alg.Matrix4f32 {
+    world := transform_matrix(scene.transforms[index])
+    current := index
+    // The bound only matters for a cycle, which loading and the editor prevent.
+    for _ in 0..<MAX_ENTITIES {
+        parent := scene_parent(scene, current) or_break
+        world = transform_matrix(scene.transforms[parent]) * world
+        current = parent
+    }
+    return world
+}
+
+// The space an entity's transform is in: its parent's world matrix.
+scene_parent_matrix :: proc(scene: ^Scene, index: int) -> alg.Matrix4f32 {
+    parent, ok := scene_parent(scene, index)
+    return scene_world_matrix(scene, parent) if ok else alg.MATRIX4F32_IDENTITY
+}
+
+scene_world_position :: proc(scene: ^Scene, index: int) -> alg.Vector3f32 {
+    world := scene_world_matrix(scene, index)
+    return {world[0, 3], world[1, 3], world[2, 3]}
+}
+
+// Whether `ancestor` is the parent of `index`, or its parent's, and so on.
+scene_is_ancestor :: proc(scene: ^Scene, ancestor, index: int) -> bool {
+    current := index
+    for _ in 0..<MAX_ENTITIES {
+        parent := scene_parent(scene, current) or_return
+        if parent == ancestor do return true
+        current = parent
+    }
+    return false
+}
+
+// Entities that can be in a hierarchy: placed ones, except the camera (it
+// steers its own transform) and the sun (only a direction).
+scene_parentable :: proc(scene: ^Scene, index: int) -> bool {
+    return scene_entity_is_alive(scene, Entity(index)) && scene.has_transform[index] &&
+           !scene.has_camera[index] && !scene.has_directional_light[index]
+}
+
+// Whether `parent` (-1: none) can become `index`'s parent: not the entity
+// itself or one of its descendants.
+scene_can_parent :: proc(scene: ^Scene, index, parent: int) -> bool {
+    if !scene_parentable(scene, index) do return false
+    if parent < 0 do return true
+    return parent != index && scene_parentable(scene, parent) && !scene_is_ancestor(scene, index, parent)
+}
+
 // Positive axes keep triangle winding, culling, and picking consistent.
 transform_scale_valid :: proc(scale: alg.Vector3f32) -> bool {
     return scale.x > 0 && scale.y > 0 && scale.z > 0
@@ -211,6 +293,7 @@ scene_clear_entity_slot :: proc(scene: ^Scene, index: int) {
 
     scene.transforms[index] = {}
     scene.has_transform[index] = false
+    scene_set_parent(scene, index, -1)
 
     scene.mesh_renderers[index] = {}
     scene.has_mesh_renderer[index] = false

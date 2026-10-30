@@ -317,4 +317,48 @@ bool dx12_ui_input_text(const char* label, char* buffer, std::size_t capacity) {
     return ImGui::InputText(label, buffer, capacity);
 }
 
+// A row of the entity tree: indented by depth, with an arrow that toggles
+// *open when the row has children, then a selectable label. Returns whether
+// the label was clicked.
+bool dx12_ui_tree_row(const char* label, bool selected, std::int32_t depth, bool has_children, bool* open) {
+    float indent = float(depth) * ImGui::GetStyle().IndentSpacing;
+    if (indent > 0)
+        ImGui::Indent(indent);
+    if (has_children) {
+        ImGui::PushID(label);
+        if (ImGui::ArrowButton("##open", *open ? ImGuiDir_Down : ImGuiDir_Right))
+            *open = !*open;
+        ImGui::PopID();
+    } else {
+        ImGui::Dummy(ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()));
+    }
+    ImGui::SameLine();
+    bool pressed = ImGui::Selectable(label, selected);
+    if (indent > 0)
+        ImGui::Unindent(indent);
+    return pressed;
+}
+
+// Lets the last item be dragged, carrying an entity index.
+void dx12_ui_drag_entity(std::int32_t entity, const char* label) {
+    if (ImGui::BeginDragDropSource()) {
+        ImGui::SetDragDropPayload("ENTITY", &entity, sizeof(entity));
+        ImGui::TextUnformatted(label);
+        ImGui::EndDragDropSource();
+    }
+}
+
+// Whether an entity was dropped on the last item, and which.
+bool dx12_ui_drop_entity(std::int32_t* entity) {
+    bool dropped = false;
+    if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ENTITY")) {
+            *entity = *static_cast<const std::int32_t*>(payload->Data);
+            dropped = true;
+        }
+        ImGui::EndDragDropTarget();
+    }
+    return dropped;
+}
+
 } // extern "C"

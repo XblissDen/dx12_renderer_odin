@@ -69,7 +69,7 @@ renderer_shadow_light_order :: proc(scene: ^Scene, camera_position: alg.Vector3f
         casts := scene.has_spot_light[i] && scene.spot_lights[i].cast_shadows if spot else
                  scene.has_point_light[i] && scene.point_lights[i].cast_shadows
         if !casts do continue
-        append(&candidates, Candidate{i, alg.length(scene.transforms[i].position - camera_position)})
+        append(&candidates, Candidate{i, alg.length(scene_world_position(scene, i) - camera_position)})
     }
     slice.sort_by(candidates[:], proc(a, b: Candidate) -> bool {return a.distance < b.distance})
     order := make([]int, len(candidates), context.temp_allocator)
@@ -86,7 +86,7 @@ renderer_select_spot_shadows :: proc(scene: ^Scene, camera_position: alg.Vector3
         shadows[slot].entity = -1
         if slot < len(order) {
             entity := order[slot]
-            shadows[slot] = renderer_fit_spot_shadow(scene.transforms[entity], scene.spot_lights[entity])
+            shadows[slot] = renderer_fit_spot_shadow(scene_world_matrix(scene, entity), scene.spot_lights[entity])
             shadows[slot].entity = entity
         }
         r.spot_shadow_entities[slot] = shadows[slot].entity
@@ -117,7 +117,7 @@ renderer_select_point_shadows :: proc(scene: ^Scene, camera_position: alg.Vector
         shadows[slot].entity = -1
         if slot < len(order) {
             entity := order[slot]
-            position := scene.transforms[entity].position
+            position := scene_world_position(scene, entity)
             light := scene.point_lights[entity]
             shadow := &shadows[slot]
             shadow.entity = entity
@@ -132,13 +132,14 @@ renderer_select_point_shadows :: proc(scene: ^Scene, camera_position: alg.Vector
     return
 }
 
-renderer_fit_spot_shadow :: proc(transform: Transform, light: SpotLight) -> (shadow: SpotShadow) {
-    direction := spot_light_direction(transform)
+renderer_fit_spot_shadow :: proc(world: alg.Matrix4f32, light: SpotLight) -> (shadow: SpotShadow) {
+    direction := spot_light_direction(world)
+    position := alg.Vector3f32{world[0, 3], world[1, 3], world[2, 3]}
     up := alg.Vector3f32{0, 1, 0}
     if math.abs(direction.y) > 0.99 do up = {0, 0, 1}
     fov := 2 * light.outer_angle
     near := max(light.range * 0.001, 0.02)
-    view := look_at_lh(transform.position, transform.position + direction, up)
+    view := look_at_lh(position, position + direction, up)
     shadow.view_projection = view * perspective_lh(fov, 1, near, light.range)
     shadow.texel_scale = 2 * math.tan(light.outer_angle) / SPOT_SHADOW_MAP_SIZE
     return

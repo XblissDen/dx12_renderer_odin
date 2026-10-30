@@ -33,11 +33,9 @@ EditorGizmo :: struct {
 
     // Drag state, captured when a handle is pressed. The handles sit on the
     // primary selection (`entity`); the rest of the selection follows it.
+    // Drags work in world space; each target converts the change into its
+    // parent's space.
     entity: Entity,
-    field: EditorField,
-    before: [3]f32,
-    start_transform: Transform,
-    start_rotation: alg.Matrix4f32,
     // Handle axes at the start; local axes would otherwise follow a spinning entity.
     start_axes: [3]alg.Vector3f32,
     start_param: f32,
@@ -54,6 +52,9 @@ GizmoTarget :: struct {
     // Position, or an orbiting light's orbit center (see editor_position_field).
     position_field: EditorField,
     position_value: [3]f32,
+    world_position: alg.Vector3f32,
+    // The space its transform is in: the parent's world matrix.
+    parent, parent_inverse: alg.Matrix4f32,
 }
 
 g_editor_gizmo := EditorGizmo{
@@ -96,15 +97,6 @@ gizmo_handle_color :: proc(handle: GizmoHandle) -> u32 {
     return gizmo_color(220, 220, 220)
 }
 
-gizmo_field :: proc(mode: GizmoMode) -> EditorField {
-    switch mode {
-        case .Translate: return .Position
-        case .Rotate: return .Rotation
-        case .Scale: return .Scale
-    }
-    return .Position
-}
-
 // Inverse of transform_rotation_matrix: Euler angles for R = Ry * Rx * Rz.
 transform_rotation_from_matrix :: proc(m: alg.Matrix4f32) -> alg.Vector3f32 {
     sin_x := clamp(-m[1, 2], -1, 1)
@@ -137,11 +129,6 @@ editor_position_field :: proc(scene: ^Scene, index: int) -> EditorField {
     return .Position
 }
 
-editor_gizmo_field :: proc(scene: ^Scene, index: int) -> EditorField {
-    if g_editor_gizmo.mode == .Translate do return editor_position_field(scene, index)
-    return gizmo_field(g_editor_gizmo.mode)
-}
-
 // The fields a drag in the current mode changes on a target. Other entities
 // move around the primary when rotated or scaled, so their position changes too.
 gizmo_target_fields :: proc(target: GizmoTarget) -> (fields: [2]EditorField, count: int) {
@@ -161,11 +148,20 @@ gizmo_target_before :: proc(target: GizmoTarget, field: EditorField) -> [3]f32 {
     return target.position_value
 }
 
-// Moves a target so its entity ends up at `position` (an orbiting light's
-// orbit center moves by as much).
+// Moves a target so its entity ends up at world `position` (an orbiting
+// light's orbit center moves by as much).
 gizmo_move_target :: proc(scene: ^Scene, target: GizmoTarget, position: alg.Vector3f32) {
-    offset := position - target.transform.position
-    editor_apply_value(scene, target.entity, target.position_field, alg.Vector3f32(target.position_value) + offset)
+    offset := position - target.world_position
+    local := alg.mul(target.parent_inverse, alg.Vector4f32{offset.x, offset.y, offset.z, 0})
+    editor_apply_value(scene, target.entity, target.position_field, alg.Vector3f32(target.position_value) + local.xyz)
+}
+
+// Turns a target about its own origin by the world rotation `turn`.
+gizmo_turn_target :: proc(scene: ^Scene, target: GizmoTarget, turn: alg.Matrix4f32) {
+    // The turn as seen in the parent's space: still a pure rotation unless an
+    // ancestor is scaled unevenly, when only its nearest rotation is kept.
+    rotation := target.parent_inverse * turn * target.parent * transform_rotation_matrix(target.transform.rotation)
+    editor_apply_value(scene, target.entity, .Rotation, transform_from_matrix(rotation).rotation)
 }
 
 gizmo_project :: proc(view: GizmoView, point: alg.Vector3f32) -> (screen: [2]f32, ok: bool) {
@@ -218,8 +214,8 @@ editor_gizmo_view :: proc(scene: ^Scene, index: int) -> (view: GizmoView, ok: bo
     view.view_projection = camera_view_matrix(camera, camera_position) *
                            camera_projection(camera, aspect)
 
-    transform := scene.transforms[index]
-    view.center = transform.position
+    world := scene_world_matrix(scene, index)
+    view.center = {world[0, 3], world[1, 3], world[2, 3]}
 
     // Keep a constant on-screen size regardless of distance.
     depth := alg.dot(view.center - camera_position, view.camera_forward)
@@ -229,10 +225,10 @@ editor_gizmo_view :: proc(scene: ^Scene, index: int) -> (view: GizmoView, ok: bo
     view.size = depth * math.tan(CAMERA_FOV_Y * 0.5) * 2 * GIZMO_SIZE_PIXELS / view.height
 
     view.axes = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}
+    // Local axes include the ancestors' rotation.
     if g_editor_gizmo.mode == .Scale || g_editor_gizmo.space == .Local {
-        rotation := transform_rotation_matrix(transform.rotation)
         for i in 0..<3 {
-            view.axes[i] = alg.normalize(alg.Vector3f32{rotation[0, i], rotation[1, i], rotation[2, i]})
+            view.axes[i] = alg.normalize(alg.Vector3f32{world[0, i], world[1, i], world[2, i]})
         }
     }
     return view, true
@@ -368,7 +364,6 @@ editor_gizmo_begin :: proc(scene: ^Scene, index: int, view: GizmoView, handle: G
     }
 
     gizmo := &g_editor_gizmo
-    transform := scene.transforms[index]
     axis_index := int(handle) - int(GizmoHandle.X)
 
     switch {
@@ -392,10 +387,6 @@ editor_gizmo_begin :: proc(scene: ^Scene, index: int, view: GizmoView, handle: G
     editor_finish_edit()
     gizmo.active = handle
     gizmo.entity = Entity(index)
-    gizmo.field = editor_gizmo_field(scene, index)
-    gizmo.before = editor_value(scene, index, gizmo.field)
-    gizmo.start_transform = transform
-    gizmo.start_rotation = transform_rotation_matrix(transform.rotation)
     gizmo.start_axes = view.axes
 
     clear(&gizmo.targets)
@@ -404,17 +395,39 @@ editor_gizmo_begin :: proc(scene: ^Scene, index: int, view: GizmoView, handle: G
         if !selected || other == index do continue
         // The sun's transform does nothing (and its scale is zero).
         if !scene.has_transform[other] || scene.has_camera[other] || scene.has_directional_light[other] do continue
+        if gizmo_moved_by_ancestor(scene, other, index) do continue
         append(&gizmo.targets, gizmo_target(scene, other))
     }
 }
 
+// Whether a selected entity already moves with another target, or moving it
+// would move the primary again: it is the primary's ancestor, or it has a
+// selected ancestor that is the primary or moves itself (one that is not the
+// primary's ancestor).
+gizmo_moved_by_ancestor :: proc(scene: ^Scene, index, primary: int) -> bool {
+    if scene_is_ancestor(scene, index, primary) do return true
+    current := index
+    for _ in 0..<MAX_ENTITIES {
+        parent := scene_parent(scene, current) or_break
+        if editor_is_selected(Entity(parent)) && (parent == primary || !scene_is_ancestor(scene, parent, primary)) {
+            return true
+        }
+        current = parent
+    }
+    return false
+}
+
 gizmo_target :: proc(scene: ^Scene, index: int) -> GizmoTarget {
     field := editor_position_field(scene, index)
+    parent := scene_parent_matrix(scene, index)
     return {
         entity = Entity(index),
         transform = scene.transforms[index],
         position_field = field,
         position_value = editor_value(scene, index, field),
+        world_position = scene_world_position(scene, index),
+        parent = parent,
+        parent_inverse = alg.matrix4_inverse_f32(parent),
     }
 }
 
@@ -425,20 +438,22 @@ editor_gizmo_drag :: proc(scene: ^Scene, view: GizmoView, mouse: SceneMouse) {
         return
     }
 
-    start := gizmo.start_transform
+    start := gizmo.targets[0]
+    pivot := start.world_position
     axis_index := int(gizmo.active) - int(GizmoHandle.X)
     snap := gizmo.snap != key_down(win32.VK_CONTROL)
-    value: [3]f32
-    // The primary's change, which the rest of the selection follows.
+    // The primary's change in world space, which the whole selection follows.
+    delta: alg.Vector3f32
     turn := alg.MATRIX4F32_IDENTITY
+    scale := start.transform.scale
 
     // Snapping counts steps from where the drag started (increments, not a
     // grid), so the same steps work in world and local space.
     switch {
         case gizmo.active == .Center && gizmo.mode == .Translate:
-            hit, ok := gizmo_plane_hit(ray, start.position, view.camera_forward)
+            hit, ok := gizmo_plane_hit(ray, pivot, view.camera_forward)
             if !ok do return
-            delta := hit - gizmo.start_point
+            delta = hit - gizmo.start_point
             if snap {
                 // Whole steps along each of the handle axes.
                 snapped: alg.Vector3f32
@@ -447,9 +462,6 @@ editor_gizmo_drag :: proc(scene: ^Scene, view: GizmoView, mouse: SceneMouse) {
                 }
                 delta = snapped
             }
-            // Relative to the edited field's start: the position, or an
-            // orbiting light's center.
-            value = alg.Vector3f32(gizmo.before) + delta
 
         case gizmo.active == .Center && gizmo.mode == .Scale:
             factor := math.exp((mouse.x - gizmo.start_mouse_x) * GIZMO_UNIFORM_SCALE_RATE)
@@ -457,64 +469,58 @@ editor_gizmo_drag :: proc(scene: ^Scene, view: GizmoView, mouse: SceneMouse) {
                 // Proportional steps, e.g. 0.1 = 10% of the starting size.
                 factor = max(1 + gizmo_snap(factor - 1, gizmo.snap_scale), gizmo.snap_scale)
             }
-            value = start.scale * factor
+            scale *= factor
 
         case gizmo.mode == .Rotate:
             axis := gizmo.start_axes[axis_index]
-            hit, ok := gizmo_plane_hit(ray, start.position, axis)
+            hit, ok := gizmo_plane_hit(ray, pivot, axis)
             if !ok do return
-            current := hit - start.position
+            current := hit - pivot
             angle := math.atan2(
                 alg.dot(axis, alg.cross(gizmo.start_point, current)),
                 alg.dot(gizmo.start_point, current),
             )
             if snap do angle = gizmo_snap(angle, math.to_radians(gizmo.snap_angle_degrees))
-            // Rotating about a local axis (R applied to e_i) equals R * rotate(e_i).
             turn = alg.matrix4_rotate_f32(angle, axis)
-            value = transform_rotation_from_matrix(turn * gizmo.start_rotation)
 
         case gizmo.mode == .Translate:
             axis := gizmo.start_axes[axis_index]
-            s, ok := gizmo_axis_param(ray, start.position, axis)
+            s, ok := gizmo_axis_param(ray, pivot, axis)
             if !ok do return
             distance := s - gizmo.start_param
             if snap do distance = gizmo_snap(distance, gizmo.snap_distance)
-            value = alg.Vector3f32(gizmo.before) + axis * distance
+            delta = axis * distance
 
         case:
             // Scale along one local axis by how far the handle moved along it.
             axis := gizmo.start_axes[axis_index]
-            s, ok := gizmo_axis_param(ray, start.position, axis)
+            s, ok := gizmo_axis_param(ray, pivot, axis)
             if !ok || math.abs(gizmo.start_param) < 0.000001 do return
-            value = start.scale
-            value[axis_index] *= s / gizmo.start_param
+            scale[axis_index] *= s / gizmo.start_param
             if snap {
-                change := gizmo_snap(value[axis_index] - start.scale[axis_index], gizmo.snap_scale)
-                value[axis_index] = start.scale[axis_index] + change
+                change := gizmo_snap(scale[axis_index] - start.transform.scale[axis_index], gizmo.snap_scale)
+                scale[axis_index] = start.transform.scale[axis_index] + change
             }
     }
 
-    editor_apply_value(scene, gizmo.entity, gizmo.field, value)
-
-    // The others: moved by the same amount, or turned and scaled around the
+    // Every target moves by the same amount, or turns and scales around the
     // primary (its position is the pivot), each also turning or scaling
     // about its own origin.
-    pivot := start.position
-    for target in gizmo.targets[1:] {
-        offset := target.transform.position - pivot
+    factor := scale / start.transform.scale
+    for target in gizmo.targets {
+        offset := target.world_position - pivot
         switch gizmo.mode {
             case .Translate:
-                gizmo_move_target(scene, target, target.transform.position + (alg.Vector3f32(value) - alg.Vector3f32(gizmo.before)))
+                gizmo_move_target(scene, target, target.world_position + delta)
             case .Rotate:
-                rotation := turn * transform_rotation_matrix(target.transform.rotation)
-                editor_apply_value(scene, target.entity, .Rotation, transform_rotation_from_matrix(rotation))
+                gizmo_turn_target(scene, target, turn)
                 turned := alg.mul(turn, alg.Vector4f32{offset.x, offset.y, offset.z, 0})
                 gizmo_move_target(scene, target, pivot + turned.xyz)
             case .Scale:
                 // Along the primary's local axes; each entity scales its own
                 // local axes by the same factors.
-                factor := alg.Vector3f32(value) / start.scale
-                editor_apply_value(scene, target.entity, .Scale, target.transform.scale * factor)
+                target_scale := scale if target.entity == gizmo.entity else target.transform.scale * factor
+                editor_apply_value(scene, target.entity, .Scale, target_scale)
                 scaled := pivot
                 for axis, i in gizmo.start_axes {
                     scaled += axis * alg.dot(offset, axis) * factor[i]

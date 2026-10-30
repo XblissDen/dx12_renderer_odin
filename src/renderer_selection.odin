@@ -119,7 +119,7 @@ renderer_render_selection :: proc(scene: ^Scene) {
 
     for selected, index in g_editor_selection {
         if !selected do continue
-        bounds, transform := editor_entity_bounds(scene, Entity(index)) or_continue
+        bounds, world := editor_entity_bounds(scene, Entity(index)) or_continue
 
         // Slightly expand the box so its lines do not fight the mesh surface.
         padding := max(
@@ -129,7 +129,7 @@ renderer_render_selection :: proc(scene: ^Scene) {
         expansion := alg.Vector3f32{padding, padding, padding}
 
         constants := SelectionConstants{
-            model_view_projection = alg.transpose(transform_matrix(transform)) * view * projection,
+            model_view_projection = alg.transpose(world) * view * projection,
             bounds_min = bounds.minimum - expansion,
             primary = 1 if Entity(index) == g_editor_selected else 0,
             bounds_max = bounds.maximum + expansion,

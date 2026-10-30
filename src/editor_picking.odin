@@ -59,8 +59,8 @@ editor_mouse_ray :: proc(
     }, true
 }
 
-editor_ray_to_local :: proc(ray: EditorRay, transform: Transform) -> EditorRay {
-    inverse := alg.matrix4_inverse_f32(transform_matrix(transform))
+editor_ray_to_local :: proc(ray: EditorRay, world: alg.Matrix4f32) -> EditorRay {
+    inverse := alg.matrix4_inverse_f32(world)
 
     origin := alg.mul(inverse, alg.Vector4f32{
         ray.origin.x, ray.origin.y, ray.origin.z, 1,
@@ -146,12 +146,11 @@ editor_pick_meshes :: proc(scene: ^Scene, ray: EditorRay) -> [dynamic]EditorPick
             continue
         }
 
-        transform := scene.transforms[i]
-        if !transform_scale_valid(transform.scale) {
+        if !transform_scale_valid(scene.transforms[i].scale) {
             continue
         }
 
-        local_ray := editor_ray_to_local(ray, transform)
+        local_ray := editor_ray_to_local(ray, scene_world_matrix(scene, i))
         asset := scene.mesh_renderers[i].mesh
         mesh := g_assets.meshes[asset].data
         nearest_distance := ray.far_t
