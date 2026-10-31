@@ -1,7 +1,6 @@
 package main
 
 import d3d12 "vendor:directx/d3d12"
-import dxgi "vendor:directx/dxgi"
 
 // Screen-space ambient occlusion: a depth prepass, an occlusion pass that
 // samples the depth around each pixel, and a depth-aware blur. The lit pass
@@ -44,7 +43,6 @@ renderer_create_ssao_targets :: proc() {
     clear_value := d3d12.CLEAR_VALUE{Format = .R8_UNORM}
     clear_value.Color = {1, 1, 1, 1}
 
-    rtv_increment := r.device->GetDescriptorHandleIncrementSize(.RTV)
     for i in 0..<AO_TARGET_COUNT {
         dx_check(r.device->CreateCommittedResource(
             &heap_props,
@@ -55,39 +53,12 @@ renderer_create_ssao_targets :: proc() {
             d3d12.IResource_UUID,
             (^rawptr)(&r.ao_targets[i]),
         ))
-
-        rtv: d3d12.CPU_DESCRIPTOR_HANDLE
-        r.ao_rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv)
-        rtv.ptr += uint(i) * uint(rtv_increment)
-        r.device->CreateRenderTargetView(r.ao_targets[i], nil, rtv)
+        r.device->CreateRenderTargetView(r.ao_targets[i], nil, descriptor_handle(r.ao_rtv_heap, .RTV, u32(i)))
 
         renderer_write_srv(r.ao_targets[i], .R8_UNORM, r.ao_srv_start + u32(i))
     }
 
     renderer_write_srv(r.depth_buffer, .R32_FLOAT, r.depth_srv_index)
-}
-
-renderer_write_srv :: proc(resource: ^d3d12.IResource, format: dxgi.FORMAT, index: u32) {
-    r := &g_renderer
-    srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
-        Format = format,
-        ViewDimension = .TEXTURE2D,
-        Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
-    }
-    srv_desc.Texture2D = {MipLevels = 1}
-
-    srv: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv)
-    srv.ptr += uint(index) * uint(r.srv_descriptor_size)
-    r.device->CreateShaderResourceView(resource, &srv_desc, srv)
-}
-
-renderer_srv_gpu :: proc(index: u32) -> d3d12.GPU_DESCRIPTOR_HANDLE {
-    r := &g_renderer
-    handle: d3d12.GPU_DESCRIPTOR_HANDLE
-    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&handle)
-    handle.ptr += u64(index) * u64(r.srv_descriptor_size)
-    return handle
 }
 
 // Also runs the late cull, between the camera's early and late calls.
@@ -195,9 +166,7 @@ renderer_ssao_fullscreen :: proc(target_index: int, pso: ^d3d12.IPipelineState) 
     }
     r.command_list->ResourceBarrier(1, &barrier)
 
-    rtv: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.ao_rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv)
-    rtv.ptr += uint(target_index) * uint(r.device->GetDescriptorHandleIncrementSize(.RTV))
+    rtv := descriptor_handle(r.ao_rtv_heap, .RTV, u32(target_index))
     r.command_list->OMSetRenderTargets(1, &rtv, false, nil)
     r.command_list->SetPipelineState(pso)
     r.command_list->DrawInstanced(3, 1, 0, 0)

@@ -297,7 +297,6 @@ Renderer :: struct {
     height: u32,
 
     rtv_heap: ^d3d12.IDescriptorHeap,
-    rtv_descriptor_size: u32,
     render_targets: [FRAME_COUNT]^d3d12.IResource,
 
     command_allocators: [FRAME_COUNT]^d3d12.ICommandAllocator,
@@ -664,8 +663,9 @@ renderer_compile_shader_set :: proc() -> (error: string) {
         when ODIN_DEBUG {
             flags += {.DEBUG, .SKIP_OPTIMIZATION}
         }
+        // The standard include handler finds common.hlsl next to the file.
         job.hr = d3dc.CompileFromFile(
-            win32.utf8_to_wstring(parts[0]), nil, nil,
+            win32.utf8_to_wstring(parts[0]), nil, d3dc.D3DCOMPILE_STANDARD_FILE_INCLUDE,
             strings.clone_to_cstring(parts[1], context.temp_allocator),
             strings.clone_to_cstring(parts[2], context.temp_allocator),
             transmute(u32)flags, 0, &job.blob, &job.errors,
@@ -813,7 +813,8 @@ renderer_reload_shaders :: proc() {
 SHADER_POLL_INTERVAL :: 250 * time.Millisecond
 
 // Sums the write times of shaders/*.hlsl, so editing, adding, or removing a
-// file changes it. `environment` covers only the IBL bake shaders.
+// file changes it. `environment` covers only the IBL bake shaders and
+// common.hlsl, which they include.
 renderer_shader_stamp :: proc() -> (all, environment: u64) {
     data: win32.WIN32_FIND_DATAW
     find := win32.FindFirstFileW(win32.L("shaders\\*.hlsl"), &data)
@@ -824,7 +825,8 @@ renderer_shader_stamp :: proc() -> (all, environment: u64) {
         all += stamp
         name_buffer: [win32.MAX_PATH * 3]u8
         name := win32.wstring_to_utf8(name_buffer[:], win32.wstring(raw_data(data.cFileName[:])))
-        if strings.equal_fold(name, "irradiance.hlsl") || strings.equal_fold(name, "environment_prefilter.hlsl") {
+        if strings.equal_fold(name, "irradiance.hlsl") || strings.equal_fold(name, "environment_prefilter.hlsl") ||
+           strings.equal_fold(name, "common.hlsl") {
             environment += stamp
         }
         if !win32.FindNextFileW(find, &data) do break
@@ -970,16 +972,7 @@ renderer_init :: proc() {
         Flags = {},
     }
     dx_check(r.device->CreateDescriptorHeap(&rtv_heap_desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&r.rtv_heap)))
-    
-    r.rtv_descriptor_size = r.device->GetDescriptorHandleIncrementSize(.RTV)
-
-    rtv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
-    for i in 0..<FRAME_COUNT {
-        dx_check(r.swap_chain->GetBuffer(u32(i), d3d12.IResource_UUID, (^rawptr)(&r.render_targets[i])))
-        r.device->CreateRenderTargetView(r.render_targets[i], nil, rtv_handle)
-        rtv_handle.ptr += uint(r.rtv_descriptor_size)
-    }
+    renderer_create_back_buffer_views()
 
     for i in 0..<FRAME_COUNT{
         dx_check(r.device->CreateCommandAllocator(
@@ -1025,7 +1018,7 @@ Root_Slot :: enum u32 {
     Prefiltered,         // t4
     Textures,            // t22 onwards: the whole SRV heap, indexed by the objects' material textures
     Frame_Constants,     // b4: camera, lights, shadows, AO, TAA matrices
-    Shadow_Cascade,      // b5: root constant, the shadow view being drawn (cascade, spot slot or point face)
+    Shadow_View,         // b5: root constant, the shadow view being drawn (cascade, spot slot or point face)
     Texture_T8,          // t8: ambient occlusion, or TAA motion vectors
     Depth,               // t9: scene depth
     Mip_Constants,       // b6: root constant, texture mip builder flags
@@ -1064,7 +1057,7 @@ ROOT_LAYOUT := [Root_Slot]Root_Param{
     .Prefiltered         = {.Table, 4, 1, .PIXEL},
     .Textures            = {.Table, 22, SRV_HEAP_CAPACITY, .PIXEL},
     .Frame_Constants     = {.CBV, 4, 0, .ALL},
-    .Shadow_Cascade      = {.Constants, 5, 1, .VERTEX},
+    .Shadow_View         = {.Constants, 5, 1, .VERTEX},
     .Texture_T8          = {.Table, 8, 1, .PIXEL},
     .Depth               = {.Table, 9, 1, .PIXEL},
     .Mip_Constants       = {.Constants, 6, 1, .PIXEL},
@@ -1202,23 +1195,82 @@ renderer_create_root_signature :: proc() {
         pStaticSamplers = &samplers[0],
         Flags = {.ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT},
     }
+    r.root_signature = create_root_signature(&rs_desc, "Main")
+}
 
+// Serializes and creates a root signature; `name` labels the serializer's
+// messages.
+create_root_signature :: proc(desc: ^d3d12.ROOT_SIGNATURE_DESC, name: string) -> (root_signature: ^d3d12.IRootSignature) {
     signature, errors: ^d3d12.IBlob
-    hr := d3d12.SerializeRootSignature(&rs_desc, ._1, &signature, &errors)
+    hr := d3d12.SerializeRootSignature(desc, ._1, &signature, &errors)
     if errors != nil {
-        fmt.println("Root signature:", cstring(errors->GetBufferPointer()))
+        fmt.println(name, "root signature:", cstring(errors->GetBufferPointer()))
         errors->Release()
     }
     dx_check(hr)
     defer signature->Release()
-
-    dx_check(r.device->CreateRootSignature(
-        0,
-        signature->GetBufferPointer(),
-        signature->GetBufferSize(),
-        d3d12.IRootSignature_UUID,
-        (^rawptr)(&r.root_signature),
+    dx_check(g_renderer.device->CreateRootSignature(
+        0, signature->GetBufferPointer(), signature->GetBufferSize(),
+        d3d12.IRootSignature_UUID, (^rawptr)(&root_signature),
     ))
+    return
+}
+
+// A committed buffer in `heap_type` memory, starting in `state`.
+create_buffer :: proc(size: u64, heap_type: d3d12.HEAP_TYPE, flags: d3d12.RESOURCE_FLAGS, state: d3d12.RESOURCE_STATES) -> (buffer: ^d3d12.IResource) {
+    heap := d3d12.HEAP_PROPERTIES{Type = heap_type}
+    desc := d3d12.RESOURCE_DESC{
+        Dimension = .BUFFER, Width = size, Height = 1, DepthOrArraySize = 1,
+        MipLevels = 1, SampleDesc = {Count = 1}, Layout = .ROW_MAJOR, Flags = flags,
+    }
+    dx_check(g_renderer.device->CreateCommittedResource(
+        &heap, {}, &desc, state, nil, d3d12.IResource_UUID, (^rawptr)(&buffer),
+    ))
+    return
+}
+
+// A transition barrier for every subresource of `resource`.
+resource_transition :: proc(resource: ^d3d12.IResource, before, after: d3d12.RESOURCE_STATES) -> d3d12.RESOURCE_BARRIER {
+    barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
+    barrier.Transition = {
+        pResource = resource, StateBefore = before, StateAfter = after,
+        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+    }
+    return barrier
+}
+
+// Descriptor `index` of a heap of `kind` (SRVs, RTVs or DSVs), for writing a
+// view or binding a target.
+descriptor_handle :: proc(heap: ^d3d12.IDescriptorHeap, kind: d3d12.DESCRIPTOR_HEAP_TYPE, index: u32) -> d3d12.CPU_DESCRIPTOR_HANDLE {
+    handle: d3d12.CPU_DESCRIPTOR_HANDLE
+    heap->GetCPUDescriptorHandleForHeapStart(&handle)
+    handle.ptr += uint(index) * uint(g_renderer.device->GetDescriptorHandleIncrementSize(kind))
+    return handle
+}
+
+// Slot `index` of the SRV heap: the CPU handle to write a view to, and the
+// GPU handle that binds a table starting there.
+renderer_srv_cpu :: proc(index: u32) -> d3d12.CPU_DESCRIPTOR_HANDLE {
+    return descriptor_handle(g_renderer.srv_heap, .CBV_SRV_UAV, index)
+}
+
+renderer_srv_gpu :: proc(index: u32) -> d3d12.GPU_DESCRIPTOR_HANDLE {
+    r := &g_renderer
+    handle: d3d12.GPU_DESCRIPTOR_HANDLE
+    r.srv_heap->GetGPUDescriptorHandleForHeapStart(&handle)
+    handle.ptr += u64(index) * u64(r.srv_descriptor_size)
+    return handle
+}
+
+// A view of a 2D texture's single level as `format`, at `index`.
+renderer_write_srv :: proc(resource: ^d3d12.IResource, format: dxgi.FORMAT, index: u32) {
+    srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
+        Format = format,
+        ViewDimension = .TEXTURE2D,
+        Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
+    }
+    srv_desc.Texture2D = {MipLevels = 1}
+    g_renderer.device->CreateShaderResourceView(resource, &srv_desc, renderer_srv_cpu(index))
 }
 
 shader_bytecode :: proc(blob: ^d3d12.IBlob) -> d3d12.SHADER_BYTECODE {
@@ -1629,28 +1681,22 @@ renderer_create_depth_buffer :: proc(){
         ViewDimension = .TEXTURE2D,
         Flags = {},
     }
-    dsv_handle : d3d12.CPU_DESCRIPTOR_HANDLE
-    r.dsv_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle)
-
-    r.device->CreateDepthStencilView(
-        r.depth_buffer,
-        &dsv_desc,
-        dsv_handle,
-    )
-
+    r.device->CreateDepthStencilView(r.depth_buffer, &dsv_desc, renderer_depth_dsv(read_only = false))
     dsv_desc.Flags = {.READ_ONLY_DEPTH}
-    dsv_handle.ptr += uint(r.device->GetDescriptorHandleIncrementSize(.DSV))
-    r.device->CreateDepthStencilView(r.depth_buffer, &dsv_desc, dsv_handle)
+    r.device->CreateDepthStencilView(r.depth_buffer, &dsv_desc, renderer_depth_dsv(read_only = true))
 }
 
 renderer_depth_dsv :: proc(read_only: bool) -> d3d12.CPU_DESCRIPTOR_HANDLE {
+    return descriptor_handle(g_renderer.dsv_heap, .DSV, 1 if read_only else 0)
+}
+
+// The swap chain's buffers and their RTVs, at startup and after a resize.
+renderer_create_back_buffer_views :: proc() {
     r := &g_renderer
-    handle: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.dsv_heap->GetCPUDescriptorHandleForHeapStart(&handle)
-    if read_only {
-        handle.ptr += uint(r.device->GetDescriptorHandleIncrementSize(.DSV))
+    for i in 0..<FRAME_COUNT {
+        dx_check(r.swap_chain->GetBuffer(u32(i), d3d12.IResource_UUID, (^rawptr)(&r.render_targets[i])))
+        r.device->CreateRenderTargetView(r.render_targets[i], nil, descriptor_handle(r.rtv_heap, .RTV, u32(i)))
     }
-    return handle
 }
 
 renderer_resize:: proc(width, height: u32){
@@ -1687,19 +1733,7 @@ renderer_resize:: proc(width, height: u32){
     r.width = width
     r.height = height
     r.frame_index = r.swap_chain->GetCurrentBackBufferIndex()
-
-    rtv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
-
-    for i in 0..<FRAME_COUNT{
-        dx_check(r.swap_chain->GetBuffer(
-            u32(i),
-            d3d12.IResource_UUID,
-            (^rawptr)(&r.render_targets[i]),
-        ))
-        r.device->CreateRenderTargetView(r.render_targets[i], nil, rtv_handle)
-        rtv_handle.ptr += uint(r.rtv_descriptor_size)
-    }
+    renderer_create_back_buffer_views()
 
     renderer_create_depth_buffer()
 
@@ -1758,10 +1792,7 @@ renderer_load_textures :: proc(){
     }
     environment_slots := [3]u32{r.environment_srv_index, r.irradiance_srv_index, r.prefilter_srv_index}
     for index in environment_slots {
-        srv: d3d12.CPU_DESCRIPTOR_HANDLE
-        r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv)
-        srv.ptr += uint(index) * uint(r.srv_descriptor_size)
-        r.device->CreateShaderResourceView(nil, &null_desc, srv)
+        r.device->CreateShaderResourceView(nil, &null_desc, renderer_srv_cpu(index))
     }
     renderer_create_mip_resources()
     r.textures = make([]GpuTexture, len(g_assets.textures))
@@ -1931,13 +1962,7 @@ renderer_upload_texture :: proc(
         Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
     }
     srv_desc.Texture2D = { MipLevels = mip_count }
-
-    srv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv_handle)
-    srv_handle.ptr += uint(gpu.srv_index) * uint(r.srv_descriptor_size)
-
-    r.device->CreateShaderResourceView(gpu.resource, &srv_desc, srv_handle)
-
+    r.device->CreateShaderResourceView(gpu.resource, &srv_desc, renderer_srv_cpu(gpu.srv_index))
     return
 }
 

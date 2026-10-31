@@ -60,7 +60,9 @@ std::int32_t dx12_ui_init(void* hwnd, void* device_ptr, void* queue_ptr,
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     auto& io = ImGui::GetIO();
-    io.IniFilename = nullptr;
+    // Panel positions and sizes persist in imgui.ini in the working directory
+    // (ImGui's default name); the panels' own placement applies only to
+    // panels the file does not know yet.
     io.LogFilename = nullptr;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     // Cursor visibility and confinement remain controlled by the L key.

@@ -9,3 +9,4 @@ dx12_renderer.exe
 *.ilk
 vendor/imgui/build/
 vendor/imgui/lib/
+imgui.ini

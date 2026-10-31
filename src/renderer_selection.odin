@@ -1,6 +1,5 @@
 package main
 
-import "core:fmt"
 import alg "core:math/linalg"
 import d3d12 "vendor:directx/d3d12"
 import dxgi "vendor:directx/dxgi"
@@ -48,23 +47,7 @@ renderer_create_selection_root_signature :: proc() {
         // The mask pass reads mesh positions.
         Flags = {.ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT},
     }
-
-    signature, errors: ^d3d12.IBlob
-    hr := d3d12.SerializeRootSignature(&root_desc, ._1, &signature, &errors)
-    if errors != nil {
-        fmt.println("Selection root signature:", cstring(errors->GetBufferPointer()))
-        errors->Release()
-    }
-    dx_check(hr)
-    defer signature->Release()
-
-    dx_check(r.device->CreateRootSignature(
-        0,
-        signature->GetBufferPointer(),
-        signature->GetBufferSize(),
-        d3d12.IRootSignature_UUID,
-        (^rawptr)(&r.selection_root_signature),
-    ))
+    r.selection_root_signature = create_root_signature(&root_desc, "Selection")
 }
 
 // The mask and outline pipelines; rebuilt by shader hot-reload.

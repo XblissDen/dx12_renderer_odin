@@ -2,6 +2,8 @@
 // approximation): for each reflection direction, the panorama's light
 // averaged over the GGX lobe of this mip's roughness.
 
+#include "common.hlsl"
+
 Texture2D<float4> g_environment : register(t2);
 SamplerState g_sampler : register(s3);
 
@@ -17,26 +19,9 @@ struct VSOutput
     float2 uv       : TEXCOORD0;
 };
 
-float2 DirectionToUV(float3 direction)
-{
-    return float2(
-        atan2(direction.z, direction.x) / (2.0f * 3.14159265f) + 0.5f,
-        acos(clamp(direction.y, -1.0f, 1.0f)) / 3.14159265f
-    );
-}
-
 float4 PSMain(VSOutput input) : SV_TARGET
 {
-    const float PI = 3.14159265f;
-
-    float phi = (input.uv.x - 0.5f) * 2.0f * PI;
-    float theta = input.uv.y * PI;
-
-    float3 N = float3(
-        sin(theta) * cos(phi),
-        cos(theta),
-        sin(theta) * sin(phi)
-    );
+    float3 N = UVToDirection(input.uv);
 
     uint source_width, source_height, source_mips;
     g_environment.GetDimensions(0, source_width, source_height, source_mips);

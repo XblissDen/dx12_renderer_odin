@@ -5,7 +5,6 @@ package main
 // into indirect calls. Then the GPU cull passes (cull.hlsl) that decide how
 // many instances each call draws. docs/frame.md walks through it.
 
-import "core:fmt"
 import "core:math"
 import "core:slice"
 import alg "core:math/linalg"
@@ -151,6 +150,8 @@ FrameDraws :: struct {
     // How much of this frame's instance list, cull entries and indirect
     // calls those use.
     instance_count, entry_count, command_count: int,
+    // The camera's entries come first; the late cull runs over just these.
+    camera_entry_count: int,
 }
 
 // Groups candidate draws into calls. With `merge`, draws of the same submesh
@@ -650,7 +651,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     late_command_offset := data.command_count
     data.late_scene_batches = renderer_add_view_batches(data, opaque_layout, 0, with_entries = false)
     data.transparent_batches = renderer_add_view_batches(data, renderer_batch_draws(data, transparent_order, merge = false), 0)
-    camera_entry_count := data.entry_count
+    data.camera_entry_count = data.entry_count
 
     // Only shadow views with a light this frame get calls.
     view_frustums: [CULL_VIEW_COUNT]Frustum
@@ -685,7 +686,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     cull.entry_count = u32(data.entry_count)
     cull.culling_enabled = u32(r.frustum_culling_enabled)
     cull.opaque_entry_count = u32(opaque_entry_count)
-    cull.camera_entry_count = u32(camera_entry_count)
+    cull.camera_entry_count = u32(data.camera_entry_count)
     cull.late_command_offset = u32(late_command_offset)
     // The counters start at zero; the calls follow them.
     (^CullCounters)(renderer_frame_indirect_header())^ = {}
@@ -728,15 +729,6 @@ renderer_bind_cull :: proc(late: bool) {
     r.command_list->SetComputeRootUnorderedAccessView(u32(Cull_Root_Slot.Visibility), r.visibility_buffer->GetGPUVirtualAddress())
 }
 
-buffer_transition :: proc(resource: ^d3d12.IResource, before, after: d3d12.RESOURCE_STATES) -> d3d12.RESOURCE_BARRIER {
-    barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
-    barrier.Transition = {
-        pResource = resource, StateBefore = before, StateAfter = after,
-        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
-    }
-    return barrier
-}
-
 // The early cull (cull.hlsl): copies this frame's indirect calls to the GPU,
 // then fills in the shadow views' calls and the camera's early ones (what it
 // saw last frame). Runs before the shadow pass.
@@ -747,16 +739,16 @@ renderer_cull_draws :: proc(data: ^FrameDraws) {
 
     // The buffers decay to the common state after each frame's commands.
     barriers := [3]d3d12.RESOURCE_BARRIER{
-        buffer_transition(r.indirect_buffer, d3d12.RESOURCE_STATE_COMMON, {.COPY_DEST}),
-        buffer_transition(r.instance_buffer, d3d12.RESOURCE_STATE_COMMON, {.UNORDERED_ACCESS}),
-        buffer_transition(r.visibility_buffer, d3d12.RESOURCE_STATE_COMMON, {.UNORDERED_ACCESS}),
+        resource_transition(r.indirect_buffer, d3d12.RESOURCE_STATE_COMMON, {.COPY_DEST}),
+        resource_transition(r.instance_buffer, d3d12.RESOURCE_STATE_COMMON, {.UNORDERED_ACCESS}),
+        resource_transition(r.visibility_buffer, d3d12.RESOURCE_STATE_COMMON, {.UNORDERED_ACCESS}),
     }
     r.command_list->ResourceBarrier(len(barriers), &barriers[0])
     r.command_list->CopyBufferRegion(
         r.indirect_buffer, 0, r.indirect_upload_buffer, u64(int(r.frame_slot) * INDIRECT_SLOT_SIZE),
         u64(CULL_HEADER_SIZE + data.command_count * size_of(IndirectDraw)),
     )
-    barriers[0] = buffer_transition(r.indirect_buffer, {.COPY_DEST}, {.UNORDERED_ACCESS})
+    barriers[0] = resource_transition(r.indirect_buffer, {.COPY_DEST}, {.UNORDERED_ACCESS})
     r.command_list->ResourceBarrier(1, &barriers[0])
 
     if data.entry_count > 0 {
@@ -764,8 +756,8 @@ renderer_cull_draws :: proc(data: ^FrameDraws) {
         r.command_list->Dispatch(u32(data.entry_count + 63) / 64, 1, 1)
     }
 
-    barriers[0] = buffer_transition(r.indirect_buffer, {.UNORDERED_ACCESS}, {.INDIRECT_ARGUMENT})
-    barriers[1] = buffer_transition(r.instance_buffer, {.UNORDERED_ACCESS}, {.NON_PIXEL_SHADER_RESOURCE})
+    barriers[0] = resource_transition(r.indirect_buffer, {.UNORDERED_ACCESS}, {.INDIRECT_ARGUMENT})
+    barriers[1] = resource_transition(r.instance_buffer, {.UNORDERED_ACCESS}, {.NON_PIXEL_SHADER_RESOURCE})
     r.command_list->ResourceBarrier(2, &barriers[0])
 }
 
@@ -783,8 +775,8 @@ renderer_cull_late :: proc(data: ^FrameDraws) {
     if r.occlusion_culling_enabled do renderer_build_hiz()
 
     barriers := [2]d3d12.RESOURCE_BARRIER{
-        buffer_transition(r.indirect_buffer, {.INDIRECT_ARGUMENT}, {.UNORDERED_ACCESS}),
-        buffer_transition(r.instance_buffer, {.NON_PIXEL_SHADER_RESOURCE}, {.UNORDERED_ACCESS}),
+        resource_transition(r.indirect_buffer, {.INDIRECT_ARGUMENT}, {.UNORDERED_ACCESS}),
+        resource_transition(r.instance_buffer, {.NON_PIXEL_SHADER_RESOURCE}, {.UNORDERED_ACCESS}),
     }
     r.command_list->ResourceBarrier(len(barriers), &barriers[0])
     // The early cull read the visibility flags that this one rewrites.
@@ -792,14 +784,13 @@ renderer_cull_late :: proc(data: ^FrameDraws) {
     visibility_done.UAV = {pResource = r.visibility_buffer}
     r.command_list->ResourceBarrier(1, &visibility_done)
 
-    camera_entries := u32(r.cull_constants_mapped[r.frame_slot].camera_entry_count)
-    if camera_entries > 0 {
+    if data.camera_entry_count > 0 {
         r.command_list->SetPipelineState(r.cull_pipeline_state)
-        r.command_list->Dispatch((camera_entries + 63) / 64, 1, 1)
+        r.command_list->Dispatch(u32(data.camera_entry_count + 63) / 64, 1, 1)
     }
 
-    barriers[0] = buffer_transition(r.indirect_buffer, {.UNORDERED_ACCESS}, {.INDIRECT_ARGUMENT, .COPY_SOURCE})
-    barriers[1] = buffer_transition(r.instance_buffer, {.UNORDERED_ACCESS}, {.NON_PIXEL_SHADER_RESOURCE})
+    barriers[0] = resource_transition(r.indirect_buffer, {.UNORDERED_ACCESS}, {.INDIRECT_ARGUMENT, .COPY_SOURCE})
+    barriers[1] = resource_transition(r.instance_buffer, {.UNORDERED_ACCESS}, {.NON_PIXEL_SHADER_RESOURCE})
     r.command_list->ResourceBarrier(len(barriers), &barriers[0])
     r.command_list->CopyBufferRegion(r.cull_readback, u64(r.frame_slot) * size_of(CullCounters), r.indirect_buffer, 0, size_of(CullCounters))
 }
@@ -878,26 +869,19 @@ renderer_create_hiz :: proc() {
         d3d12.IResource_UUID, (^rawptr)(&r.hiz_texture),
     ))
 
-    handle :: proc(index: u32) -> d3d12.CPU_DESCRIPTOR_HANDLE {
-        r := &g_renderer
-        h: d3d12.CPU_DESCRIPTOR_HANDLE
-        r.srv_heap->GetCPUDescriptorHandleForHeapStart(&h)
-        h.ptr += uint(index) * uint(r.srv_descriptor_size)
-        return h
-    }
     srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
         Format = .R32_FLOAT,
         ViewDimension = .TEXTURE2D,
         Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
     }
     srv_desc.Texture2D = {MipLevels = r.hiz_mip_count}
-    r.device->CreateShaderResourceView(r.hiz_texture, &srv_desc, handle(r.hiz_srv_start))
+    r.device->CreateShaderResourceView(r.hiz_texture, &srv_desc, renderer_srv_cpu(r.hiz_srv_start))
     for level in 0..<r.hiz_mip_count {
         srv_desc.Texture2D = {MostDetailedMip = level, MipLevels = 1}
-        r.device->CreateShaderResourceView(r.hiz_texture, &srv_desc, handle(r.hiz_srv_start + 1 + level))
+        r.device->CreateShaderResourceView(r.hiz_texture, &srv_desc, renderer_srv_cpu(r.hiz_srv_start + 1 + level))
         uav_desc := d3d12.UNORDERED_ACCESS_VIEW_DESC{Format = .R32_FLOAT, ViewDimension = .TEXTURE2D}
         uav_desc.Texture2D = {MipSlice = level}
-        r.device->CreateUnorderedAccessView(r.hiz_texture, nil, &uav_desc, handle(r.hiz_uav_start + level))
+        r.device->CreateUnorderedAccessView(r.hiz_texture, nil, &uav_desc, renderer_srv_cpu(r.hiz_uav_start + level))
     }
 }
 
@@ -941,21 +925,12 @@ renderer_create_culling :: proc() {
     r.indirect_upload_buffer, mapped = renderer_create_mapped_upload_buffer(u64(FRAME_COUNT * INDIRECT_SLOT_SIZE))
     r.indirect_upload_mapped = ([^]u8)(mapped)
 
-    buffer :: proc(size: u64, heap_type: d3d12.HEAP_TYPE, flags: d3d12.RESOURCE_FLAGS, state: d3d12.RESOURCE_STATES) -> (resource: ^d3d12.IResource) {
-        heap := d3d12.HEAP_PROPERTIES{Type = heap_type}
-        desc := d3d12.RESOURCE_DESC{
-            Dimension = .BUFFER, Width = size, Height = 1, DepthOrArraySize = 1,
-            MipLevels = 1, SampleDesc = {Count = 1}, Layout = .ROW_MAJOR, Flags = flags,
-        }
-        dx_check(g_renderer.device->CreateCommittedResource(&heap, {}, &desc, state, nil, d3d12.IResource_UUID, (^rawptr)(&resource)))
-        return
-    }
     // One of each on the GPU: frames run in order on the one queue.
-    r.indirect_buffer = buffer(INDIRECT_SLOT_SIZE, .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON)
-    r.instance_buffer = buffer(MAX_INSTANCES * size_of(u32), .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON)
+    r.indirect_buffer = create_buffer(INDIRECT_SLOT_SIZE, .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON)
+    r.instance_buffer = create_buffer(MAX_INSTANCES * size_of(u32), .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON)
     // Kept across frames; starts zeroed, so the first frame draws everything late.
-    r.visibility_buffer = buffer(MAX_DRAWS * size_of(u32), .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON)
-    r.cull_readback = buffer(FRAME_COUNT * size_of(CullCounters), .READBACK, {}, {.COPY_DEST})
+    r.visibility_buffer = create_buffer(MAX_DRAWS * size_of(u32), .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON)
+    r.cull_readback = create_buffer(FRAME_COUNT * size_of(CullCounters), .READBACK, {}, {.COPY_DEST})
 
     ranges := #partial [Cull_Root_Slot]d3d12.DESCRIPTOR_RANGE{
         .Hiz = {RangeType = .SRV, NumDescriptors = 1, BaseShaderRegister = 2},
@@ -974,18 +949,7 @@ renderer_create_culling :: proc() {
         params[slot] = {ParameterType = .DESCRIPTOR_TABLE, DescriptorTable = {NumDescriptorRanges = 1, pDescriptorRanges = &ranges[slot]}}
     }
     rs_desc := d3d12.ROOT_SIGNATURE_DESC{NumParameters = len(params), pParameters = &params[Cull_Root_Slot(0)]}
-    signature, errors: ^d3d12.IBlob
-    hr := d3d12.SerializeRootSignature(&rs_desc, ._1, &signature, &errors)
-    if errors != nil {
-        fmt.println("Cull root signature:", cstring(errors->GetBufferPointer()))
-        errors->Release()
-    }
-    dx_check(hr)
-    defer signature->Release()
-    dx_check(r.device->CreateRootSignature(
-        0, signature->GetBufferPointer(), signature->GetBufferSize(),
-        d3d12.IRootSignature_UUID, (^rawptr)(&r.cull_root_signature),
-    ))
+    r.cull_root_signature = create_root_signature(&rs_desc, "Cull")
 
     // IndirectDraw's fields, in order.
     arguments := [4]d3d12.INDIRECT_ARGUMENT_DESC{

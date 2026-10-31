@@ -5,7 +5,7 @@ import "core:math"
 import alg "core:math/linalg"
 import "core:slice"
 
-editor_find_available_mesh_slot :: proc(scene: ^Scene) -> int {
+editor_find_available_slot :: proc(scene: ^Scene) -> int {
     for i in 0..<scene.entity_count {
         if scene.alive[i] {
             continue
@@ -37,16 +37,16 @@ editor_light_fits :: proc(scene: ^Scene) -> bool {
     return false
 }
 
-editor_can_duplicate_mesh :: proc(scene: ^Scene, entity: Entity) -> bool {
+editor_can_duplicate :: proc(scene: ^Scene, entity: Entity) -> bool {
     index := int(entity)
     is_light := index >= 0 && (scene.has_point_light[index] || scene.has_spot_light[index])
-    return editor_find_available_mesh_slot(scene) >= 0 &&
-           editor_can_delete_mesh(scene, entity) &&
+    return editor_find_available_slot(scene) >= 0 &&
+           editor_can_delete(scene, entity) &&
            (!is_light || scene_local_light_count(scene) < MAX_LIGHTS)
 }
 
-editor_mesh_snapshot :: proc(scene: ^Scene, index: int) -> EditorMeshSnapshot {
-    snapshot := EditorMeshSnapshot{
+editor_entity_snapshot :: proc(scene: ^Scene, index: int) -> EditorEntitySnapshot {
+    snapshot := EditorEntitySnapshot{
         name = scene.names[index],
         transform = scene.transforms[index],
         material = scene.materials[index],
@@ -61,7 +61,7 @@ editor_mesh_snapshot :: proc(scene: ^Scene, index: int) -> EditorMeshSnapshot {
 }
 
 // Adds the snapshot's components to an entity slot that is (being made) alive.
-editor_add_snapshot_components :: proc(scene: ^Scene, entity: Entity, snapshot: EditorMeshSnapshot) {
+editor_add_snapshot_components :: proc(scene: ^Scene, entity: Entity, snapshot: EditorEntitySnapshot) {
     scene_add_transform(scene, entity, snapshot.transform)
     if mesh_renderer, ok := snapshot.mesh_renderer.?; ok {
         scene_add_mesh_renderer(scene, entity, mesh_renderer)
@@ -72,10 +72,10 @@ editor_add_snapshot_components :: proc(scene: ^Scene, entity: Entity, snapshot: 
     if parent, ok := snapshot.parent.?; ok do scene_set_parent(scene, int(entity), int(parent))
 }
 
-editor_restore_created_mesh :: proc(
+editor_restore_created_entity :: proc(
     scene: ^Scene,
     entity: Entity,
-    snapshot: EditorMeshSnapshot,
+    snapshot: EditorEntitySnapshot,
 ) -> bool {
     index := int(entity)
 
@@ -102,8 +102,8 @@ editor_restore_created_mesh :: proc(
     return true
 }
 
-editor_remove_created_mesh :: proc(scene: ^Scene, entity: Entity) -> bool {
-    if !editor_can_delete_mesh(scene, entity) {
+editor_remove_created_entity :: proc(scene: ^Scene, entity: Entity) -> bool {
+    if !editor_can_delete(scene, entity) {
         return false
     }
 
@@ -114,26 +114,26 @@ editor_remove_created_mesh :: proc(scene: ^Scene, entity: Entity) -> bool {
 }
 
 // Creates an entity from a snapshot; the caller pushes the returned command.
-editor_create_entity_command :: proc(scene: ^Scene, snapshot: EditorMeshSnapshot, source: Entity) -> (EditorCommand, bool) {
-    slot := editor_find_available_mesh_slot(scene)
+editor_create_entity_command :: proc(scene: ^Scene, snapshot: EditorEntitySnapshot, source: Entity) -> (EditorCommand, bool) {
+    slot := editor_find_available_slot(scene)
     if slot < 0 {
         g_editor_file_status = "No reusable entity slots are available."
         return {}, false
     }
     created := Entity(slot)
-    if !editor_restore_created_mesh(scene, created, snapshot) {
+    if !editor_restore_created_entity(scene, created, snapshot) {
         return {}, false
     }
     return EditorCommand{
-        kind = .Create_Mesh,
+        kind = .Create_Entity,
         entity = created,
-        mesh_snapshot = snapshot,
+        snapshot = snapshot,
         source_entity = source,
     }, true
 }
 
 // Creates an entity from a snapshot as one undoable step and selects it.
-editor_create_entity :: proc(scene: ^Scene, snapshot: EditorMeshSnapshot, source: Entity) -> bool {
+editor_create_entity :: proc(scene: ^Scene, snapshot: EditorEntitySnapshot, source: Entity) -> bool {
     command := editor_create_entity_command(scene, snapshot, source) or_return
     editor_push_command(command)
     editor_select(command.entity)
@@ -179,7 +179,7 @@ editor_duplicate_selected :: proc(scene: ^Scene) {
     primary := Entity(-1)
     for index in subtrees {
         source := Entity(index)
-        if !editor_can_delete_mesh(scene, source) {
+        if !editor_can_delete(scene, source) {
             continue
         }
         parent, has_parent := scene_parent(scene, index)
@@ -202,7 +202,7 @@ editor_duplicate_selected :: proc(scene: ^Scene) {
             break
         }
 
-        snapshot := editor_mesh_snapshot(scene, index)
+        snapshot := editor_entity_snapshot(scene, index)
         snapshot.name = owned_name
 
         if top {
@@ -355,7 +355,7 @@ editor_add_light :: proc(scene: ^Scene, marker_id, name: string, point: Maybe(Po
     }
     if !assets_texture_valid(marker_material.texture) do marker_material.texture = g_assets.white
 
-    editor_create_entity(scene, EditorMeshSnapshot{
+    editor_create_entity(scene, EditorEntitySnapshot{
         name = owned_name,
         transform = transform,
         mesh_renderer = MeshRenderer{mesh = marker},
@@ -367,7 +367,7 @@ editor_add_light :: proc(scene: ^Scene, marker_id, name: string, point: Maybe(Po
 
 // Models, point and spot lights, and empty entities. The sun (the renderer
 // needs exactly one) and the camera stay.
-editor_can_delete_mesh :: proc(scene: ^Scene, entity: Entity) -> bool {
+editor_can_delete :: proc(scene: ^Scene, entity: Entity) -> bool {
     if !scene_entity_is_alive(scene, entity) {
         return false
     }
@@ -380,8 +380,8 @@ editor_can_delete_mesh :: proc(scene: ^Scene, entity: Entity) -> bool {
            !scene.has_camera[index]
 }
 
-editor_delete_mesh :: proc(scene: ^Scene, entity: Entity) -> bool {
-    if !editor_can_delete_mesh(scene, entity) {
+editor_delete_entity :: proc(scene: ^Scene, entity: Entity) -> bool {
+    if !editor_can_delete(scene, entity) {
         return false
     }
 
@@ -389,10 +389,10 @@ editor_delete_mesh :: proc(scene: ^Scene, entity: Entity) -> bool {
     return true
 }
 
-editor_restore_deleted_mesh :: proc(
+editor_restore_deleted_entity :: proc(
     scene: ^Scene,
     entity: Entity,
-    snapshot: EditorMeshSnapshot,
+    snapshot: EditorEntitySnapshot,
 ) -> bool {
     index := int(entity)
 
@@ -424,19 +424,19 @@ editor_delete_selected :: proc(scene: ^Scene) {
     // and their links come back with them.
     for index in editor_selected_subtrees(scene) {
         entity := Entity(index)
-        if !editor_can_delete_mesh(scene, entity) {
+        if !editor_can_delete(scene, entity) {
             continue
         }
 
-        snapshot := editor_mesh_snapshot(scene, index)
-        if !editor_delete_mesh(scene, entity) {
+        snapshot := editor_entity_snapshot(scene, index)
+        if !editor_delete_entity(scene, entity) {
             continue
         }
 
         append(&commands, EditorCommand{
-            kind = .Delete_Mesh,
+            kind = .Delete_Entity,
             entity = entity,
-            mesh_snapshot = snapshot,
+            snapshot = snapshot,
         })
         g_editor_selection[index] = false
     }

@@ -1,6 +1,5 @@
 package main
 
-import "core:fmt"
 import "core:math"
 import d3d12 "vendor:directx/d3d12"
 
@@ -35,21 +34,10 @@ renderer_create_light_clusters :: proc() {
 
     // Buffers decay to the common state after each frame's command list, so
     // every frame starts from there.
-    heap := d3d12.HEAP_PROPERTIES{Type = .DEFAULT}
-    desc := d3d12.RESOURCE_DESC{
-        Dimension = .BUFFER,
-        Width = u64(LIGHT_CLUSTER_COUNT * LIGHT_CLUSTER_STRIDE * size_of(u32)),
-        Height = 1,
-        DepthOrArraySize = 1,
-        MipLevels = 1,
-        SampleDesc = {Count = 1},
-        Layout = .ROW_MAJOR,
-        Flags = {.ALLOW_UNORDERED_ACCESS},
-    }
-    dx_check(r.device->CreateCommittedResource(
-        &heap, {}, &desc, d3d12.RESOURCE_STATE_COMMON, nil,
-        d3d12.IResource_UUID, (^rawptr)(&r.cluster_buffer),
-    ))
+    r.cluster_buffer = create_buffer(
+        u64(LIGHT_CLUSTER_COUNT * LIGHT_CLUSTER_STRIDE * size_of(u32)),
+        .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON,
+    )
 
     params: [Light_Cluster_Root_Slot]d3d12.ROOT_PARAMETER
     params[.Frame_Constants].ParameterType = .CBV
@@ -59,18 +47,7 @@ renderer_create_light_clusters :: proc() {
     params[.Clusters].ParameterType = .UAV
     params[.Clusters].Descriptor = {ShaderRegister = 0}
     rs_desc := d3d12.ROOT_SIGNATURE_DESC{NumParameters = len(params), pParameters = &params[Light_Cluster_Root_Slot(0)]}
-    signature, errors: ^d3d12.IBlob
-    hr := d3d12.SerializeRootSignature(&rs_desc, ._1, &signature, &errors)
-    if errors != nil {
-        fmt.println("Light cluster root signature:", cstring(errors->GetBufferPointer()))
-        errors->Release()
-    }
-    dx_check(hr)
-    defer signature->Release()
-    dx_check(r.device->CreateRootSignature(
-        0, signature->GetBufferPointer(), signature->GetBufferSize(),
-        d3d12.IRootSignature_UUID, (^rawptr)(&r.cluster_root_signature),
-    ))
+    r.cluster_root_signature = create_root_signature(&rs_desc, "Light cluster")
 }
 
 // The cluster pipeline is released with the others (renderer_pipeline_slots).

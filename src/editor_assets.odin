@@ -309,7 +309,7 @@ editor_add_model :: proc(scene: ^Scene, model: MeshHandle) {
         transform.position = scene.transforms[camera].position + camera_forward(&scene.cameras[camera]) * 3 - (asset.bounds.minimum + asset.bounds.maximum) * 0.5
     }
     if !g_editor_add_node_tree || !editor_model_has_tree(model) {
-        snapshot := EditorMeshSnapshot{name = name, transform = transform, mesh_renderer = MeshRenderer{mesh = model}, material = asset.material, material_slots = asset.material_slots}
+        snapshot := EditorEntitySnapshot{name = name, transform = transform, mesh_renderer = MeshRenderer{mesh = model}, material = asset.material, material_slots = asset.material_slots}
         editor_create_entity(scene, snapshot, g_editor_selected)
         return
     }
@@ -319,12 +319,12 @@ editor_add_model :: proc(scene: ^Scene, model: MeshHandle) {
     // made so far are removed again.
     commands := make([dynamic]EditorCommand, context.temp_allocator)
     entities := make([]Entity, len(asset.nodes), context.temp_allocator)
-    root, root_ok := editor_create_entity_command(scene, EditorMeshSnapshot{name = name, transform = transform}, g_editor_selected)
+    root, root_ok := editor_create_entity_command(scene, EditorEntitySnapshot{name = name, transform = transform}, g_editor_selected)
     if !root_ok do return
     append(&commands, root)
     for node, i in asset.nodes {
         node_name, name_ok := scene_store_owned_name(node.name)
-        snapshot := EditorMeshSnapshot{
+        snapshot := EditorEntitySnapshot{
             name = node_name if name_ok else "",
             transform = node.transform,
             parent = entities[node.parent] if node.parent >= 0 else root.entity,
@@ -336,7 +336,7 @@ editor_add_model :: proc(scene: ^Scene, model: MeshHandle) {
         }
         command, created := editor_create_entity_command(scene, snapshot, Entity(-1))
         if !created {
-            for j := len(commands) - 1; j >= 0; j -= 1 do editor_remove_created_mesh(scene, commands[j].entity)
+            for j := len(commands) - 1; j >= 0; j -= 1 do editor_remove_created_entity(scene, commands[j].entity)
             return
         }
         append(&commands, command)

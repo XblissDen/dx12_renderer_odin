@@ -169,14 +169,14 @@ editor_draw_scene :: proc(scene: ^Scene){
     if ui_begin_panel("Scene"){
         if ui_button("Assets...") do g_editor_import.open = true
         editor_model_picker("New model", &g_editor_model_to_add)
-        ui_begin_disabled(!assets_mesh_valid(g_editor_model_to_add) || editor_find_available_mesh_slot(scene) < 0)
+        ui_begin_disabled(!assets_mesh_valid(g_editor_model_to_add) || editor_find_available_slot(scene) < 0)
         if ui_button("Add Model") do editor_add_model(scene, g_editor_model_to_add)
         ui_end_disabled()
         if editor_model_has_tree(g_editor_model_to_add) {
             ui_same_line()
             ui_checkbox("As its node tree", &g_editor_add_node_tree)
         }
-        ui_begin_disabled(editor_find_available_mesh_slot(scene) < 0 || scene_local_light_count(scene) >= MAX_LIGHTS)
+        ui_begin_disabled(editor_find_available_slot(scene) < 0 || scene_local_light_count(scene) >= MAX_LIGHTS)
         if ui_button("Add Point Light") do editor_add_point_light(scene)
         ui_same_line()
         if ui_button("Add Spot Light") do editor_add_spot_light(scene)
@@ -214,7 +214,7 @@ editor_draw_scene :: proc(scene: ^Scene){
         ))
 
         ui_begin_disabled(
-            !editor_any_selected(scene, editor_can_duplicate_mesh),
+            !editor_any_selected(scene, editor_can_duplicate),
         )
 
         if ui_button("Duplicate Selected") {
@@ -223,12 +223,12 @@ editor_draw_scene :: proc(scene: ^Scene){
 
         ui_end_disabled()
 
-        if editor_find_available_mesh_slot(scene) < 0 {
+        if editor_find_available_slot(scene) < 0 {
             debug_ui_text("No reusable slots (undo history may retain deleted IDs).")
         }
 
         ui_begin_disabled(
-            !editor_any_selected(scene, editor_can_delete_mesh),
+            !editor_any_selected(scene, editor_can_delete),
         )
 
         if ui_button("Delete Selected") {

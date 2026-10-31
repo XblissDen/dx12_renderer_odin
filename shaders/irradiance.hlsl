@@ -2,6 +2,8 @@
 // surface normal, the panorama's light averaged over the hemisphere around
 // it, weighted by the cosine.
 
+#include "common.hlsl"
+
 Texture2D<float4> g_environment : register(t2);
 SamplerState g_sampler : register(s3);
 
@@ -11,26 +13,10 @@ struct VSOutput
     float2 uv       : TEXCOORD0;
 };
 
-float2 DirectionToUV(float3 direction)
-{
-    return float2(
-        atan2(direction.z, direction.x) / (2.0f * 3.14159265f) + 0.5f,
-        acos(clamp(direction.y, -1.0f, 1.0f)) / 3.14159265f
-    );
-}
-
 float4 PSMain(VSOutput input) : SV_TARGET
 {
-    const float PI = 3.14159265f;
-
     // This output pixel represents one surface-normal direction.
-    float phi = (input.uv.x - 0.5f) * 2.0f * PI;
-    float theta = input.uv.y * PI;
-    float3 N = float3(
-        sin(theta) * cos(phi),
-        cos(theta),
-        sin(theta) * sin(phi)
-    );
+    float3 N = UVToDirection(input.uv);
 
     // Build two axes perpendicular to N.
     float3 helper = abs(N.y) < 0.99f

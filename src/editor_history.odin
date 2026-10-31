@@ -60,8 +60,8 @@ EditorField :: enum {
 
 EditorCommandKind :: enum {
     Edit_Field,
-    Create_Mesh,
-    Delete_Mesh,
+    Create_Entity,
+    Delete_Entity,
     Edit_Asset,
     // One step made of several: field edits of several entities (a gizmo
     // drag on a multiple selection), or several creations or deletions.
@@ -86,7 +86,7 @@ EditorAssetValue :: struct {
 // An entity the editor creates or deletes: a model, a point or spot light
 // with its marker mesh, or an empty one (a group, such as a glTF node without
 // geometry).
-EditorMeshSnapshot :: struct {
+EditorEntitySnapshot :: struct {
     name: string,
     transform: Transform,
     // With a mesh, the entity also gets the materials.
@@ -120,7 +120,7 @@ EditorCommand :: struct {
     after: [3]f32,
     asset_before, asset_after: EditorAssetValue,
 
-    mesh_snapshot: EditorMeshSnapshot,
+    snapshot: EditorEntitySnapshot,
     // Material slot for material fields (see g_editor_material_slot).
     material_slot: int,
     source_entity: Entity,
@@ -578,8 +578,8 @@ editor_slot_referenced_by_history :: proc(slot: int) -> bool {
 editor_command_references :: proc(command: EditorCommand, slot: int) -> bool {
     if int(command.entity) == slot do return true
     // Undoing a duplicate selects its original source, too.
-    if command.kind == .Create_Mesh && int(command.source_entity) == slot do return true
-    if parent, ok := command.mesh_snapshot.parent.?; ok && int(parent) == slot do return true
+    if command.kind == .Create_Entity && int(command.source_entity) == slot do return true
+    if parent, ok := command.snapshot.parent.?; ok && int(parent) == slot do return true
     // A reparenting names the parents in its values.
     if command.kind == .Edit_Field && command.field == .Parent &&
        (int(command.before[0]) == slot || int(command.after[0]) == slot) {
@@ -640,12 +640,12 @@ editor_apply_command :: proc(scene: ^Scene, command: EditorCommand, redo: bool) 
                 editor_apply_value(scene, edit.entity, edit.field, edit.after if redo else edit.before)
             }
             return true
-        case .Create_Mesh:
-            if redo do return editor_restore_created_mesh(scene, command.entity, command.mesh_snapshot)
-            return editor_remove_created_mesh(scene, command.entity)
-        case .Delete_Mesh:
-            if redo do return editor_delete_mesh(scene, command.entity)
-            return editor_restore_deleted_mesh(scene, command.entity, command.mesh_snapshot)
+        case .Create_Entity:
+            if redo do return editor_restore_created_entity(scene, command.entity, command.snapshot)
+            return editor_remove_created_entity(scene, command.entity)
+        case .Delete_Entity:
+            if redo do return editor_delete_entity(scene, command.entity)
+            return editor_restore_deleted_entity(scene, command.entity, command.snapshot)
         case .Group:
             count := len(command.group)
             for k in 0..<count {
@@ -668,7 +668,7 @@ editor_select_command :: proc(command: EditorCommand, redo: bool) {
     primary := command.entity
     // An undone group of duplicates: the primary copy's source.
     for part in command.group {
-        if !redo && part.kind == .Create_Mesh && part.entity == command.entity do primary = part.source_entity
+        if !redo && part.kind == .Create_Entity && part.entity == command.entity do primary = part.source_entity
     }
     if editor_is_selected(primary) do g_editor_selected = primary
 }
@@ -677,8 +677,8 @@ editor_add_command_selection :: proc(command: EditorCommand, redo: bool) {
     switch command.kind {
         case .Edit_Asset, .Edit_Field: editor_add_to_selection(command.entity)
         case .Edit_Fields: for edit in command.edits do editor_add_to_selection(edit.entity)
-        case .Create_Mesh: editor_add_to_selection(command.entity if redo else command.source_entity)
-        case .Delete_Mesh: if !redo do editor_add_to_selection(command.entity)
+        case .Create_Entity: editor_add_to_selection(command.entity if redo else command.source_entity)
+        case .Delete_Entity: if !redo do editor_add_to_selection(command.entity)
         case .Group: for part in command.group do editor_add_command_selection(part, redo)
     }
 }

@@ -344,9 +344,13 @@ in about a third of a second.
   fits the root signature), the new ones are released and the old ones
   restored. The first error is shown at the top of Renderer controls, with
   paths relative to the project, and printed to the console.
+- **Includes**: shaders share code through `#include "common.hlsl"` (the
+  panorama mapping and PI), which the compiler finds next to the including
+  file. `common.hlsl` is never compiled on its own.
 - **Re-bakes**: the image-based lighting maps are baked once, so editing
-  `irradiance.hlsl` or `environment_prefilter.hlsl` also re-bakes them.
-  **Reload shaders** forces a full reload including that re-bake.
+  `irradiance.hlsl`, `environment_prefilter.hlsl` or `common.hlsl` also
+  re-bakes them. **Reload shaders** forces a full reload including that
+  re-bake.
 
 Changes outside the shaders, such as a new constant-buffer field or root slot,
 need the program rebuilt.

@@ -187,7 +187,7 @@ debug_ui_update :: proc() {
         if r.post_anti_aliasing == .TAA {
             ui_slider_float("Sharpening", &r.post_sharpness, 0.0, 1.0)
         }
-        debug_ui_shadow_controls()
+        debug_ui_lighting_controls()
         debug_ui_environment_controls()
 
         ui_separator()
@@ -347,7 +347,8 @@ debug_ui_exposure_controls :: proc() -> (changed: bool) {
     return
 }
 
-debug_ui_shadow_controls :: proc() {
+// Sun shadows, SSAO, SSR, the light cluster view and volumetric fog.
+debug_ui_lighting_controls :: proc() {
     r := &g_renderer
     ui_separator()
     debug_ui_text("Sun shadows (bias in shadow-map texels)")

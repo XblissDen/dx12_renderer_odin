@@ -66,4 +66,5 @@ README](../README.md) covers building and running.
 | `shaders/auto_exposure.hlsl` | Luminance histogram and exposure adaptation |
 | `shaders/cull.hlsl` | GPU frustum and occlusion culling, the depth pyramid |
 | `shaders/sky.hlsl`, `irradiance.hlsl`, `environment_prefilter.hlsl` | Sky and IBL baking |
+| `shaders/common.hlsl` | Code the shaders share: PI and the panorama mapping |
 | `shaders/texture_mips.hlsl`, `selection.hlsl` | Mip generation; selection outline and debug lines |

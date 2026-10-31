@@ -15,17 +15,14 @@ MAX_SHADOW_DISTANCE :: f32(200)
 SHADOW_FADE_FRACTION :: f32(0.15)
 // Blend of logarithmic (1) and uniform (0) split spacing.
 SHADOW_SPLIT_LAMBDA :: f32(0.8)
-// Each cascade blends into the next over this last fraction of its depth range.
-SHADOW_CASCADE_BLEND_FRACTION :: f32(0.1)
 
 // Bias in shadow-map texels. The 5x5 tent filter reaches 2.5 texels away, so
 // the slope term must cover that much depth change on tilted receivers.
+// (Receivers also look up the map slightly off their surface:
+// SHADOW_NORMAL_OFFSET_TEXELS in scene.hlsl.)
 DEFAULT_SHADOW_BIAS_CONSTANT :: f32(1.0)
 DEFAULT_SHADOW_BIAS_SLOPE :: f32(1.5)
 MAX_SHADOW_BIAS :: f32(10)
-// Receivers look up the shadow map this many texels off their surface, along
-// the geometric normal, which removes most acne without a large depth bias.
-SHADOW_NORMAL_OFFSET_TEXELS :: f32(1.0)
 
 // Spot light shadows: one perspective map per slot, given each frame to the
 // shadow-casting spot lights nearest the camera.
@@ -39,12 +36,11 @@ POINT_SHADOW_FACES :: 6
 // point slot's six faces.
 SHADOW_VIEW_COUNT :: SHADOW_CASCADE_COUNT + SPOT_SHADOW_COUNT + POINT_SHADOW_COUNT * POINT_SHADOW_FACES
 POINT_SHADOW_FIRST_VIEW :: SHADOW_CASCADE_COUNT + SPOT_SHADOW_COUNT
-// Rasterizer bias for spot shadow casters (D3D units), and the receiver's
-// offset along its normal in shadow-map texels at its distance from the light.
-// Must match SPOT_SHADOW_NORMAL_OFFSET_TEXELS in scene.hlsl.
+// Rasterizer bias for spot (and point) shadow casters, in D3D units. Their
+// receivers' offset along the normal is SPOT_SHADOW_NORMAL_OFFSET_TEXELS in
+// scene.hlsl.
 SPOT_SHADOW_DEPTH_BIAS :: 0
 SPOT_SHADOW_SLOPE_BIAS :: f32(2.0)
-SPOT_SHADOW_NORMAL_OFFSET_TEXELS :: f32(1.5)
 
 // Between shadow passes the maps are read by the lit pass and by the
 // volumetric fog's compute pass.
@@ -334,7 +330,6 @@ renderer_create_shadow_array :: proc(size, slices, srv_index: u32, cube := false
         (^rawptr)(&dsv_heap),
     ))
 
-    dsv_size := r.device->GetDescriptorHandleIncrementSize(.DSV)
     for slice in 0..<slices {
         shadow_dsv := d3d12.DEPTH_STENCIL_VIEW_DESC{
             Format = .D32_FLOAT,
@@ -344,10 +339,7 @@ renderer_create_shadow_array :: proc(size, slices, srv_index: u32, cube := false
             FirstArraySlice = slice,
             ArraySize = 1,
         }
-        dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-        dsv_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle)
-        dsv_handle.ptr += uint(slice) * uint(dsv_size)
-        r.device->CreateDepthStencilView(texture, &shadow_dsv, dsv_handle)
+        r.device->CreateDepthStencilView(texture, &shadow_dsv, descriptor_handle(dsv_heap, .DSV, slice))
     }
 
     shadow_srv := d3d12.SHADER_RESOURCE_VIEW_DESC{
@@ -362,10 +354,7 @@ renderer_create_shadow_array :: proc(size, slices, srv_index: u32, cube := false
         shadow_srv.Texture2DArray = {MipLevels = 1, ArraySize = slices}
     }
 
-    srv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv_handle)
-    srv_handle.ptr += uint(srv_index) * uint(r.srv_descriptor_size)
-    r.device->CreateShaderResourceView(texture, &shadow_srv, srv_handle)
+    r.device->CreateShaderResourceView(texture, &shadow_srv, renderer_srv_cpu(srv_index))
     return
 }
 
@@ -407,18 +396,14 @@ renderer_render_shadow_pass :: proc(
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
     renderer_bind_cbv(.Frame_Constants, renderer_frame_cb_address())
 
-    dsv_size := r.device->GetDescriptorHandleIncrementSize(.DSV)
     for cascade in 0..<SHADOW_CASCADE_COUNT {
-        dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-        r.shadow_dsv_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle)
-        dsv_handle.ptr += uint(cascade) * uint(dsv_size)
-
+        dsv_handle := descriptor_handle(r.shadow_dsv_heap, .DSV, u32(cascade))
         r.command_list->OMSetRenderTargets(0, nil, false, &dsv_handle)
         r.command_list->ClearDepthStencilView(
             dsv_handle, {.DEPTH}, 1.0, 0, 0, nil,
         )
         // VSShadow reads this view's matrix from the frame constants.
-        r.command_list->SetGraphicsRoot32BitConstant(u32(Root_Slot.Shadow_Cascade), u32(cascade), 0)
+        r.command_list->SetGraphicsRoot32BitConstant(u32(Root_Slot.Shadow_View), u32(cascade), 0)
 
         renderer_draw_batches(draws, view_batches[cascade], r.shadow_pipeline_states)
     }
@@ -439,13 +424,11 @@ renderer_render_shadow_pass :: proc(
     r.command_list->RSSetScissorRects(1, &spot_scissor)
     for slot in 0..<SPOT_SHADOW_COUNT {
         if r.spot_shadow_entities[slot] < 0 do continue
-        dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-        r.spot_shadow_dsv_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle)
-        dsv_handle.ptr += uint(slot) * uint(dsv_size)
+        dsv_handle := descriptor_handle(r.spot_shadow_dsv_heap, .DSV, u32(slot))
         r.command_list->OMSetRenderTargets(0, nil, false, &dsv_handle)
         r.command_list->ClearDepthStencilView(dsv_handle, {.DEPTH}, 1.0, 0, 0, nil)
         view := SHADOW_CASCADE_COUNT + slot
-        r.command_list->SetGraphicsRoot32BitConstant(u32(Root_Slot.Shadow_Cascade), u32(view), 0)
+        r.command_list->SetGraphicsRoot32BitConstant(u32(Root_Slot.Shadow_View), u32(view), 0)
         renderer_draw_batches(draws, view_batches[view], r.spot_shadow_pipeline_states)
     }
     shadow_barrier.Transition.StateBefore = {.DEPTH_WRITE}
@@ -465,13 +448,11 @@ renderer_render_shadow_pass :: proc(
         if r.point_shadow_entities[slot] < 0 do continue
         for face in 0..<POINT_SHADOW_FACES {
             face_index := slot * POINT_SHADOW_FACES + face
-            dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-            r.point_shadow_dsv_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle)
-            dsv_handle.ptr += uint(face_index) * uint(dsv_size)
+            dsv_handle := descriptor_handle(r.point_shadow_dsv_heap, .DSV, u32(face_index))
             r.command_list->OMSetRenderTargets(0, nil, false, &dsv_handle)
             r.command_list->ClearDepthStencilView(dsv_handle, {.DEPTH}, 1.0, 0, 0, nil)
             view := POINT_SHADOW_FIRST_VIEW + face_index
-            r.command_list->SetGraphicsRoot32BitConstant(u32(Root_Slot.Shadow_Cascade), u32(view), 0)
+            r.command_list->SetGraphicsRoot32BitConstant(u32(Root_Slot.Shadow_View), u32(view), 0)
             renderer_draw_batches(draws, view_batches[view], r.spot_shadow_pipeline_states)
         }
     }

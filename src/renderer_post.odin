@@ -47,21 +47,8 @@ renderer_create_hdr_target :: proc() {
         (^rawptr)(&r.hdr_texture),
     ))
 
-    hdr_rtv: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.hdr_rtv_heap->GetCPUDescriptorHandleForHeapStart(&hdr_rtv)
-    r.device->CreateRenderTargetView(r.hdr_texture, nil, hdr_rtv)
-
-    hdr_srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
-        Format = .R16G16B16A16_FLOAT,
-        ViewDimension = .TEXTURE2D,
-        Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
-    }
-    hdr_srv_desc.Texture2D = {MipLevels = 1}
-
-    hdr_srv: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.srv_heap->GetCPUDescriptorHandleForHeapStart(&hdr_srv)
-    hdr_srv.ptr += uint(r.hdr_srv_index) * uint(r.srv_descriptor_size)
-    r.device->CreateShaderResourceView(r.hdr_texture, &hdr_srv_desc, hdr_srv)
+    r.device->CreateRenderTargetView(r.hdr_texture, nil, descriptor_handle(r.hdr_rtv_heap, .RTV, 0))
+    renderer_write_srv(r.hdr_texture, .R16G16B16A16_FLOAT, r.hdr_srv_index)
 
     // The tone-mapped frame, in the back buffer's format, for FXAA or
     // sharpening to read.
@@ -87,9 +74,7 @@ renderer_create_hdr_target :: proc() {
         (^rawptr)(&r.ldr_texture),
     ))
 
-    ldr_rtv: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.ldr_rtv_heap->GetCPUDescriptorHandleForHeapStart(&ldr_rtv)
-    r.device->CreateRenderTargetView(r.ldr_texture, nil, ldr_rtv)
+    r.device->CreateRenderTargetView(r.ldr_texture, nil, descriptor_handle(r.ldr_rtv_heap, .RTV, 0))
     renderer_write_srv(r.ldr_texture, .R8G8B8A8_UNORM, r.ldr_srv_index)
 }
 
@@ -141,14 +126,10 @@ renderer_create_bloom_targets :: proc() {
         (^rawptr)(&r.bloom_texture),
     ))
 
-    rtv_increment := r.device->GetDescriptorHandleIncrementSize(.RTV)
     for mip in 0..<r.bloom_mip_count {
         rtv_desc := d3d12.RENDER_TARGET_VIEW_DESC{Format = .R16G16B16A16_FLOAT, ViewDimension = .TEXTURE2D}
         rtv_desc.Texture2D = {MipSlice = mip}
-        rtv: d3d12.CPU_DESCRIPTOR_HANDLE
-        r.bloom_rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv)
-        rtv.ptr += uint(mip) * uint(rtv_increment)
-        r.device->CreateRenderTargetView(r.bloom_texture, &rtv_desc, rtv)
+        r.device->CreateRenderTargetView(r.bloom_texture, &rtv_desc, descriptor_handle(r.bloom_rtv_heap, .RTV, mip))
 
         // One level per view: each pass reads exactly one.
         srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
@@ -157,10 +138,7 @@ renderer_create_bloom_targets :: proc() {
             Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
         }
         srv_desc.Texture2D = {MostDetailedMip = mip, MipLevels = 1}
-        srv: d3d12.CPU_DESCRIPTOR_HANDLE
-        r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv)
-        srv.ptr += uint(r.bloom_srv_start + mip) * uint(r.srv_descriptor_size)
-        r.device->CreateShaderResourceView(r.bloom_texture, &srv_desc, srv)
+        r.device->CreateShaderResourceView(r.bloom_texture, &srv_desc, renderer_srv_cpu(r.bloom_srv_start + mip))
     }
 }
 
@@ -182,9 +160,7 @@ renderer_bloom_pass :: proc(
     }
     r.command_list->ResourceBarrier(1, &barrier)
 
-    rtv: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.bloom_rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv)
-    rtv.ptr += uint(target_mip) * uint(r.device->GetDescriptorHandleIncrementSize(.RTV))
+    rtv := descriptor_handle(r.bloom_rtv_heap, .RTV, target_mip)
 
     width := max(1, r.width / 2) >> target_mip
     height := max(1, r.height / 2) >> target_mip
@@ -208,21 +184,15 @@ renderer_bloom_pass :: proc(
     r.command_list->ResourceBarrier(1, &barrier)
 }
 
+// The frame rate and the values keys 1-6 adjust; the Profiler panel has the
+// rest.
 renderer_update_post_title :: proc() {
     r := &g_renderer
-
-    bloom_ms := r.gpu_pass_ms[2] +
-                r.gpu_pass_ms[3] +
-                r.gpu_pass_ms[4]
-
     title := fmt.tprintf(
-        "DX12 | FPS %.0f Frame %.1f ms | GPU shadow %.2f scene %.2f bloom %.2f post %.2f ms | E %s T %.1f B %.1f [1-6]",
+        "%s | FPS %.0f Frame %.1f ms | E %s T %.1f B %.1f [1-6]",
+        WINDOW_TITLE,
         r.fps,
         r.frame_ms,
-        r.gpu_pass_ms[0],
-        r.gpu_pass_ms[1],
-        bloom_ms,
-        r.gpu_pass_ms[5],
         // Auto: the compensation, which keys 1/2 adjust.
         fmt.tprintf("auto%+.2f", r.auto_exposure.compensation) if r.auto_exposure.enabled else fmt.tprintf("%.1f", r.post_exposure),
         r.post_threshold,
@@ -341,32 +311,12 @@ renderer_create_auto_exposure :: proc() {
     params[.Exposure].ParameterType = .UAV
     params[.Exposure].Descriptor = {ShaderRegister = 1}
     rs_desc := d3d12.ROOT_SIGNATURE_DESC{NumParameters = len(params), pParameters = &params[Exposure_Root_Slot(0)]}
-    signature, errors: ^d3d12.IBlob
-    hr := d3d12.SerializeRootSignature(&rs_desc, ._1, &signature, &errors)
-    if errors != nil {
-        fmt.println("Exposure root signature:", cstring(errors->GetBufferPointer()))
-        errors->Release()
-    }
-    dx_check(hr)
-    defer signature->Release()
-    dx_check(r.device->CreateRootSignature(
-        0, signature->GetBufferPointer(), signature->GetBufferSize(),
-        d3d12.IRootSignature_UUID, (^rawptr)(&r.exposure_root_signature),
-    ))
+    r.exposure_root_signature = create_root_signature(&rs_desc, "Exposure")
 
-    buffer :: proc(size: u64, heap_type: d3d12.HEAP_TYPE, flags: d3d12.RESOURCE_FLAGS, state: d3d12.RESOURCE_STATES) -> (resource: ^d3d12.IResource) {
-        heap := d3d12.HEAP_PROPERTIES{Type = heap_type}
-        desc := d3d12.RESOURCE_DESC{
-            Dimension = .BUFFER, Width = size, Height = 1, DepthOrArraySize = 1,
-            MipLevels = 1, SampleDesc = {Count = 1}, Layout = .ROW_MAJOR, Flags = flags,
-        }
-        dx_check(g_renderer.device->CreateCommittedResource(&heap, {}, &desc, state, nil, d3d12.IResource_UUID, (^rawptr)(&resource)))
-        return
-    }
     // Committed buffers start zeroed: an empty histogram, and EV 0.
-    r.exposure_histogram = buffer(EXPOSURE_BIN_COUNT * 4, .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON)
-    r.exposure_buffer = buffer(8, .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON)
-    r.exposure_readback = buffer(FRAME_COUNT * 8, .READBACK, {}, {.COPY_DEST})
+    r.exposure_histogram = create_buffer(EXPOSURE_BIN_COUNT * 4, .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON)
+    r.exposure_buffer = create_buffer(8, .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON)
+    r.exposure_readback = create_buffer(FRAME_COUNT * 8, .READBACK, {}, {.COPY_DEST})
 
     // Between frames the histogram stays a UAV and the exposure a pixel-shader
     // resource (bloom and tone mapping read it).

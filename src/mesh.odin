@@ -101,6 +101,8 @@ mesh_load_obj :: proc(
 
     Vertex_Key :: struct { pos_idx, tex_idx, norm_idx: int}
     vertex_cache := make(map[Vertex_Key]u32, context.temp_allocator)
+    // Some face vertex came without a normal ("f 1/1 2/2 3/3").
+    missing_normals := false
 
     text := string(data)
     for line in strings.split_lines_iterator(&text){
@@ -156,6 +158,8 @@ mesh_load_obj :: proc(
                     if key.norm_idx != 0 {
                         key.norm_idx, key_ok = obj_resolve_index(key.norm_idx, len(normals))
                         if !key_ok do return {}, false
+                    } else {
+                        missing_normals = true
                     }
 
                     if cached, found := vertex_cache[Vertex_Key(key)]; found {
@@ -198,9 +202,31 @@ mesh_load_obj :: proc(
     if len(out_vertices) == 0 || len(out_indices) == 0 do return {}, false
     mesh.vertices = out_vertices[:]
     mesh.indices  = out_indices[:]
+    if missing_normals do mesh_fill_missing_normals(mesh.vertices, mesh.indices)
     mesh_generate_tangents(mesh)
     mesh_single_submesh(&mesh, allocator)
     return mesh, true
+}
+
+// Area-weighted smooth normals (the sum of the surrounding triangles' face
+// normals) for the vertices whose normal is zero, as in sources that come
+// without them. Triangles must already have this renderer's clockwise
+// winding.
+mesh_fill_missing_normals :: proc(vertices: []Vertex, indices: []u32) {
+    sums := make([]linalg.Vector3f32, len(vertices), context.temp_allocator)
+    for triangle in 0..<len(indices) / 3 {
+        a := indices[triangle * 3]
+        b := indices[triangle * 3 + 1]
+        c := indices[triangle * 3 + 2]
+        pa := linalg.Vector3f32(vertices[a].position)
+        n := linalg.cross(linalg.Vector3f32(vertices[b].position) - pa, linalg.Vector3f32(vertices[c].position) - pa)
+        for i in ([3]u32{a, b, c}) do sums[i] += n
+    }
+    for &vertex, i in vertices {
+        if vertex.normal != {} do continue
+        n := sums[i]
+        vertex.normal = linalg.normalize(n) if linalg.dot(n, n) > 0 else {0, 1, 0}
+    }
 }
 
 // Fills each vertex's tangent from the UV directions of the triangles around

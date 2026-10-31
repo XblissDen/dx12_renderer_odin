@@ -3,7 +3,6 @@ package main
 import "core:encoding/base64"
 import "core:encoding/json"
 import "core:fmt"
-import "core:math"
 import alg "core:math/linalg"
 import "core:os"
 import "core:strings"
@@ -687,7 +686,7 @@ gltf_add_primitive :: proc(loader: ^Gltf_Loader, primitive: Doc_Primitive, world
         }
     }
 
-    if normals.count == 0 do gltf_compute_normals(vertices, indices)
+    if normals.count == 0 do mesh_fill_missing_normals(vertices, indices)
     if tangents.count == 0 {
         mesh_generate_tangents({vertices = vertices, indices = indices})
         // Generated tangents follow +V; glTF normal maps' green channel points
@@ -704,24 +703,6 @@ gltf_add_primitive :: proc(loader: ^Gltf_Loader, primitive: Doc_Primitive, world
     }
     append(out, Gltf_Primitive_Out{vertices = vertices, indices = indices, slot = slot})
     return ""
-}
-
-// Area-weighted smooth normals for primitives that come without any.
-@(private="file")
-gltf_compute_normals :: proc(vertices: []Vertex, indices: []u32) {
-    for triangle in 0..<len(indices) / 3 {
-        a := indices[triangle * 3]
-        b := indices[triangle * 3 + 1]
-        c := indices[triangle * 3 + 2]
-        pa := alg.Vector3f32(vertices[a].position)
-        // Clockwise front faces in this left-handed space.
-        n := alg.cross(alg.Vector3f32(vertices[b].position) - pa, alg.Vector3f32(vertices[c].position) - pa)
-        for i in ([3]u32{a, b, c}) do vertices[i].normal += n
-    }
-    for &vertex in vertices {
-        n := alg.Vector3f32(vertex.normal)
-        vertex.normal = alg.normalize(n) if alg.dot(n, n) > 0 else {0, 1, 0}
-    }
 }
 
 // Concatenates primitives grouped by material slot: one submesh per slot

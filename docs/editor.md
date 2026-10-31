@@ -38,13 +38,6 @@ so text stays sharp.
   draws and calls after culling (with how many were occluded), the point and
   spot lights in view, a warning when a frame had more draws than fit, and
   the [GPU timings](frame.md#gpu-timings) of every pass.
-
-Color pickers show colors gamma-encoded (a 2.2 power, close to sRGB), so the
-swatch and the numbers look like the result on screen; the scene stores and
-renders them as linear values.
-
-The window opens with a 1920×1080 drawing area, shrunk to fit the screen's
-work area (a 1080p screen minus the taskbar is smaller), and centered.
 - **Scene**: add models (a glTF model with several nodes as its node tree,
   see [Hierarchy](hierarchy.md#gltf-node-trees)) and lights, undo and redo,
   duplicate, delete, focus, save and load, and the entity tree (drag a row
@@ -52,6 +45,18 @@ work area (a 1080p screen minus the taskbar is smaller), and centered.
 - **Inspector**: the primary selected entity's parent, transform, material
   slot, light settings, and the gizmo's options.
 - **Assets...**: import and remove models and textures ([Assets](assets.md)).
+
+Panel positions and sizes are saved in `imgui.ini` in the working directory
+(ignored by git) and restored on the next run; deleting the file brings back
+the default layout. The window title shows the frame rate and the values keys
+1–6 adjust.
+
+Color pickers show colors gamma-encoded (a 2.2 power, close to sRGB), so the
+swatch and the numbers look like the result on screen; the scene stores and
+renders them as linear values.
+
+The window opens with a 1920×1080 drawing area, shrunk to fit the screen's
+work area (a 1080p screen minus the taskbar is smaller), and centered.
 
 ## Camera and shortcuts
 

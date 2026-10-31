@@ -40,7 +40,9 @@ OBJ files are read as right-handed (+Y up), as Blender and most tools write
 them. Z is negated and each face's winding reversed, which converts them to the
 renderer's left-handed space without mirroring. **Flip V** (on by default)
 matches their bottom-left UV origin. Faces with more than three corners are
-split into a fan of triangles.
+split into a fan of triangles. Vertices without a normal get a smooth one, the
+area-weighted average of the faces around them (as glTF primitives without
+normals do), and tangents are generated from the UVs.
 
 ### glTF
 

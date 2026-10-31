@@ -1,6 +1,5 @@
 package main
 
-import "core:fmt"
 import d3d12 "vendor:directx/d3d12"
 import dxgi "vendor:directx/dxgi"
 
@@ -128,18 +127,7 @@ renderer_create_fog_root_signature :: proc() {
         NumStaticSamplers = len(samplers),
         pStaticSamplers = &samplers[0],
     }
-    signature, errors: ^d3d12.IBlob
-    hr := d3d12.SerializeRootSignature(&rs_desc, ._1, &signature, &errors)
-    if errors != nil {
-        fmt.println("Fog root signature:", cstring(errors->GetBufferPointer()))
-        errors->Release()
-    }
-    dx_check(hr)
-    defer signature->Release()
-    dx_check(r.device->CreateRootSignature(
-        0, signature->GetBufferPointer(), signature->GetBufferSize(),
-        d3d12.IRootSignature_UUID, (^rawptr)(&r.fog_root_signature),
-    ))
+    r.fog_root_signature = create_root_signature(&rs_desc, "Fog")
 }
 
 // The volumes and their views, once the SRV heap exists. Their size does not
@@ -172,17 +160,11 @@ renderer_create_fog_volumes :: proc() {
             Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
         }
         srv_desc.Texture3D = {MipLevels = 1}
-        srv: d3d12.CPU_DESCRIPTOR_HANDLE
-        r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv)
-        srv.ptr += uint(r.fog_srv_start + u32(i)) * uint(r.srv_descriptor_size)
-        r.device->CreateShaderResourceView(r.fog_volumes[i], &srv_desc, srv)
+        r.device->CreateShaderResourceView(r.fog_volumes[i], &srv_desc, renderer_srv_cpu(r.fog_srv_start + u32(i)))
 
         uav_desc := d3d12.UNORDERED_ACCESS_VIEW_DESC{Format = FOG_FORMAT, ViewDimension = .TEXTURE3D}
         uav_desc.Texture3D = {WSize = FOG_Z}
-        uav: d3d12.CPU_DESCRIPTOR_HANDLE
-        r.srv_heap->GetCPUDescriptorHandleForHeapStart(&uav)
-        uav.ptr += uint(r.fog_uav_start + u32(i)) * uint(r.srv_descriptor_size)
-        r.device->CreateUnorderedAccessView(r.fog_volumes[i], nil, &uav_desc, uav)
+        r.device->CreateUnorderedAccessView(r.fog_volumes[i], nil, &uav_desc, renderer_srv_cpu(r.fog_uav_start + u32(i)))
     }
     r.fog_history_ready = false
 }
@@ -234,17 +216,9 @@ renderer_render_fog :: proc() {
 
     write := r.fog_write_index
     read := 1 - write
-    transition :: proc(resource: ^d3d12.IResource, before, after: d3d12.RESOURCE_STATES) -> d3d12.RESOURCE_BARRIER {
-        barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
-        barrier.Transition = {
-            pResource = resource, StateBefore = before, StateAfter = after,
-            Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
-        }
-        return barrier
-    }
     barriers := [2]d3d12.RESOURCE_BARRIER{
-        transition(r.fog_volumes[write], renderer_fog_rest_state(write), {.UNORDERED_ACCESS}),
-        transition(r.fog_volumes[2], renderer_fog_rest_state(2), {.UNORDERED_ACCESS}),
+        resource_transition(r.fog_volumes[write], renderer_fog_rest_state(write), {.UNORDERED_ACCESS}),
+        resource_transition(r.fog_volumes[2], renderer_fog_rest_state(2), {.UNORDERED_ACCESS}),
     }
     r.command_list->ResourceBarrier(len(barriers), &barriers[0])
 
@@ -264,7 +238,7 @@ renderer_render_fog :: proc() {
     r.command_list->SetPipelineState(r.fog_inject_pipeline_state)
     r.command_list->Dispatch((FOG_X + 7) / 8, (FOG_Y + 7) / 8, FOG_Z)
 
-    barriers[0] = transition(r.fog_volumes[write], {.UNORDERED_ACCESS}, {.NON_PIXEL_SHADER_RESOURCE})
+    barriers[0] = resource_transition(r.fog_volumes[write], {.UNORDERED_ACCESS}, {.NON_PIXEL_SHADER_RESOURCE})
     r.command_list->ResourceBarrier(1, &barriers[0])
 
     // Accumulated front to back into the integrated volume.
@@ -273,7 +247,7 @@ renderer_render_fog :: proc() {
     r.command_list->SetPipelineState(r.fog_integrate_pipeline_state)
     r.command_list->Dispatch((FOG_X + 7) / 8, (FOG_Y + 7) / 8, 1)
 
-    barriers[1] = transition(r.fog_volumes[2], {.UNORDERED_ACCESS}, renderer_fog_rest_state(2))
+    barriers[1] = resource_transition(r.fog_volumes[2], {.UNORDERED_ACCESS}, renderer_fog_rest_state(2))
     r.command_list->ResourceBarrier(1, &barriers[1])
 
     r.fog_write_index = read

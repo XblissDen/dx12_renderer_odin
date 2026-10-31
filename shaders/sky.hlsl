@@ -1,6 +1,8 @@
 // The background behind the scene: the HDR panorama seen in the camera's
 // direction, or a solid color. Drawn first into the HDR target.
 
+#include "common.hlsl"
+
 Texture2D<float4> g_environment : register(t0);
 SamplerState g_sampler : register(s3);
 
@@ -41,14 +43,8 @@ float4 PSMain(VSOutput input) : SV_TARGET
         sky_forward + screen_x * sky_right + screen_y * sky_up
     );
 
-    // A direction on a sphere becomes a position in a 2:1 panorama.
-    direction = float3(
-        environment_cos * direction.x - environment_sin * direction.z,
-        direction.y,
-        environment_sin * direction.x + environment_cos * direction.z
-    );
-    float u = atan2(direction.z, direction.x) / (2.0f * 3.14159265f) + 0.5f;
-    float v = acos(clamp(direction.y, -1.0f, 1.0f)) / 3.14159265f;
+    direction = EnvironmentRotate(direction, environment_sin, environment_cos);
+    float2 uv = DirectionToUV(direction);
 
     // Choose the mip from the angle a pixel covers, not from how fast (u, v)
     // change. Plain Sample() goes wrong in two places: u wraps from 1 to 0
@@ -60,8 +56,8 @@ float4 PSMain(VSOutput input) : SV_TARGET
     // filtering across the seam stays seamless.
     float angle_x = length(ddx(direction));
     float angle_y = length(ddy(direction));
-    float2 uv_dx = float2(angle_x / (2.0f * 3.14159265f), 0.0f);
-    float2 uv_dy = float2(0.0f, angle_y / 3.14159265f);
+    float2 uv_dx = float2(angle_x / (2.0f * PI), 0.0f);
+    float2 uv_dy = float2(0.0f, angle_y / PI);
 
-    return float4(g_environment.SampleGrad(g_sampler, float2(u, v), uv_dx, uv_dy).rgb * background_brightness, 1.0f);
+    return float4(g_environment.SampleGrad(g_sampler, uv, uv_dx, uv_dy).rgb * background_brightness, 1.0f);
 }

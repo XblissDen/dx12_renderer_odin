@@ -1,3 +1,5 @@
+#include "common.hlsl"
+
 // Clustered lighting; must match renderer_lights.odin. The view is split into
 // a grid of cells, 16x9 across the screen and 24 slices in depth (spaced
 // logarithmically), and each cell lists the lights that reach it.
@@ -7,14 +9,18 @@
 // Each cell: its light count, then up to this many light indices.
 #define MAX_LIGHTS_PER_CLUSTER 127
 #define LIGHT_CLUSTER_STRIDE (MAX_LIGHTS_PER_CLUSTER + 1)
+// Shadow slots; must match renderer_shadow.odin.
 #define SHADOW_CASCADE_COUNT 4
-// Must match SHADOW_NORMAL_OFFSET_TEXELS in renderer_shadow.odin.
-#define SHADOW_NORMAL_OFFSET_TEXELS 1.0f
-// Spot shadows; must match renderer_shadow.odin.
 #define SPOT_SHADOW_COUNT 4
-#define SPOT_SHADOW_NORMAL_OFFSET_TEXELS 1.5f
 #define POINT_SHADOW_COUNT 4
 #define POINT_SHADOW_FACES 6
+// Receivers look up a shadow map this many texels off their surface, along
+// the geometric normal, which removes most acne without a large depth bias:
+// sun cascades, and spot and point lights (texels at the receiver's
+// distance from the light).
+#define SHADOW_NORMAL_OFFSET_TEXELS 1.0f
+#define SPOT_SHADOW_NORMAL_OFFSET_TEXELS 1.5f
+// Each cascade blends into the next over this last fraction of its depth range.
 #define SHADOW_CASCADE_BLEND_FRACTION 0.1f
 
 // A point or spot light (renderer.odin's GpuLight).
@@ -212,9 +218,9 @@ float3 ClusterHeatColor(uint count)
 
 // Which shadow view the shadow pass is drawing: a cascade, a spot slot or a
 // point light's cube face (see VSShadow).
-cbuffer ShadowCascade : register(b5)
+cbuffer ShadowView : register(b5)
 {
-    uint shadow_cascade_index;
+    uint shadow_view_index;
 };
 
 // Bindless textures: the whole SRV heap (root slot Textures), indexed by the
@@ -377,7 +383,7 @@ ShadowInput VSShadow(VSInput input)
     float4 world_pos = mul(float4(input.position, 1.0f), g_object.model);
     // Views: the sun's cascades, the spot shadow slots, then the point
     // shadow cube faces.
-    uint view = shadow_cascade_index;
+    uint view = shadow_view_index;
     float4x4 light_view_projection;
     if (view < SHADOW_CASCADE_COUNT)
     {
@@ -544,16 +550,24 @@ float CascadeVisibility(uint cascade, float3 world_pos, float3 geometric_normal,
     return visibility;
 }
 
-static const float PI = 3.14159265f;
-
 float3 EnvironmentDirection(float3 direction)
 {
-    // Inverse world Y rotation keeps lighting and the visible panorama aligned.
-    return float3(
-        environment_cos * direction.x - environment_sin * direction.z,
-        direction.y,
-        environment_sin * direction.x + environment_cos * direction.z
-    );
+    return EnvironmentRotate(direction, environment_sin, environment_cos);
+}
+
+// How much of a point or spot light reaches a surface `to_light` away from
+// it, before shadows; also gives the direction to the light. Inverse-square
+// falloff, windowed to reach exactly zero at the range ((1 - (d / range)^4)^2,
+// as in Unreal and Frostbite) and close to 1 well inside it, times the spot
+// cone (smooth from the inner to the outer angle; 1 for point lights).
+float LightAttenuation(GpuLight light, float3 to_light, out float3 L)
+{
+    float distance_squared = dot(to_light, to_light);
+    L = to_light * rsqrt(max(distance_squared, 0.0001f));
+    float distance_ratio_squared = distance_squared / (light.range * light.range);
+    float window = saturate(1.0f - distance_ratio_squared * distance_ratio_squared);
+    float cone = saturate(dot(-L, light.direction) * light.spot_scale + light.spot_offset);
+    return window * window / (1.0f + distance_squared) * cone * cone;
 }
 
 float3 FresnelSchlick(float cos_theta, float3 F0)
@@ -767,22 +781,13 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
     [branch]
     if (ambient_mode == 0u) // HDRI
     {
-        float3 environment_normal = EnvironmentDirection(N);
-        float2 normal_uv = float2(
-            atan2(environment_normal.z, environment_normal.x) / (2.0f * PI) + 0.5f,
-            acos(clamp(environment_normal.y, -1.0f, 1.0f)) / PI
-        );
         incoming_diffuse = g_irradiance.SampleLevel(
-            g_environment_sampler, normal_uv, 0
+            g_environment_sampler, DirectionToUV(EnvironmentDirection(N)), 0
         ).rgb * environment_intensity;
 
         float3 reflection = EnvironmentDirection(reflect(-V, N));
-        float2 reflection_uv = float2(
-            atan2(reflection.z, reflection.x) / (2.0f * PI) + 0.5f,
-            acos(clamp(reflection.y, -1.0f, 1.0f)) / PI
-        );
         prefiltered_color = g_prefiltered_environment.SampleLevel(
-            g_environment_sampler, reflection_uv, material_roughness * 4.0f
+            g_environment_sampler, DirectionToUV(reflection), material_roughness * 4.0f
         ).rgb * environment_intensity;
     }
     // Where SSR found the reflected surface, it replaces the environment.
@@ -901,19 +906,8 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
     for (uint i = 0; i < cluster_light_count; ++i)
     {
         GpuLight light = g_lights[g_cluster_lights[cluster_base + 1u + i]];
-        float3 to_light = light.position - input.world_pos;
-        float distance_squared = dot(to_light, to_light);
-        float3 L = to_light * rsqrt(max(distance_squared, 0.0001f));
-
-        // Inverse-square falloff, windowed to reach exactly zero at the range
-        // ((1 - (d / range)^4)^2, as in Unreal and Frostbite); close to 1 well
-        // inside it.
-        float distance_ratio_squared = distance_squared / (light.range * light.range);
-        float window = saturate(1.0f - distance_ratio_squared * distance_ratio_squared);
-        float attenuation = window * window / (1.0f + distance_squared);
-
-        // Spot cone: smooth from the inner to the outer angle.
-        float cone = saturate(dot(-L, light.direction) * light.spot_scale + light.spot_offset);
+        float3 L;
+        float attenuation = LightAttenuation(light, light.position - input.world_pos, L);
         // Spot lights have a cone (spot_scale > 0); point lights have none.
         float shadow = 1.0f;
         [branch]
@@ -925,7 +919,7 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
         {
             shadow = PointShadowVisibility(light, input.world_pos, geometric_normal);
         }
-        float3 radiance = light.radiance * attenuation * cone * cone * shadow;
+        float3 radiance = light.radiance * attenuation * shadow;
 
         result += EvaluateDirectLight(
             N, V, L, albedo,
@@ -1481,22 +1475,17 @@ void CSFogInject(uint3 id : SV_DispatchThreadID)
     for (uint i = 0u; i < cluster_light_count; ++i)
     {
         GpuLight local = g_lights[g_cluster_lights[cluster_base + 1u + i]];
-        float3 to_light = local.position - world_pos;
-        float distance_squared = dot(to_light, to_light);
-        float3 L = to_light * rsqrt(max(distance_squared, 0.0001f));
-        float distance_ratio_squared = distance_squared / (local.range * local.range);
-        float window = saturate(1.0f - distance_ratio_squared * distance_ratio_squared);
-        float attenuation = window * window / (1.0f + distance_squared);
-        float cone = saturate(dot(-L, local.direction) * local.spot_scale + local.spot_offset);
+        float3 L;
+        float attenuation = LightAttenuation(local, local.position - world_pos, L);
         float shadow = 1.0f;
         [branch]
-        if (attenuation * cone > 0.0f)
+        if (attenuation > 0.0f)
         {
             shadow = local.spot_scale > 0.0f
                 ? SpotShadowVisibility(local, world_pos, float3(0.0f, 0.0f, 0.0f))
                 : PointShadowVisibility(local, world_pos, float3(0.0f, 0.0f, 0.0f));
         }
-        light += local.radiance * attenuation * cone * cone * shadow *
+        light += local.radiance * attenuation * shadow *
                  HenyeyGreenstein(dot(-L, to_camera), fog_anisotropy);
     }
 

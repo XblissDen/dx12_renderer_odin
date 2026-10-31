@@ -480,13 +480,7 @@ renderer_upload_environment :: proc(
         Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
     }
     srv_desc.Texture2D = {MipLevels = u32(len(mips))}
-
-    srv: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv)
-    srv.ptr += uint(srv_index) * uint(r.srv_descriptor_size)
-    r.device->CreateShaderResourceView(
-        candidate, &srv_desc, srv,
-    )
+    r.device->CreateShaderResourceView(candidate, &srv_desc, renderer_srv_cpu(srv_index))
     return candidate, ""
 }
 
@@ -530,22 +524,8 @@ renderer_create_irradiance_map :: proc() {
         (^rawptr)(&r.irradiance_texture),
     ))
 
-    rtv: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.irradiance_rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv)
-    r.device->CreateRenderTargetView(r.irradiance_texture, nil, rtv)
-
-    srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
-        Format = .R16G16B16A16_FLOAT,
-        ViewDimension = .TEXTURE2D,
-        Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
-    }
-    srv_desc.Texture2D = {MipLevels = 1}
-
-    srv: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv)
-    srv.ptr += uint(r.irradiance_srv_index) *
-               uint(r.srv_descriptor_size)
-    r.device->CreateShaderResourceView(r.irradiance_texture, &srv_desc, srv)
+    r.device->CreateRenderTargetView(r.irradiance_texture, nil, descriptor_handle(r.irradiance_rtv_heap, .RTV, 0))
+    renderer_write_srv(r.irradiance_texture, .R16G16B16A16_FLOAT, r.irradiance_srv_index)
 }
 
 renderer_generate_irradiance :: proc(source_srv_index: u32) {
@@ -644,18 +624,13 @@ renderer_create_prefiltered_environment :: proc() {
         (^rawptr)(&r.prefilter_texture),
     ))
 
-    rtv_increment := r.device->GetDescriptorHandleIncrementSize(.RTV)
     for mip in 0..<PREFILTER_MIP_COUNT {
         rtv_desc := d3d12.RENDER_TARGET_VIEW_DESC{
             Format = .R16G16B16A16_FLOAT,
             ViewDimension = .TEXTURE2D,
         }
         rtv_desc.Texture2D = {MipSlice = u32(mip)}
-
-        rtv: d3d12.CPU_DESCRIPTOR_HANDLE
-        r.prefilter_rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv)
-        rtv.ptr += uint(mip) * uint(rtv_increment)
-        r.device->CreateRenderTargetView(r.prefilter_texture, &rtv_desc, rtv)
+        r.device->CreateRenderTargetView(r.prefilter_texture, &rtv_desc, descriptor_handle(r.prefilter_rtv_heap, .RTV, u32(mip)))
     }
 
     srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
@@ -664,38 +639,12 @@ renderer_create_prefiltered_environment :: proc() {
         Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
     }
     srv_desc.Texture2D = {MipLevels = PREFILTER_MIP_COUNT}
-
-    srv: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv)
-    srv.ptr += uint(r.prefilter_srv_index) * uint(r.srv_descriptor_size)
-    r.device->CreateShaderResourceView(r.prefilter_texture, &srv_desc, srv)
+    r.device->CreateShaderResourceView(r.prefilter_texture, &srv_desc, renderer_srv_cpu(r.prefilter_srv_index))
 
     // One 256-byte constant-buffer slot for each mip's roughness.
-    cb_heap := d3d12.HEAP_PROPERTIES{Type = .UPLOAD}
-    cb_desc := d3d12.RESOURCE_DESC{
-        Dimension = .BUFFER,
-        Width = u64(size_of(PrefilterConstants) * PREFILTER_MIP_COUNT),
-        Height = 1,
-        DepthOrArraySize = 1,
-        MipLevels = 1,
-        SampleDesc = {Count = 1},
-        Layout = .ROW_MAJOR,
-    }
-
-    dx_check(r.device->CreateCommittedResource(
-        &cb_heap,
-        {},
-        &cb_desc,
-        {.VERTEX_AND_CONSTANT_BUFFER},
-        nil,
-        d3d12.IResource_UUID,
-        (^rawptr)(&r.prefilter_constant_buffer),
-    ))
-
-    read_range := d3d12.RANGE{Begin = 0, End = 0}
-    dx_check(r.prefilter_constant_buffer->Map(
-        0, &read_range, (^rawptr)(&r.prefilter_cb_mapped_data),
-    ))
+    mapped: rawptr
+    r.prefilter_constant_buffer, mapped = renderer_create_mapped_upload_buffer(u64(size_of(PrefilterConstants) * PREFILTER_MIP_COUNT))
+    r.prefilter_cb_mapped_data = ([^]PrefilterConstants)(mapped)
 
     for mip in 0..<PREFILTER_MIP_COUNT {
         r.prefilter_cb_mapped_data[mip].roughness =
@@ -729,15 +678,11 @@ renderer_generate_prefiltered_environment :: proc(source_srv_index: u32) {
     renderer_bind_srv(.Environment, source_srv_index)
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
 
-    rtv_increment := r.device->GetDescriptorHandleIncrementSize(.RTV)
-
     for mip in 0..<PREFILTER_MIP_COUNT {
         mip_width := u32(PREFILTER_WIDTH) >> u32(mip)
         mip_height := u32(PREFILTER_HEIGHT) >> u32(mip)
 
-        rtv: d3d12.CPU_DESCRIPTOR_HANDLE
-        r.prefilter_rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv)
-        rtv.ptr += uint(mip) * uint(rtv_increment)
+        rtv := descriptor_handle(r.prefilter_rtv_heap, .RTV, u32(mip))
         r.command_list->OMSetRenderTargets(1, &rtv, false, nil)
 
         viewport := d3d12.VIEWPORT{

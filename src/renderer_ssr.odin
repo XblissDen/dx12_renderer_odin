@@ -48,16 +48,12 @@ renderer_create_ssr_targets :: proc() {
 
     targets := [2]^^d3d12.IResource{&r.surface_texture, &r.ssr_texture}
     srvs := [2]u32{r.surface_srv_index, r.ssr_srv_index}
-    rtv_increment := r.device->GetDescriptorHandleIncrementSize(.RTV)
     for target, i in targets {
         dx_check(r.device->CreateCommittedResource(
             &heap_props, {}, &desc, {.PIXEL_SHADER_RESOURCE}, &clear_values[i],
             d3d12.IResource_UUID, (^rawptr)(target),
         ))
-        rtv: d3d12.CPU_DESCRIPTOR_HANDLE
-        r.ssr_rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv)
-        rtv.ptr += uint(i) * uint(rtv_increment)
-        r.device->CreateRenderTargetView(target^, nil, rtv)
+        r.device->CreateRenderTargetView(target^, nil, renderer_ssr_rtv(i))
         renderer_write_srv(target^, SSR_FORMAT, srvs[i])
     }
 
@@ -73,11 +69,7 @@ renderer_release_ssr_targets :: proc() {
 
 // 0: the surface buffer, 1: the reflections.
 renderer_ssr_rtv :: proc(index: int) -> d3d12.CPU_DESCRIPTOR_HANDLE {
-    r := &g_renderer
-    rtv: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.ssr_rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv)
-    rtv.ptr += uint(index) * uint(r.device->GetDescriptorHandleIncrementSize(.RTV))
-    return rtv
+    return descriptor_handle(g_renderer.ssr_rtv_heap, .RTV, u32(index))
 }
 
 // Whether this frame traces reflections: also needs last frame's image.

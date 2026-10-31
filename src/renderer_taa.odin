@@ -37,16 +37,12 @@ renderer_create_taa_targets :: proc() {
     }
     clear_value := d3d12.CLEAR_VALUE{Format = .R16G16B16A16_FLOAT}
 
-    rtv_increment := r.device->GetDescriptorHandleIncrementSize(.RTV)
     for i in 0..<2 {
         dx_check(r.device->CreateCommittedResource(
             &heap_props, {}, &desc, {.PIXEL_SHADER_RESOURCE}, &clear_value,
             d3d12.IResource_UUID, (^rawptr)(&r.taa_history[i]),
         ))
-        rtv: d3d12.CPU_DESCRIPTOR_HANDLE
-        r.taa_rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv)
-        rtv.ptr += uint(i) * uint(rtv_increment)
-        r.device->CreateRenderTargetView(r.taa_history[i], nil, rtv)
+        r.device->CreateRenderTargetView(r.taa_history[i], nil, descriptor_handle(r.taa_rtv_heap, .RTV, u32(i)))
         renderer_write_srv(r.taa_history[i], .R16G16B16A16_FLOAT, r.taa_srv_start + u32(i))
     }
 
@@ -104,9 +100,7 @@ renderer_render_taa :: proc() {
     }
     r.command_list->ResourceBarrier(1, &barrier)
 
-    rtv: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.taa_rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv)
-    rtv.ptr += uint(write) * uint(r.device->GetDescriptorHandleIncrementSize(.RTV))
+    rtv := descriptor_handle(r.taa_rtv_heap, .RTV, u32(write))
     r.command_list->OMSetRenderTargets(1, &rtv, false, nil)
 
     heaps := []^d3d12.IDescriptorHeap{r.srv_heap}

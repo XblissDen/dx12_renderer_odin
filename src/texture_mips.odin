@@ -97,11 +97,6 @@ renderer_record_texture_mips :: proc(
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
     r.command_list->SetGraphicsRoot32BitConstant(u32(Root_Slot.Mip_Constants), u32(mode), 0)
 
-    srv_start, rtv_start: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.srv_heap->GetCPUDescriptorHandleForHeapStart(&srv_start)
-    r.mip_rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv_start)
-    rtv_size := r.device->GetDescriptorHandleIncrementSize(.RTV)
-
     for mip in 1..<mip_count {
         slot := mip - 1
         srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
@@ -110,14 +105,11 @@ renderer_record_texture_mips :: proc(
             Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
         }
         srv_desc.Texture2D = {MostDetailedMip = mip - 1, MipLevels = 1}
-        srv := srv_start
-        srv.ptr += uint(r.mip_srv_start + slot) * uint(r.srv_descriptor_size)
-        r.device->CreateShaderResourceView(texture, &srv_desc, srv)
+        r.device->CreateShaderResourceView(texture, &srv_desc, renderer_srv_cpu(r.mip_srv_start + slot))
 
         rtv_desc := d3d12.RENDER_TARGET_VIEW_DESC{Format = .R8G8B8A8_UNORM, ViewDimension = .TEXTURE2D}
         rtv_desc.Texture2D = {MipSlice = mip}
-        rtv := rtv_start
-        rtv.ptr += uint(slot) * uint(rtv_size)
+        rtv := descriptor_handle(r.mip_rtv_heap, .RTV, slot)
         r.device->CreateRenderTargetView(texture, &rtv_desc, rtv)
 
         barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}

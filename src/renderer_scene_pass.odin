@@ -121,9 +121,7 @@ renderer_render_post_process :: proc(scene: ^Scene) {
     }
     r.command_list->ResourceBarrier(1, &back_buffer_barrier)
 
-    rtv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-    r.rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
-    rtv_handle.ptr += uint(r.frame_index * r.rtv_descriptor_size)
+    rtv_handle := descriptor_handle(r.rtv_heap, .RTV, r.frame_index)
 
     // With FXAA, or sharpening after TAA, tone mapping writes an intermediate
     // image that that pass then filters into the back buffer; otherwise it
