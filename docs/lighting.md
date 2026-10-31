@@ -37,7 +37,9 @@ glTF materials map onto this.
 
 - **Normal maps**: the tangent basis is rebuilt per pixel from the
   interpolated normal and tangent (Gram-Schmidt), with the tangent's w giving
-  the bitangent's sign. The map's xy are scaled by the normal strength.
+  the bitangent's sign. Only the map's x and y are read (BC5 compression
+  stores nothing else); z is rebuilt as `sqrt(1 - x² - y²)`. Then x and y
+  are scaled by the normal strength.
 - **Double-sided** surfaces seen from behind flip the whole basis, so back
   faces are lit from their own side.
 - **Specular anti-aliasing**: normal-map detail smaller than a pixel would

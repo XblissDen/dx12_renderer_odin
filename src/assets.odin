@@ -103,25 +103,11 @@ TextureAsset :: struct {
 }
 
 // An albedo texture's alpha at full size, kept on the CPU so picking can see
-// through cutout holes. Empty for other usages and for fully opaque images.
+// through cutout holes (texture_data_alpha). Empty for other usages and for
+// fully opaque images.
 TextureAlpha :: struct {
     values: []u8, // From runtime.heap_allocator().
     width, height: u32,
-}
-
-assets_texture_alpha :: proc(desc: TextureDesc, pixels: []u8, width, height: u32) -> TextureAlpha {
-    if desc.usage != .albedo do return {}
-    opaque := true
-    for i := 3; i < len(pixels); i += 4 {
-        if pixels[i] != 255 {
-            opaque = false
-            break
-        }
-    }
-    if opaque do return {}
-    values := make([]u8, int(width) * int(height), runtime.heap_allocator())
-    for &value, i in values do value = pixels[i * 4 + 3]
-    return {values, width, height}
 }
 
 assets_free_texture_alpha :: proc(alpha: ^TextureAlpha) {
@@ -282,8 +268,9 @@ assets_import :: proc(request: AssetImportRequest) -> (model: MeshHandle, textur
         delete(textures)
     }
 
-    pixels: []u8
-    width, height: u32
+    prepared_texture: TextureData
+    defer texture_data_destroy(&prepared_texture)
+    defer if !committed do assets_free_texture_alpha(&prepared_texture.alpha)
     bounds: MeshBounds
     material: Material
     if request.model {
@@ -303,9 +290,11 @@ assets_import :: proc(request: AssetImportRequest) -> (model: MeshHandle, textur
             id = id, name = name, path = destination, usage = request.usage,
             settings = {flip_green = request.flip_green && request.usage == .normal},
         }, allocator)
-        pixels, width, height, message = assets_try_texture_pixels(texture_desc, context.temp_allocator)
-        if message != "" do return 0, 0, message
+        // Compressed and cached now, so the next start finds it ready.
+        prepared_texture = texture_prepare(texture_desc)
+        if prepared_texture.message != "" do return 0, 0, prepared_texture.message
     }
+    defer if !committed && !request.model do texture_cache_forget(texture_desc.id)
 
     catalog_tmp, catalog_contents: string
     prepared: bool
@@ -326,7 +315,7 @@ assets_import :: proc(request: AssetImportRequest) -> (model: MeshHandle, textur
         meshes[len(meshes) - 1] = gpu_mesh
     } else {
         gpu_texture.srv_index = g_renderer.srv_next
-        if renderer_upload_texture(&gpu_texture, texture_desc, pixels, width, height) < 0 do return 0, 0, "GPU texture upload failed."
+        if renderer_upload_texture(&gpu_texture, prepared_texture) < 0 do return 0, 0, "GPU texture upload failed."
         textures = make([]GpuTexture, len(g_renderer.textures) + 1)
         copy(textures, g_renderer.textures)
         textures[len(textures) - 1] = gpu_texture
@@ -350,8 +339,7 @@ assets_import :: proc(request: AssetImportRequest) -> (model: MeshHandle, textur
     } else {
         texture = TextureHandle(len(g_assets.textures))
         append(&g_assets.textures, TextureAsset{
-            desc = texture_desc, label = label,
-            alpha = assets_texture_alpha(texture_desc, pixels, width, height),
+            desc = texture_desc, label = label, alpha = prepared_texture.alpha,
         })
         g_assets.texture_ids[texture_desc.id] = texture
         delete(g_renderer.textures)
@@ -516,18 +504,23 @@ assets_import_gltf :: proc(request: AssetImportRequest) -> (model: MeshHandle, m
     }
     alphas := make([]TextureAlpha, len(texture_descs), context.temp_allocator)
     defer if !committed do for &alpha in alphas do assets_free_texture_alpha(&alpha)
-    batch := assets_decode_batch_size()
+    // Compressing happens here (and fills the cache for the next start).
+    defer if !committed do for desc in texture_descs do texture_cache_forget(desc.id)
+    batch := assets_prepare_batch_size()
     for first := 0; first < len(texture_descs); first += batch {
         descs := texture_descs[first:min(first + batch, len(texture_descs))]
-        decoded := make([]DecodedTexture, len(descs), context.temp_allocator)
-        assets_decode_textures(descs, decoded)
-        defer for texture in decoded do delete(texture.pixels, runtime.heap_allocator())
-        for texture, i in decoded {
+        prepared := make([]TextureData, len(descs), context.temp_allocator)
+        assets_prepare_textures(descs, prepared)
+        defer for &texture in prepared {
+            texture_data_destroy(&texture)
+            assets_free_texture_alpha(&texture.alpha)
+        }
+        for &texture, i in prepared {
             if texture.message != "" do return 0, fmt.tprintf("%s (%s)", texture.message, descs[i].path)
             gpu := GpuTexture{srv_index = g_renderer.srv_next + u32(first + i)}
-            if renderer_upload_texture(&gpu, descs[i], texture.pixels, texture.width, texture.height) < 0 do return 0, "GPU texture upload failed."
+            if renderer_upload_texture(&gpu, texture) < 0 do return 0, "GPU texture upload failed."
             append(&gpu_textures, gpu)
-            alphas[first + i] = assets_texture_alpha(descs[i], texture.pixels, texture.width, texture.height)
+            alphas[first + i], texture.alpha = texture.alpha, {}
         }
     }
 
@@ -972,34 +965,26 @@ assets_try_texture_pixels :: proc(desc: TextureDesc, allocator := context.alloca
     return
 }
 
-DecodedTexture :: struct {
-    pixels: []u8, // From runtime.heap_allocator(); the caller deletes them.
-    width, height: u32,
-    message: string, // Empty on success.
-}
-
-// Decoding PNG/JPEG is most of the cost of loading textures, so a batch
-// decodes on one thread per texture.
-assets_decode_textures :: proc(descs: []TextureDesc, results: []DecodedTexture) {
+// Prepares a batch of textures (texture_prepare) on one thread each: reading
+// the cache, or decoding and compressing, is most of the cost of loading.
+assets_prepare_textures :: proc(descs: []TextureDesc, results: []TextureData) {
     assert(len(descs) == len(results))
-    Job :: struct {desc: ^TextureDesc, result: ^DecodedTexture}
-    decode :: proc(job: Job) {
+    Job :: struct {desc: ^TextureDesc, result: ^TextureData}
+    prepare :: proc(job: Job) {
         // The heap allocator is thread-safe; each thread has its own temp allocator.
-        result := job.result
-        result.pixels, result.width, result.height, result.message =
-            assets_try_texture_pixels(job.desc^, runtime.heap_allocator())
+        job.result^ = texture_prepare(job.desc^)
     }
     threads := make([]^thread.Thread, len(descs), context.temp_allocator)
     for &desc, i in descs {
-        threads[i] = thread.create_and_start_with_poly_data(Job{&desc, &results[i]}, decode)
+        threads[i] = thread.create_and_start_with_poly_data(Job{&desc, &results[i]}, prepare)
     }
     thread.join_multiple(..threads)
     for t in threads do thread.destroy(t)
 }
 
-// Textures to decode at once: one per core, which also bounds the memory
-// held by decoded pixels waiting for upload.
-assets_decode_batch_size :: proc() -> int {
+// Textures to prepare at once: one per core, which also bounds the memory
+// held by textures waiting for upload.
+assets_prepare_batch_size :: proc() -> int {
     return clamp(os.get_processor_core_count(), 1, 16)
 }
 
@@ -1249,6 +1234,7 @@ assets_remove :: proc(scene: ^Scene, mesh: MeshHandle, texture: TextureHandle) -
         assets_free_texture_alpha(&asset.alpha)
         renderer_release_texture(handle)
         assets_delete_imported(asset.desc.path, false)
+        texture_cache_forget(asset.desc.id)
     }
     return ""
 }

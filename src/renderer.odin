@@ -510,12 +510,6 @@ Renderer :: struct {
     fog_history_ready: bool,
     fog_history_distance: f32,
 
-    // Material texture mips are rendered on the GPU (texture_mips.odin), with
-    // scratch views for building one texture at a time.
-    mip_pipeline: ^d3d12.IPipelineState,
-    mip_rtv_heap: ^d3d12.IDescriptorHeap,
-    mip_srv_start: u32,
-
     timestamp_heap: ^d3d12.IQueryHeap,
     timestamp_readback: ^d3d12.IResource,
     timestamp_frequency: u64,
@@ -768,7 +762,7 @@ renderer_pipeline_slots :: proc() -> []^^d3d12.IPipelineState {
         &r.post_pipeline_state, &r.fxaa_pipeline_state, &r.sharpen_pipeline_state,
         &r.taa_resolve_pipeline_state, &r.sky_pipeline_state,
         &r.irradiance_pipeline_state, &r.prefilter_pipeline_state,
-        &r.ssao_pipeline_state, &r.ssao_blur_pipeline_state, &r.ssr_pipeline_state, &r.mip_pipeline,
+        &r.ssao_pipeline_state, &r.ssao_blur_pipeline_state, &r.ssr_pipeline_state,
         &r.cluster_pipeline_state, &r.cull_pipeline_state, &r.hiz_pipeline_state,
         &r.fog_inject_pipeline_state, &r.fog_integrate_pipeline_state, &r.fog_apply_pipeline_state,
         &r.selection_pipeline_state, &r.selection_outline_pipeline_state,
@@ -1021,7 +1015,6 @@ Root_Slot :: enum u32 {
     Shadow_View,         // b5: root constant, the shadow view being drawn (cascade, spot slot or point face)
     Texture_T8,          // t8: ambient occlusion, or TAA motion vectors
     Depth,               // t9: scene depth
-    Mip_Constants,       // b6: root constant, texture mip builder flags
     Exposure_Buffer,     // t16: root SRV, the automatic exposure (auto_exposure.hlsl)
     Spot_Shadows,        // t5: spot light shadow maps (one slice per slot)
     Point_Shadows,       // t6: point light shadow cube maps (one cube per slot)
@@ -1060,7 +1053,6 @@ ROOT_LAYOUT := [Root_Slot]Root_Param{
     .Shadow_View         = {.Constants, 5, 1, .VERTEX},
     .Texture_T8          = {.Table, 8, 1, .PIXEL},
     .Depth               = {.Table, 9, 1, .PIXEL},
-    .Mip_Constants       = {.Constants, 6, 1, .PIXEL},
     .Exposure_Buffer     = {.SRV, 16, 0, .PIXEL},
     .Spot_Shadows        = {.Table, 5, 1, .PIXEL},
     .Point_Shadows       = {.Table, 6, 1, .PIXEL},
@@ -1488,8 +1480,6 @@ renderer_create_pipelines :: proc() {
         RenderTargetWriteMask = u8(d3d12.COLOR_WRITE_ENABLE_ALL),
     }
     renderer_create_fullscreen_pso(fog_apply, "shaders/scene.hlsl", "PSFogApply", .R16G16B16A16_FLOAT, &r.fog_apply_pipeline_state)
-
-    renderer_create_fullscreen_pso(fullscreen, "shaders/texture_mips.hlsl", "PSDownsample", .R8G8B8A8_UNORM, &r.mip_pipeline)
 }
 
 renderer_load_assets :: proc(){
@@ -1794,25 +1784,23 @@ renderer_load_textures :: proc(){
     for index in environment_slots {
         r.device->CreateShaderResourceView(nil, &null_desc, renderer_srv_cpu(index))
     }
-    renderer_create_mip_resources()
     r.textures = make([]GpuTexture, len(g_assets.textures))
     for i in 1..<len(g_assets.textures) do r.textures[i].srv_index = renderer_alloc_srv()
 
-    // Decode a batch in parallel, then upload it in order.
-    batch := assets_decode_batch_size()
+    // Prepare a batch in parallel (mostly reading the cache), then upload it
+    // in order.
+    batch := assets_prepare_batch_size()
     for first := 1; first < len(g_assets.textures); first += batch {
         count := min(batch, len(g_assets.textures) - first)
         descs := make([]TextureDesc, count, context.temp_allocator)
         for &desc, i in descs do desc = g_assets.textures[first + i].desc
-        decoded := make([]DecodedTexture, count, context.temp_allocator)
-        assets_decode_textures(descs, decoded)
-        for texture, i in decoded {
+        prepared := make([]TextureData, count, context.temp_allocator)
+        assets_prepare_textures(descs, prepared)
+        for &texture, i in prepared {
             if texture.message != "" do panic(texture.message)
-            dx_check(renderer_upload_texture(
-                &r.textures[first + i], descs[i], texture.pixels, texture.width, texture.height,
-            ))
-            g_assets.textures[first + i].alpha = assets_texture_alpha(descs[i], texture.pixels, texture.width, texture.height)
-            delete(texture.pixels, runtime.heap_allocator())
+            dx_check(renderer_upload_texture(&r.textures[first + i], texture))
+            g_assets.textures[first + i].alpha = texture.alpha
+            texture_data_destroy(&texture)
         }
     }
 }
@@ -1833,12 +1821,9 @@ renderer_release_texture :: proc(handle: TextureHandle) {
     texture.resource = nil
 }
 
-renderer_upload_texture :: proc(
-    gpu: ^GpuTexture,
-    desc: TextureDesc,
-    pixels: []u8,
-    width32, height32: u32,
-) -> (hr: win32.HRESULT) {
+// Uploads a prepared texture (texture_prepare): every level, in its format,
+// and writes its SRV at gpu.srv_index. Waits for the GPU.
+renderer_upload_texture :: proc(gpu: ^GpuTexture, texture: TextureData) -> (hr: win32.HRESULT) {
     r := &g_renderer
 
     defer if hr < 0 && gpu.resource != nil {
@@ -1846,77 +1831,62 @@ renderer_upload_texture :: proc(
         gpu.resource = nil
     }
 
-    width, height := u64(width32), u64(height32)
-    is_normal_map := desc.usage == .normal
-    is_linear_data := desc.usage != .albedo && desc.usage != .emissive
-
-    // Color textures are sRGB-encoded: the _SRGB format makes the sampler
-    // decode to linear before filtering. Data maps stay UNORM.
-    format: dxgi.FORMAT = .R8G8B8A8_UNORM_SRGB if !is_linear_data else .R8G8B8A8_UNORM
-
-    // Only level 0 is uploaded; the GPU renders the rest of the chain. The
-    // resource is typeless so the mip builder can view it as plain UNORM.
-    mip_count := texture_mip_count(width32, height32)
+    level_count := u32(len(texture.levels))
     tex_desc := d3d12.RESOURCE_DESC{
         Dimension = .TEXTURE2D,
-        Width = width,
-        Height = u32(height),
+        Width = u64(texture.width),
+        Height = texture.height,
         DepthOrArraySize = 1,
-        MipLevels = u16(mip_count),
-        Format = .R8G8B8A8_TYPELESS,
+        MipLevels = u16(level_count),
+        Format = texture.format,
         SampleDesc = {Count = 1},
-        Flags = {.ALLOW_RENDER_TARGET} if mip_count > 1 else {},
     }
-
-    default_heap := d3d12.HEAP_PROPERTIES{ Type = .DEFAULT }
+    default_heap := d3d12.HEAP_PROPERTIES{Type = .DEFAULT}
     hr = r.device->CreateCommittedResource(
-        &default_heap,
-        {},
-        &tex_desc,
-        { .COPY_DEST },
-        nil,
-        d3d12.IResource_UUID,
-        (^rawptr)(&gpu.resource),
+        &default_heap, {}, &tex_desc, {.COPY_DEST}, nil,
+        d3d12.IResource_UUID, (^rawptr)(&gpu.resource),
     )
     if hr < 0 do return
 
-    layout: d3d12.PLACED_SUBRESOURCE_FOOTPRINT
-    row_count: u32
-    row_size, upload_size: u64
-    r.device->GetCopyableFootprints(&tex_desc, 0, 1, 0, &layout, &row_count, &row_size, &upload_size)
+    layouts := make([]d3d12.PLACED_SUBRESOURCE_FOOTPRINT, level_count, context.temp_allocator)
+    row_counts := make([]u32, level_count, context.temp_allocator)
+    row_sizes := make([]u64, level_count, context.temp_allocator)
+    upload_size: u64
+    r.device->GetCopyableFootprints(
+        &tex_desc, 0, level_count, 0,
+        raw_data(layouts), raw_data(row_counts), raw_data(row_sizes), &upload_size,
+    )
 
-    upload_heap := d3d12.HEAP_PROPERTIES { Type = .UPLOAD }
+    upload_heap := d3d12.HEAP_PROPERTIES{Type = .UPLOAD}
     upload_desc := d3d12.RESOURCE_DESC{
         Dimension = .BUFFER,
         Width = upload_size,
         Height = 1,
         DepthOrArraySize = 1,
         MipLevels = 1,
-        SampleDesc = { Count = 1},
+        SampleDesc = {Count = 1},
         Layout = .ROW_MAJOR,
     }
-
     upload_buffer: ^d3d12.IResource
     hr = r.device->CreateCommittedResource(
-        &upload_heap,
-        {},
-        &upload_desc,
-        d3d12.RESOURCE_STATE_GENERIC_READ,
-        nil,
-        d3d12.IResource_UUID,
-        (^rawptr)(&upload_buffer),
+        &upload_heap, {}, &upload_desc, d3d12.RESOURCE_STATE_GENERIC_READ, nil,
+        d3d12.IResource_UUID, (^rawptr)(&upload_buffer),
     )
     if hr < 0 do return
     defer upload_buffer->Release()
 
+    // Levels are tightly packed rows (of texels or of 4x4 blocks); the upload
+    // buffer's rows are aligned to D3D's pitch.
     mapped: rawptr
     hr = upload_buffer->Map(0, nil, &mapped)
     if hr < 0 do return
-    for y in 0..<int(row_count) {
-        destination_row := uintptr(mapped) + uintptr(layout.Offset) +
-            uintptr(u64(y) * u64(layout.Footprint.RowPitch))
-        source_row := uintptr(raw_data(pixels)) + uintptr(u64(y) * row_size)
-        runtime.mem_copy(rawptr(destination_row), rawptr(source_row), int(row_size))
+    for level, i in texture.levels {
+        layout := layouts[i]
+        assert(int(row_sizes[i]) * int(row_counts[i]) == len(level))
+        for y in 0..<int(row_counts[i]) {
+            destination := uintptr(mapped) + uintptr(layout.Offset) + uintptr(u64(y) * u64(layout.Footprint.RowPitch))
+            runtime.mem_copy(rawptr(destination), raw_data(level[y * int(row_sizes[i]):]), int(row_sizes[i]))
+        }
     }
     upload_buffer->Unmap(0, nil)
 
@@ -1924,44 +1894,29 @@ renderer_upload_texture :: proc(
     if hr < 0 do return
     hr = r.command_list->Reset(r.command_allocators[0], nil)
     if hr < 0 do return
-
-    src_location := d3d12.TEXTURE_COPY_LOCATION{
-        pResource = upload_buffer,
-        Type = .PLACED_FOOTPRINT,
+    for i in 0..<level_count {
+        source := d3d12.TEXTURE_COPY_LOCATION{pResource = upload_buffer, Type = .PLACED_FOOTPRINT, PlacedFootprint = layouts[i]}
+        destination := d3d12.TEXTURE_COPY_LOCATION{pResource = gpu.resource, Type = .SUBRESOURCE_INDEX, SubresourceIndex = i}
+        r.command_list->CopyTextureRegion(&destination, 0, 0, 0, &source, nil)
     }
-    src_location.PlacedFootprint = layout
-    dst_location := d3d12.TEXTURE_COPY_LOCATION{
-        pResource = gpu.resource,
-        Type = .SUBRESOURCE_INDEX,
-        SubresourceIndex = 0,
-    }
-    r.command_list->CopyTextureRegion(&dst_location, 0, 0, 0, &src_location, nil)
-
-    // Level 0 becomes readable; the mip builder moves the rest.
-    copy_barrier := d3d12.RESOURCE_BARRIER { Type = .TRANSITION }
-    copy_barrier.Transition = {
-        pResource   = gpu.resource,
-        StateBefore = { .COPY_DEST },
-        StateAfter  = { .PIXEL_SHADER_RESOURCE },
-        Subresource = 0,
-    }
-    r.command_list->ResourceBarrier(1, &copy_barrier)
-    mip_mode: Texture_Mip_Mode = .Normal if is_normal_map else .Data if is_linear_data else .Srgb
-    renderer_record_texture_mips(gpu.resource, width32, height32, mip_count, mip_mode)
+    barrier := resource_transition(gpu.resource, {.COPY_DEST}, {.PIXEL_SHADER_RESOURCE})
+    r.command_list->ResourceBarrier(1, &barrier)
     hr = r.command_list->Close()
     if hr < 0 do return
 
-    lists := []^d3d12.ICommandList{ r.command_list }
+    lists := []^d3d12.ICommandList{r.command_list}
     r.command_queue->ExecuteCommandLists(u32(len(lists)), raw_data(lists))
-
+    // The staging buffer must outlive the copy.
     renderer_wait_for_gpu()
 
-    srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC {
-        Format                  = format,
-        ViewDimension           = .TEXTURE2D,
+    // Color formats are _SRGB, so the sampler decodes to linear before
+    // filtering; data maps are UNORM.
+    srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
+        Format = texture.format,
+        ViewDimension = .TEXTURE2D,
         Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
     }
-    srv_desc.Texture2D = { MipLevels = mip_count }
+    srv_desc.Texture2D = {MipLevels = level_count}
     r.device->CreateShaderResourceView(gpu.resource, &srv_desc, renderer_srv_cpu(gpu.srv_index))
     return
 }
@@ -2132,7 +2087,6 @@ renderer_destroy :: proc(){
     for target in r.ao_targets do target->Release()
     r.ao_rtv_heap->Release()
     renderer_release_auto_exposure()
-    r.mip_rtv_heap->Release()
 
     for slot in renderer_pipeline_slots() do slot^->Release()
     delete(r.shader_error)

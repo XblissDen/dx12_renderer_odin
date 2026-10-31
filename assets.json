@@ -936,6 +936,68 @@
           "double_sided": false
         }
       ]
+    },
+    {
+      "id": "model.damagedhelmet",
+      "name": "DamagedHelmet",
+      "path": "models/imported/model.damagedhelmet/DamagedHelmet.glb",
+      "import": {
+        "flip_v": false
+      },
+      "material": {
+        "name": "",
+        "albedo": "",
+        "normal": "",
+        "roughness_map": "",
+        "metallic_map": "",
+        "emissive_map": "",
+        "occlusion_map": "",
+        "roughness": null,
+        "metallic": null,
+        "normal_strength": null,
+        "uv_scale": null,
+        "emissive_strength": null,
+        "occlusion_strength": null,
+        "alpha_cutoff": null,
+        "transparency": null,
+        "tint": null,
+        "emissive": null,
+        "alpha_mask": false,
+        "alpha_blend": false,
+        "double_sided": false
+      },
+      "materials": [
+        {
+          "name": "Material_MR",
+          "albedo": "model.damagedhelmet.image0.albedo",
+          "normal": "model.damagedhelmet.image4.normal",
+          "roughness_map": "model.damagedhelmet.image1.roughness",
+          "metallic_map": "model.damagedhelmet.image1.metallic",
+          "emissive_map": "model.damagedhelmet.image2.emissive",
+          "occlusion_map": "model.damagedhelmet.image3.occlusion",
+          "roughness": 1.00000000,
+          "metallic": 1.00000000,
+          "normal_strength": 1.00000000,
+          "uv_scale": null,
+          "emissive_strength": 1.00000000,
+          "occlusion_strength": 1.00000000,
+          "alpha_cutoff": null,
+          "transparency": null,
+          "tint": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "emissive": [
+            1.00000000,
+            1.00000000,
+            1.00000000
+          ],
+          "alpha_mask": false,
+          "alpha_blend": false,
+          "double_sided": false
+        }
+      ]
     }
   ],
   "textures": [
@@ -3303,6 +3365,126 @@
       "id": "model.flighthelmet.image13.occlusion",
       "name": "FlightHelmet_Materials_LensesMat_OcclusionRoughMetal",
       "path": "models/imported/model.flighthelmet/FlightHelmet_Materials_LensesMat_OcclusionRoughMetal.png",
+      "usage": "occlusion",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 0
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.damagedhelmet.image0.albedo",
+      "name": "image0",
+      "path": "models/imported/model.damagedhelmet/image0.jpg",
+      "usage": "albedo",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.damagedhelmet.image4.normal",
+      "name": "image4",
+      "path": "models/imported/model.damagedhelmet/image4.jpg",
+      "usage": "normal",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.damagedhelmet.image1.roughness",
+      "name": "image1",
+      "path": "models/imported/model.damagedhelmet/image1.jpg",
+      "usage": "roughness",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 1
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.damagedhelmet.image1.metallic",
+      "name": "image1",
+      "path": "models/imported/model.damagedhelmet/image1.jpg",
+      "usage": "metallic",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": 2
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.damagedhelmet.image2.emissive",
+      "name": "image2",
+      "path": "models/imported/model.damagedhelmet/image2.jpg",
+      "usage": "emissive",
+      "source": "file",
+      "import": {
+        "flip_green": false,
+        "channel": null
+      },
+      "width": 0,
+      "height": 0,
+      "tile_size": 0,
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "model.damagedhelmet.image3.occlusion",
+      "name": "image3",
+      "path": "models/imported/model.damagedhelmet/image3.jpg",
       "usage": "occlusion",
       "source": "file",
       "import": {

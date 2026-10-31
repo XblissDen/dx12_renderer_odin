@@ -1,7 +1,7 @@
 package main
 
+import "base:runtime"
 import "core:math"
-import d3d12 "vendor:directx/d3d12"
 
 // The next mip level of an HDR panorama (RGBA floats), built on the CPU at
 // half the size. Panoramas are linear radiance, so latitude rows are weighted
@@ -50,12 +50,6 @@ texture_next_environment_mip :: proc(
     return
 }
 
-// How texture_mips.hlsl averages texels; values match its MIP_* defines.
-Texture_Mip_Mode :: enum u32 {Data, Srgb, Normal}
-
-// Enough levels for textures up to 32768 pixels on a side.
-TEXTURE_MAX_MIPS :: 16
-
 // Levels in a full mip chain: each half the size of the last (rounded down,
 // at least 1) down to 1x1.
 texture_mip_count :: proc(width, height: u32) -> u32 {
@@ -66,73 +60,85 @@ texture_mip_count :: proc(width, height: u32) -> u32 {
     return count
 }
 
-// Scratch views for building one texture's mips: a source SRV and a target
-// RTV per level after the first.
-renderer_create_mip_resources :: proc() {
-    r := &g_renderer
-    r.mip_srv_start = renderer_alloc_srv(TEXTURE_MAX_MIPS - 1)
-    heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{NumDescriptors = TEXTURE_MAX_MIPS - 1, Type = .RTV}
-    dx_check(r.device->CreateDescriptorHeap(&heap_desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&r.mip_rtv_heap)))
+// How a material texture's levels average texels: data as stored, sRGB color
+// in linear space (alpha stays linear), and normal maps as directions.
+Texture_Mip_Mode :: enum {Data, Srgb, Normal}
+
+texture_mip_mode :: proc(usage: TextureUsage) -> Texture_Mip_Mode {
+    #partial switch usage {
+    case .albedo, .emissive: return .Srgb
+    case .normal: return .Normal
+    }
+    return .Data
 }
 
-// Records commands that render levels 1 and up of `texture` from level 0,
-// each from the level above it (texture_mips.hlsl), viewing the typeless
-// R8G8B8A8 texture as UNORM. Level 0 must be in PIXEL_SHADER_RESOURCE state
-// and the others in COPY_DEST; all end in PIXEL_SHADER_RESOURCE. The next
-// texture reuses the scratch views, so the caller must execute and wait for
-// these commands first.
-renderer_record_texture_mips :: proc(
-    texture: ^d3d12.IResource,
-    width, height, mip_count: u32,
-    mode: Texture_Mip_Mode,
-) {
-    r := &g_renderer
-    assert(mip_count <= TEXTURE_MAX_MIPS)
-    if mip_count <= 1 do return
+// The full mip chain of an RGBA8 image; level 0 is `pixels` itself, the rest
+// come from runtime.heap_allocator(). Each level is a 2x2 box filter of the
+// one above: for odd sizes the last row or column is dropped, as D3D's sizes
+// (half, rounded down) imply, and a 1-texel-wide level repeats its only
+// column. sRGB is decoded and re-encoded with the exact transfer functions and
+// every value rounded to the nearest byte, so the error does not grow level
+// after level.
+texture_build_mips :: proc(pixels: []u8, width, height: u32, mode: Texture_Mip_Mode) -> [][]u8 {
+    heap := runtime.heap_allocator()
+    levels := make([][]u8, texture_mip_count(width, height), heap)
+    levels[0] = pixels
 
-    r.command_list->SetGraphicsRootSignature(r.root_signature)
-    r.command_list->SetPipelineState(r.mip_pipeline)
-    heaps := []^d3d12.IDescriptorHeap{r.srv_heap}
-    r.command_list->SetDescriptorHeaps(1, raw_data(heaps))
-    r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
-    r.command_list->SetGraphicsRoot32BitConstant(u32(Root_Slot.Mip_Constants), u32(mode), 0)
-
-    for mip in 1..<mip_count {
-        slot := mip - 1
-        srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
-            Format = .R8G8B8A8_UNORM,
-            ViewDimension = .TEXTURE2D,
-            Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
-        }
-        srv_desc.Texture2D = {MostDetailedMip = mip - 1, MipLevels = 1}
-        r.device->CreateShaderResourceView(texture, &srv_desc, renderer_srv_cpu(r.mip_srv_start + slot))
-
-        rtv_desc := d3d12.RENDER_TARGET_VIEW_DESC{Format = .R8G8B8A8_UNORM, ViewDimension = .TEXTURE2D}
-        rtv_desc.Texture2D = {MipSlice = mip}
-        rtv := descriptor_handle(r.mip_rtv_heap, .RTV, slot)
-        r.device->CreateRenderTargetView(texture, &rtv_desc, rtv)
-
-        barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
-        barrier.Transition = {
-            pResource = texture,
-            StateBefore = {.COPY_DEST},
-            StateAfter = {.RENDER_TARGET},
-            Subresource = mip,
-        }
-        r.command_list->ResourceBarrier(1, &barrier)
-
-        mip_width, mip_height := max(1, width >> mip), max(1, height >> mip)
-        viewport := d3d12.VIEWPORT{Width = f32(mip_width), Height = f32(mip_height), MaxDepth = 1}
-        scissor := d3d12.RECT{right = i32(mip_width), bottom = i32(mip_height)}
-        r.command_list->RSSetViewports(1, &viewport)
-        r.command_list->RSSetScissorRects(1, &scissor)
-        r.command_list->OMSetRenderTargets(1, &rtv, false, nil)
-        renderer_bind_srv(.Texture_T0, r.mip_srv_start + slot)
-        r.command_list->DrawInstanced(3, 1, 0, 0)
-
-        // The next level reads this one.
-        barrier.Transition.StateBefore = {.RENDER_TARGET}
-        barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
-        r.command_list->ResourceBarrier(1, &barrier)
+    to_linear: [256]f32
+    for &value, i in to_linear {
+        c := f32(i) / 255
+        value = c / 12.92 if c <= 0.04045 else math.pow((c + 0.055) / 1.055, 2.4)
     }
+    to_byte :: proc(value: f32) -> u8 {
+        return u8(math.floor(clamp(value, 0, 1) * 255 + 0.5))
+    }
+    to_srgb :: proc(value: f32) -> f32 {
+        return value * 12.92 if value <= 0.0031308 else 1.055 * math.pow(max(value, 0), 1.0 / 2.4) - 0.055
+    }
+
+    w, h := width, height
+    for level in 1..<len(levels) {
+        next_w, next_h := max(1, w / 2), max(1, h / 2)
+        source := levels[level - 1]
+        target := make([]u8, int(next_w) * int(next_h) * 4, heap)
+        for y in 0..<next_h {
+            for x in 0..<next_w {
+                taps: [4]int
+                for i in 0..<u32(4) {
+                    sx := min(x * 2 + i % 2, w - 1)
+                    sy := min(y * 2 + i / 2, h - 1)
+                    taps[i] = int(sy * w + sx) * 4
+                }
+                out := target[int(y * next_w + x) * 4:][:4]
+                switch mode {
+                case .Data:
+                    for c in 0..<4 {
+                        sum := 0
+                        for tap in taps do sum += int(source[tap + c])
+                        out[c] = u8((sum + 2) / 4)
+                    }
+                case .Srgb:
+                    for c in 0..<3 {
+                        sum: f32
+                        for tap in taps do sum += to_linear[source[tap + c]]
+                        out[c] = to_byte(to_srgb(sum * 0.25))
+                    }
+                    alpha := 0
+                    for tap in taps do alpha += int(source[tap + 3])
+                    out[3] = u8((alpha + 2) / 4)
+                case .Normal:
+                    // Average directions, not encoded values.
+                    n: [3]f32
+                    for tap in taps do for c in 0..<3 do n[c] += f32(source[tap + c]) / 255 * 2 - 1
+                    length := math.sqrt(n.x * n.x + n.y * n.y + n.z * n.z)
+                    n = n / length if length > 0.0001 else {0, 0, 1}
+                    for c in 0..<3 do out[c] = to_byte(n[c] * 0.5 + 0.5)
+                    out[3] = 255
+                }
+            }
+        }
+        levels[level] = target
+        w, h = next_w, next_h
+    }
+    return levels
 }

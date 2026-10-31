@@ -296,7 +296,7 @@ assigns registers:
 | Draw constants | b0 | Root constant: the draw call's first instance-list entry |
 | Post / Sky / Prefilter constants | b1, b2, b3 | Per-pass constants |
 | Frame constants | b4 | Camera, lights, shadows, effect settings |
-| Shadow cascade, Mip constants | b5, b6 | Root constants |
+| Shadow view | b5 | Root constant: the cascade, spot slot or point face being drawn |
 | Texture T0, T1 | t0, t1 | Main inputs of full-screen passes; t1 is the sun's shadow cascades in the lit pass |
 | Environment, Irradiance, Prefiltered | t2, t3, t4 | Panorama and IBL maps |
 | Spot shadows, Point shadows | t5, t6 | Shadow map arrays |

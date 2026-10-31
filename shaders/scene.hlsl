@@ -686,10 +686,13 @@ void SurfaceNormalRoughness(
         ) * face_sign;
         float3 B = cross(N, T) * tangent.w * face_sign;
 
-        // Normal maps encode signed directions in unsigned RGB channels.
-        float3 tangent_normal = g_normal_map.Sample(
+        // Normal maps encode signed directions in unsigned channels. Only x
+        // and y are read (BC5 stores nothing else); z is the unit length's
+        // remainder, as tangent-space normals point out of the surface.
+        float2 normal_xy = g_normal_map.Sample(
             g_material_sampler, material_uv
-        ).xyz * 2.0f - 1.0f;
+        ).xy * 2.0f - 1.0f;
+        float3 tangent_normal = float3(normal_xy, sqrt(saturate(1.0f - dot(normal_xy, normal_xy))));
 
         tangent_normal.xy *= g_object.normal_strength;
 

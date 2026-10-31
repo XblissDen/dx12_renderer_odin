@@ -11,8 +11,8 @@ catalog ID, never by file path.
   glTF. New entities start with those materials.
 - **Textures** have an ID, a path, and a **usage**: albedo, normal, roughness,
   metallic, emissive, occlusion, or data. The usage decides the color space
-  (albedo and emissive are sRGB, the rest linear), how mips are filtered, and
-  which material fields accept the texture. Options: invert a normal map's
+  (albedo and emissive are sRGB, the rest linear), how mips are filtered, how
+  the texture is compressed, and which material fields accept it. Options: invert a normal map's
   green channel, or take one channel of the image as gray (how glTF's packed
   textures are split). A few textures are generated instead of loaded: the
   checkerboard and solid colors such as the flat normal.
@@ -120,27 +120,50 @@ Models imported before a material feature existed keep the materials stored in
 
 ## Textures
 
-Textures load at startup and on import.
+Textures load at startup and on import, prepared on worker threads (one
+texture per core at a time) and then uploaded with every mip level
+(`src/texture_cache.odin`, `src/texture_mips.odin`).
 
-1. **Decoding**: PNG and JPEG files are decoded on worker threads, one texture
-   per core at a time.
-2. **Upload**: only the full-size image is uploaded, to a typeless
-   `R8G8B8A8` texture; albedo and emissive are read through `_SRGB` views, so
-   shaders get linear color.
-3. **Mips on the GPU** (`shaders/texture_mips.hlsl`): each level is rendered
-   from the one above with a 2 × 2 box filter, in a mode chosen by the usage.
-   Color is averaged in linear space and re-encoded to sRGB, with linear alpha.
-   Normal maps average directions and renormalize them. Data is averaged as
-   is. The shader reads and writes plain UNORM views and does the sRGB
-   conversion and rounding itself, since the hardware's are only specified to
-   a tolerance and the error would grow level after level. This reproduces the
-   CPU filter it replaced.
-4. **Alpha for picking**: albedo textures with any transparency keep a
-   full-size copy of their alpha channel on the CPU, so picking can see through
-   cutout holes. Fully opaque images keep nothing.
+1. **Decoding**: stb_image decodes PNG and JPEG files to RGBA8, and the
+   texture's settings (a single channel, an inverted green channel) apply.
+2. **Mips**: every level is built on the CPU from the one above with a 2 × 2
+   box filter, in a mode chosen by the usage. Color is averaged in linear
+   space and re-encoded to sRGB, with linear alpha; normal maps average
+   directions and renormalize them; data is averaged as is. Values are
+   rounded to the nearest byte at every level, so the error does not grow
+   down the chain.
+3. **Compression**: textures whose sides are multiples of 4 are stored
+   block-compressed, which the GPU samples directly:
 
-With Sponza and the helmets in the catalog (129 textures), loading takes about
-1.2 s.
+   | Usage | Format | Bytes per texel | Notes |
+   | --- | --- | --- | --- |
+   | Albedo, emissive | `BC7_UNORM_SRGB` | 1 | Color and alpha |
+   | Normal | `BC5_UNORM` | 1 | x and y only; the shader rebuilds z |
+   | Roughness, metallic, occlusion | `BC4_UNORM` | 0.5 | One channel |
+
+   Other sizes, and the 1 × 1 built-in textures, stay `R8G8B8A8`. The BC7
+   encoder uses only mode 6 (one line segment through RGBA space per 4 × 4
+   block, fitted along the block's principal axis and refined by least
+   squares); fully opaque blocks keep alpha at exactly 255. BC4 and BC5 fit
+   eight levels between each block's minimum and maximum. Normal maps lose
+   their stored z, so every normal map's z is rebuilt from x and y, also for
+   uncompressed ones.
+4. **Cache**: compressing is slow (a few seconds for Sponza and the helmets),
+   so a file texture's result is saved as a DDS file in `cache/textures/`
+   (ignored by git), named `<texture id>@<hash>.dds`. The hash covers the
+   source file's path, size and modification time, the usage and settings,
+   and a version number in the code, so changing any of them prepares the
+   texture again and replaces the old file. Importing a texture fills its
+   entry; removing one deletes it. Deleting the folder is always safe. The
+   files are standard DDS, which texture viewers and RenderDoc can open.
+5. **Alpha for picking**: albedo textures with any transparency keep a
+   full-size copy of their (decompressed) alpha on the CPU, so picking can see
+   through cutout holes. Fully opaque images keep nothing.
+
+With Sponza and the helmets in the catalog (122 textures), the first start
+takes about 4.6 s to prepare them and later starts about 0.3 s, against 1.6 s
+for decoding PNGs before. They take 186 MB of GPU memory instead of 990 MB as
+`R8G8B8A8`.
 
 ## Environments
 

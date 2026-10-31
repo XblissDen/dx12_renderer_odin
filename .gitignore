@@ -10,3 +10,4 @@ dx12_renderer.exe
 vendor/imgui/build/
 vendor/imgui/lib/
 imgui.ini
+cache/
