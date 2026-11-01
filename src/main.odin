@@ -30,7 +30,7 @@ main :: proc(){
     renderer_create_probes()
     renderer_create_hdr_target()
     renderer_create_bloom_targets()
-    renderer_create_ssao_targets()
+    renderer_create_ao_targets()
     renderer_create_selection_mask()
     renderer_create_debug_lines()
     renderer_create_taa_targets()

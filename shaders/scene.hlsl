@@ -771,6 +771,17 @@ PrepassOutput PSPrepassMasked(VelocityInput input, bool is_front_face : SV_IsFro
 // Lit surface color; `transparent` adds coverage in alpha for blending.
 // Unlit materials are handled by the entry points: an early return here makes
 // FXC report X4000 (see CascadeVisibility).
+// GTAO's multi-bounce fit (Jimenez et al. 2016): light bouncing between the
+// surfaces around a crease brightens it, more so on light-colored ones, so
+// occlusion darkens white plaster less than dark wood.
+float3 MultiBounceOcclusion(float visibility, float3 albedo)
+{
+    float3 a = 2.0404f * albedo - 0.3324f;
+    float3 b = -4.7951f * albedo + 0.6417f;
+    float3 c = 2.7552f * albedo + 0.6903f;
+    return max(visibility, ((visibility * a + b) * visibility + c) * visibility);
+}
+
 // The prefiltered levels of a probe, like the environment's: level =
 // roughness * PROBE_LEVEL_SCALE, the last one standing in for diffuse light.
 #define PROBE_LEVEL_SCALE 4.0f
@@ -909,14 +920,14 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
     // Occlusion applies to ambient (sky) light only: the sun and point lights
     // have their own shadows or none.
     float ambient_occlusion = 1.0f;
-    // SSAO comes from the prepass depth, which holds what is behind a
+    // GTAO comes from the prepass depth, which holds what is behind a
     // blended surface, not the surface itself.
     if (ao_enabled != 0u && !transparent)
     {
         ambient_occlusion = g_ao.Load(int3(input.position.xy, 0));
     }
     // Baked occlusion (glTF's definition: red channel, blended in by strength)
-    // adds the detail SSAO cannot see, such as creases inside a model.
+    // adds the detail GTAO cannot see, such as creases inside a model.
     if (g_object.use_occlusion_map != 0u)
     {
         float baked = g_occlusion_map.Sample(g_material_sampler, material_uv).r;
@@ -931,7 +942,7 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
         1.0f + ambient_occlusion
     );
 
-    float3 result = ambient_kD * albedo * incoming_diffuse * ambient_occlusion;
+    float3 result = ambient_kD * albedo * incoming_diffuse * MultiBounceOcclusion(ambient_occlusion, albedo);
 
     float2 environment_brdf = EnvBRDFApprox(n_dot_v, material_roughness);
 
@@ -1128,8 +1139,8 @@ TransparentOutput PSTransparent(PSInput input, bool is_front_face : SV_IsFrontFa
 }
 
 // ---------------------------------------------------------------------------
-// Screen-space ambient occlusion. Full-screen passes driven by the post-process
-// vertex shader; they live here to share FrameConstants.
+// Ambient occlusion (GTAO) and other full-screen passes driven by the
+// post-process vertex shader; they live here to share FrameConstants.
 
 struct FullscreenInput
 {
@@ -1175,13 +1186,30 @@ float3 ViewPositionAt(int2 pixel, float2 size)
     );
 }
 
-// A 4x4 ordered pattern of rotations; the 4x4 blur averages all 16 of them.
-static const float AO_ROTATION_PATTERN[16] = {
+// A 4x4 ordered pattern; the 4x4 blur averages all 16 of its values.
+static const float AO_NOISE_PATTERN[16] = {
     0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5
 };
-#define AO_SAMPLE_COUNT 16
+// Slices (screen directions) per pixel, and depth samples per slice side.
+#define GTAO_SLICE_COUNT 3
+#define GTAO_STEP_COUNT 4
+// Samples farther than this share of the radius fade out of the horizon.
+#define GTAO_FALLOFF_RANGE 0.615f
 
-float PSSsao(FullscreenInput input) : SV_TARGET
+// The cosine-weighted visible arc from the normal's angle n to horizon h,
+// within one slice (GTAO's inner integral, solved in closed form).
+float GtaoArc(float h, float n)
+{
+    return 0.25f * (cos(n) + 2.0f * h * sin(n) - cos(2.0f * h - n));
+}
+
+// Ground-truth ambient occlusion (Jimenez et al. 2016, as in Intel's
+// XeGTAO). Each slice is a plane through the view direction along one screen
+// direction: on both sides of the pixel, the highest horizon in the depth
+// buffer within ao_radius bounds what of the sky can be seen, and the visible
+// arc is integrated with the cosine to the prepass's normal, projected into
+// the slice. The slices' average is the visible share of the ambient light.
+float PSGtao(FullscreenInput input) : SV_TARGET
 {
     uint width, height;
     g_depth.GetDimensions(width, height);
@@ -1193,59 +1221,69 @@ float PSSsao(FullscreenInput input) : SV_TARGET
         return 1.0f; // Sky.
     }
     float3 p = ViewPositionAt(pixel, size);
+    float3 V = normalize(-p);
+    float3 N = normalize(g_surface.Load(int3(pixel, 0)).xyz);
 
-    // Normal from depth: for each axis use the neighbour on the same surface
-    // (smaller depth step), so silhouettes do not bend the normal.
-    float3 left = ViewPositionAt(pixel - int2(1, 0), size);
-    float3 right = ViewPositionAt(pixel + int2(1, 0), size);
-    float3 up = ViewPositionAt(pixel - int2(0, 1), size);
-    float3 down = ViewPositionAt(pixel + int2(0, 1), size);
-    float3 dx = abs(right.z - p.z) < abs(p.z - left.z) ? right - p : p - left;
-    float3 dy = abs(down.z - p.z) < abs(p.z - up.z) ? down - p : p - up;
-    float3 n = normalize(cross(dx, dy));
-    if (dot(n, p) > 0.0f) n = -n; // Face the camera at the view-space origin.
-
-    float3 helper = abs(n.y) < 0.99f ? float3(0, 1, 0) : float3(1, 0, 0);
-    float3 t = normalize(cross(helper, n));
-    float3 b = cross(n, t);
-
-    float rotation = (AO_ROTATION_PATTERN[(pixel.y & 3) * 4 + (pixel.x & 3)] + 0.5f) /
-                     16.0f * 2.0f * PI;
-    float bias = 0.025f * ao_radius;
-
-    float occlusion = 0.0f;
-    [unroll]
-    for (uint i = 0u; i < AO_SAMPLE_COUNT; ++i)
+    // The radius in pixels at this depth; under a pixel there is nothing to find.
+    float radius_pixels = min(ao_radius * projection[1][1] * 0.5f * size.y / p.z, 256.0f);
+    if (radius_pixels < 1.0f)
     {
-        // Cosine-weighted hemisphere directions, denser near the center.
-        float u = (i + 0.5f) / AO_SAMPLE_COUNT;
-        float phi = 2.0f * PI * frac(i * 0.618034f) + rotation;
-        float radius = sqrt(u);
-        float3 direction = float3(radius * cos(phi), radius * sin(phi), sqrt(1.0f - u));
-        float distance_t = frac(i * 0.7548777f + 0.5698403f);
-        float scale = lerp(0.1f, 1.0f, distance_t * distance_t) * ao_radius;
-
-        float3 sample_pos = p + (t * direction.x + b * direction.y + n * direction.z) * scale;
-        float4 clip = mul(float4(sample_pos, 1.0f), projection);
-        float2 uv = clip.xy / clip.w * float2(0.5f, -0.5f) + 0.5f;
-        if (any(uv < 0.0f) || any(uv > 1.0f))
-        {
-            continue;
-        }
-
-        float scene_z = ViewDepthFromDevice(g_depth.Load(int3(uv * size, 0)));
-        // Occluded when the visible surface there is in front of the sample;
-        // ignore surfaces far in front of this pixel (another object's silhouette).
-        float in_range = smoothstep(0.0f, 1.0f, ao_radius / max(abs(p.z - scene_z), 0.0001f));
-        occlusion += (scene_z <= sample_pos.z - bias ? 1.0f : 0.0f) * in_range;
+        return 1.0f;
     }
+    float falloff_range = GTAO_FALLOFF_RANGE * ao_radius;
+    float falloff_mul = -1.0f / falloff_range;
+    float falloff_add = (ao_radius - falloff_range) / falloff_range + 1.0f;
 
-    return pow(saturate(1.0f - occlusion / AO_SAMPLE_COUNT), ao_intensity);
+    float noise = AO_NOISE_PATTERN[(pixel.y & 3) * 4 + (pixel.x & 3)] / 16.0f;
+    float step_noise = frac(noise * 0.618034f + 0.25f);
+
+    float visibility = 0.0f;
+    [unroll]
+    for (uint slice = 0u; slice < GTAO_SLICE_COUNT; ++slice)
+    {
+        float phi = (slice + noise) / GTAO_SLICE_COUNT * PI;
+        // Screen y runs down, view y up.
+        float2 omega = float2(cos(phi), -sin(phi)) * radius_pixels;
+        float3 direction = float3(cos(phi), sin(phi), 0.0f);
+        float3 ortho_direction = direction - dot(direction, V) * V;
+        float3 axis = normalize(cross(ortho_direction, V));
+        float3 projected_normal = N - axis * dot(N, axis);
+        float projected_length = length(projected_normal);
+        float cos_n = saturate(dot(projected_normal, V) / max(projected_length, 1e-5f));
+        float n = sign(dot(ortho_direction, projected_normal)) * acos(cos_n);
+
+        // The lowest horizons the hemisphere allows, then the highest found.
+        float low_cos0 = cos(n + 0.5f * PI);
+        float low_cos1 = cos(n - 0.5f * PI);
+        float horizon_cos0 = low_cos0;
+        float horizon_cos1 = low_cos1;
+        [unroll]
+        for (uint i = 0u; i < GTAO_STEP_COUNT; ++i)
+        {
+            // Denser near the pixel, and never on the pixel itself.
+            float s = (i + step_noise) / GTAO_STEP_COUNT;
+            float2 offset = round(omega * (s * s + 1.3f / radius_pixels));
+            float3 delta0 = ViewPositionAt(pixel + int2(offset), size) - p;
+            float3 delta1 = ViewPositionAt(pixel - int2(offset), size) - p;
+            float distance0 = length(delta0);
+            float distance1 = length(delta1);
+            float weight0 = saturate(distance0 * falloff_mul + falloff_add);
+            float weight1 = saturate(distance1 * falloff_mul + falloff_add);
+            horizon_cos0 = max(horizon_cos0, lerp(low_cos0, dot(delta0 / max(distance0, 1e-5f), V), weight0));
+            horizon_cos1 = max(horizon_cos1, lerp(low_cos1, dot(delta1 / max(distance1, 1e-5f), V), weight1));
+        }
+        float h0 = -acos(clamp(horizon_cos1, -1.0f, 1.0f));
+        float h1 = acos(clamp(horizon_cos0, -1.0f, 1.0f));
+        visibility += projected_length * (GtaoArc(h0, n) + GtaoArc(h1, n));
+    }
+    visibility /= GTAO_SLICE_COUNT;
+
+    return pow(saturate(visibility), ao_intensity);
 }
 
 // 4x4 average that skips pixels on other surfaces (by relative depth), which
-// removes the rotation pattern without blurring across silhouettes.
-float PSSsaoBlur(FullscreenInput input) : SV_TARGET
+// removes the noise pattern without blurring across silhouettes.
+float PSAoBlur(FullscreenInput input) : SV_TARGET
 {
     uint width, height;
     g_depth.GetDimensions(width, height);

@@ -108,7 +108,7 @@ Inspector edits one at a time; scenes save every slot.
   its factor in the shader.
 - **Normal map** with its scale as the normal strength.
 - **Occlusion**: the red channel, often of that same packed texture, blended in
-  by its strength. It darkens ambient light only, multiplied with SSAO.
+  by its strength. It darkens ambient light only, multiplied with GTAO.
 - **Emission**: color, strength (`KHR_materials_emissive_strength`), and an
   optional sRGB map, added after lighting.
 - **Alpha mode**: opaque, cutout (`MASK`, with its cutoff), or blend; and

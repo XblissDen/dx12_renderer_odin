@@ -18,7 +18,7 @@ The model is the common metallic-roughness PBR model:
   albedo, plus its specular light (the prefiltered environment) times the
   split-sum BRDF. The BRDF's scale and bias come from Karis' analytic
   approximation (`EnvBRDFApprox`), so there is no lookup texture.
-- **Occlusion**: ambient occlusion (SSAO times the material's occlusion map)
+- **Occlusion**: ambient occlusion (GTAO times the material's occlusion map)
   darkens only ambient light; the sun and local lights have shadows instead.
   Reflections fade with occlusion through Lagarde's specular occlusion: less at
   grazing angles and on smooth surfaces.
@@ -52,7 +52,7 @@ glTF materials map onto this.
   Golus' method) so thin cutouts keep their coverage in the distance.
 - **Blended** surfaces are drawn after all opaque ones, with alpha = albedo
   alpha × opacity, order-independently ([below](#blended-surfaces)). They
-  skip SSAO and SSR, which come from the opaque surface behind them.
+  skip GTAO and SSR, which come from the opaque surface behind them.
 
 ### Blended surfaces
 
@@ -258,7 +258,7 @@ environment. See [Editor](editor.md#reflection-probes) for placing them.
   and spot light, and the light of probes already captured, so capturing
   again adds bounces. The capture's draws go through the
   [GPU culling](frame.md#gpu-culling) as six more views.
-- **What a capture lacks**: SSAO, SSR, fog and the light clusters belong to
+- **What a capture lacks**: GTAO, SSR, fog and the light clusters belong to
   the camera's view, so a capture does without them and tries every light.
   The sun's cascades follow the camera too: a captured point uses the finest
   cascade that covers it and is unshadowed outside all four, so a probe far
@@ -339,25 +339,41 @@ same sky glow as open ones; lower **Fog sky light** indoors. Blended surfaces
 are fogged at the depth of what is behind them. SSR reflects last frame's image
 with its fog already applied.
 
-## Ambient occlusion (SSAO)
+## Ambient occlusion (GTAO)
 
-SSAO darkens ambient light in creases and where objects meet, from the
-prepass depth (`PSSsao` and `PSSsaoBlur` in `scene.hlsl`).
+Ambient occlusion darkens ambient light in creases and where objects meet.
+It is computed as **ground-truth ambient occlusion** (GTAO; Jimenez et al.
+2016, following Intel's XeGTAO), from the prepass's depth and normals
+(`PSGtao` and `PSAoBlur` in `scene.hlsl`, `src/renderer_ao.odin`). Where
+sampling-based SSAO counts points in a hemisphere, GTAO measures how much of
+the sky a pixel can see, weighted by the cosine to its normal, as a diffuse
+surface receives it.
 
-- **Normal**: rebuilt from depth. For each axis it uses the neighbour on the
-  same surface (the smaller depth step), so silhouettes do not bend it.
-- **Samples**: 16 points in a cosine-weighted hemisphere around the normal, at
-  distances up to **AO radius** (world units, default 1), more of them close
-  to the surface. The hemisphere is rotated per pixel from a 4 × 4 pattern.
-- **Test**: a sample is occluded when the visible surface at its screen
-  position is in front of it. Occluders much farther in front of the pixel
-  than the radius (another object's silhouette) count less, so objects do not
-  cast dark halos onto the background behind them.
-- **Blur**: a 4 × 4 average skipping pixels whose depth differs by more than
-  5%, which removes the rotation pattern without blurring across edges.
-- **Result**: `(1 − occluded fraction) ^ AO intensity` (default 2), multiplied
-  by the material's occlusion map in the lit pass. **Show AO only** displays the
-  combined occlusion.
+1. **Slices**: three screen directions per pixel, rotated by a 4 × 4 pattern.
+   Each defines a slice: the plane through the view direction along that
+   direction.
+2. **Horizons**: on both sides of the pixel, four depth samples out to **AO
+   radius** (world units, default 1, converted to pixels at the pixel's
+   depth), denser near the pixel. Each sample gives the angle up to it from
+   the view direction, and the highest one on each side is the horizon. Samples
+   beyond 40% of the radius fade towards no occlusion, so a distant
+   silhouette does not darken the background behind it.
+3. **Integral**: the prepass's shading normal (normal maps included) is
+   projected into the slice. The visible arc between the two horizons,
+   clamped to the normal's hemisphere, is integrated with the cosine in
+   closed form. The slices' average, each weighted by the projected normal's
+   length, is the visible share of the ambient light.
+4. **Blur**: a 4 × 4 average skipping pixels whose depth differs by more than
+   5%, which removes the pattern without blurring across edges.
+5. **Result**: `visibility ^ AO intensity` (default 2), multiplied by the
+   material's occlusion map. **Show AO only** displays this combined occlusion.
+
+In the lit pass, the diffuse ambient light then uses GTAO's **multi-bounce**
+fit: light bouncing between the surfaces around a crease lifts its occlusion,
+more on light-colored surfaces, so white plaster darkens less than dark wood.
+Reflections use the plain value, through the specular occlusion above. The
+pass costs about 0.9 ms at 1280 × 720 in Sponza, against 0.7 ms for the SSAO
+it replaced.
 
 ## Screen-space reflections (SSR)
 

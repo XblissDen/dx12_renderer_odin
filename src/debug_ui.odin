@@ -342,7 +342,7 @@ debug_ui_exposure_controls :: proc() -> (changed: bool) {
     return
 }
 
-// Sun shadows, SSAO, SSR, reflection probes, the light cluster view and
+// Sun shadows, GTAO, SSR, reflection probes, the light cluster view and
 // volumetric fog.
 debug_ui_lighting_controls :: proc() {
     r := &g_renderer
@@ -354,7 +354,7 @@ debug_ui_lighting_controls :: proc() {
     ui_checkbox("Show shadow cascades", &r.shadow_show_cascades)
 
     ui_separator()
-    ui_checkbox("Ambient occlusion (SSAO)", &r.ao_enabled)
+    ui_checkbox("Ambient occlusion (GTAO)", &r.ao_enabled)
     if r.ao_enabled {
         ui_slider_float("AO radius", &r.ao_radius, MIN_AO_RADIUS, MAX_AO_RADIUS)
         ui_slider_float("AO intensity", &r.ao_intensity, 0, MAX_AO_INTENSITY)

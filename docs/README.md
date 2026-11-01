@@ -11,7 +11,7 @@ README](../README.md) covers building and running.
   captures, and shader hot-reload.
 - [Lighting](lighting.md): surface shading, materials, the sun, point and spot
   lights, clustered lighting, shadows, image-based lighting and the sky,
-  reflection probes, volumetric fog, SSAO, and screen-space reflections.
+  reflection probes, volumetric fog, GTAO, and screen-space reflections.
 - [Post-processing](post_processing.md): TAA and sharpening, FXAA, auto
   exposure, bloom, and tone mapping.
 - [Assets](assets.md): the asset catalog, OBJ and glTF import, materials,
@@ -50,7 +50,7 @@ README](../README.md) covers building and running.
 | `src/renderer_frame_data.odin` | Per-frame draws, batching, GPU culling, constants, light buffer, TAA jitter |
 | `src/renderer_scene_pass.odin` | Sky, lit opaque and blended passes; tone mapping, FXAA/sharpen, UI |
 | `src/renderer_shadow.odin` | Sun cascades, spot and point light shadow maps |
-| `src/renderer_ssao.odin` | Depth prepass and SSAO |
+| `src/renderer_ao.odin` | Depth prepass and GTAO |
 | `src/renderer_ssr.odin` | Screen-space reflections |
 | `src/renderer_lights.odin` | Clustered lighting |
 | `src/renderer_fog.odin` | Volumetric fog |
@@ -64,7 +64,7 @@ README](../README.md) covers building and running.
 | `src/scene.odin`, `src/scene_file.odin` | Entities, components and parents; saving and loading scenes |
 | `src/camera.odin`, `src/frustum.odin` | Fly camera; frustum culling |
 | `src/editor*.odin`, `src/debug_ui.odin` | Panels, picking, viewport icons and lines, gizmos, undo history |
-| `shaders/scene.hlsl` | Mesh shading, prepass, shadows, SSAO, SSR, light clusters, fog |
+| `shaders/scene.hlsl` | Mesh shading, prepass, shadows, GTAO, SSR, light clusters, fog |
 | `shaders/post_process.hlsl` | Full-screen triangle, bloom, TAA, tone mapping, FXAA, sharpening |
 | `shaders/auto_exposure.hlsl` | Luminance histogram and exposure adaptation |
 | `shaders/cull.hlsl` | GPU frustum and occlusion culling, the depth pyramid |

@@ -33,7 +33,7 @@ textures and draws onto the back buffer after tone mapping and anti-aliasing,
 so text stays sharp.
 
 - **Renderer controls**: shader reload status, exposure, bloom, tone mapping,
-  anti-aliasing, the environment, shadows, SSAO, SSR, reflection probes,
+  anti-aliasing, the environment, shadows, GTAO, SSR, reflection probes,
   light clusters, fog, and the frustum and occlusion culling switches. **Show ImGui demo** opens
   ImGui's own demo window.
 - **Profiler**: frame rate and frame time, the camera's and shadow views'
@@ -318,7 +318,7 @@ how probes capture and shade.
 
 **Save Scene** and **Load Scene** write and read `scene.json`
 (`src/scene_file.odin`): every live entity with its components, plus the
-renderer settings (post-processing, environment, shadows, SSAO, SSR,
+renderer settings (post-processing, environment, shadows, ambient occlusion, SSR,
 reflection probes, fog, auto exposure). Assets are referenced by catalog ID.
 
 - **Validation**: a file is checked completely before anything changes. Every

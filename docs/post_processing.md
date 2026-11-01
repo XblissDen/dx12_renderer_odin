@@ -55,7 +55,7 @@ position and blends it into an accumulated history (`src/renderer_taa.odin`,
   after a resize, and switching TAA on all use the current frame alone.
 
 TAA runs before bloom and tone mapping, so those see a stable image; it also
-smooths SSAO noise and averages SSR's stochastic rays. A pixel has one motion
+smooths ambient occlusion noise and averages SSR's stochastic rays. A pixel has one motion
 vector, so where glass and what is behind it move differently, the layer that
 did not win still smears slightly.
 

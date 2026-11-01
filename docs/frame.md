@@ -48,7 +48,7 @@ frame never overwrites them while an earlier one still reads them.
 | Shadows | Sun cascades, then spot shadow slots, then point shadow cube faces | [Lighting](lighting.md#shadows) |
 | Probe capture | On frames that capture a reflection probe: its six faces, their mips, and the prefiltered levels | [Lighting](lighting.md#reflection-probes) |
 | Depth prepass | Depth, motion vectors, and the surface buffer (normal, roughness): the camera's early calls, then the depth pyramid and the late cull, then its late calls | [below](#depth-prepass) |
-| SSAO | Ambient occlusion from depth, then a depth-aware blur | [Lighting](lighting.md#ambient-occlusion-ssao) |
+| GTAO | Ambient occlusion from depth and the prepass normals, then a depth-aware blur | [Lighting](lighting.md#ambient-occlusion-gtao) |
 | SSR | Reflections traced through depth, read from last frame's image | [Lighting](lighting.md#screen-space-reflections-ssr) |
 | Light clusters | Compute pass listing the lights that reach each view cluster | [Lighting](lighting.md#clustered-lighting) |
 | Volumetric fog | Compute passes lighting the fog's cells and integrating them front to back | [Lighting](lighting.md#volumetric-fog) |
@@ -86,7 +86,7 @@ GPU data every frame:
 - **Frame constants** (`FrameConstants`, one 256-byte-aligned block): camera
   matrices (jittered for TAA, and unjittered for motion vectors, this frame
   and last), the sun, environment and ambient settings, shadow matrices and
-  cascade data, SSAO, SSR, light-cluster and fog settings, and the debug view
+  cascade data, ambient occlusion, SSR, light-cluster and fog settings, and the debug view
   flags.
 - **Lights**: the point and spot lights in view, written straight into this
   frame's slice of the light buffer (see [Clustered
@@ -266,7 +266,7 @@ full.
 
 Opaque and cutout surfaces are drawn once without lighting before anything
 else. The lit pass then tests against this depth without writing it, so each
-pixel is shaded once, and SSAO and SSR have depth to read. The vertex shaders
+pixel is shaded once, and GTAO and SSR have depth to read. The vertex shaders
 of the two passes share one function, so both produce bit-identical depth:
 opaque surfaces use a `LESS_EQUAL` test, and cutouts use `EQUAL` so the lit
 pass does not repeat the alpha test.
@@ -287,7 +287,7 @@ The prepass writes two color targets alongside depth:
   same values with the same function. SSR reads it; it is cleared to roughness
   1 where nothing is drawn.
 
-Blended surfaces are not in the prepass: they write no depth, so SSAO and SSR
+Blended surfaces are not in the prepass: they write no depth, so GTAO and SSR
 see what is behind them. They write their own motion vectors later, in the lit
 pass, where they are mostly opaque ([TAA](post_processing.md#taa)).
 
@@ -387,7 +387,7 @@ need the program rebuilt.
 
 On resize, the renderer waits for the GPU, releases and recreates the swap
 chain buffers, depth, and every screen-sized target (HDR, LDR, bloom chain,
-SSAO, TAA history and motion vectors, SSR surface and reflection targets, the
+GTAO, TAA history and motion vectors, SSR surface and reflection targets, the
 depth pyramid), and
 rewrites their descriptors in place. TAA and SSR restart: their history from
 the old size is discarded.

@@ -146,7 +146,7 @@ Material :: struct{
     use_emissive_map: bool,
 
     // Baked ambient occlusion from the map's red channel, multiplied with
-    // SSAO; strength blends from none (0) to the full map (1).
+    // GTAO; strength blends from none (0) to the full map (1).
     occlusion_texture: TextureHandle,
     use_occlusion_map: bool,
     occlusion_strength: f32,

@@ -2,9 +2,10 @@ package main
 
 import d3d12 "vendor:directx/d3d12"
 
-// Screen-space ambient occlusion: a depth prepass, an occlusion pass that
-// samples the depth around each pixel, and a depth-aware blur. The lit pass
-// then darkens only ambient (sky) light with the result.
+// The depth prepass, and ambient occlusion: GTAO (PSGtao in scene.hlsl)
+// finds how much of the sky each pixel sees from the depth and the prepass's
+// normals, and a depth-aware blur averages out its noise. The lit pass then
+// darkens only ambient (sky) light with the result.
 AO_TARGET_COUNT :: 2 // [0] raw, [1] blurred
 DEFAULT_AO_RADIUS :: f32(1.0)
 DEFAULT_AO_INTENSITY :: f32(2.0)
@@ -14,7 +15,7 @@ MAX_AO_INTENSITY :: f32(4)
 
 // (Re)creates the occlusion targets and the depth SRV. Called after the depth
 // buffer is (re)created, at startup and on resize.
-renderer_create_ssao_targets :: proc() {
+renderer_create_ao_targets :: proc() {
     r := &g_renderer
 
     if r.ao_rtv_heap == nil {
@@ -121,7 +122,7 @@ renderer_render_depth_prepass :: proc(frame: ^FrameDraws) {
     renderer_draw_batches(draws, frame.late_scene_batches, r.depth_prepass_pipeline_states)
     renderer_end_event()
 
-    // Read-only from here to the end of the frame: SSAO and SSR sample it and
+    // Read-only from here to the end of the frame: GTAO and SSR sample it and
     // the lit and selection passes test against it.
     depth_barrier.Transition.StateBefore = {.DEPTH_WRITE}
     depth_barrier.Transition.StateAfter = {.DEPTH_READ, .PIXEL_SHADER_RESOURCE}
@@ -135,10 +136,10 @@ renderer_render_depth_prepass :: proc(frame: ^FrameDraws) {
     renderer_end_gpu_pass(.Depth_Prepass)
 }
 
-renderer_render_ssao :: proc() {
+renderer_render_gtao :: proc() {
     r := &g_renderer
 
-    renderer_begin_gpu_pass(.SSAO)
+    renderer_begin_gpu_pass(.GTAO)
     if r.ao_enabled {
         heaps := []^d3d12.IDescriptorHeap{r.srv_heap}
         r.command_list->SetDescriptorHeaps(1, raw_data(heaps))
@@ -148,16 +149,17 @@ renderer_render_ssao :: proc() {
         r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
         renderer_bind_cbv(.Frame_Constants, renderer_frame_cb_address())
         renderer_bind_srv(.Depth, r.depth_srv_index)
+        renderer_bind_srv(.Surface, r.surface_srv_index)
 
         // Raw occlusion, then the blur reads it (t8) and writes the final map.
-        renderer_ssao_fullscreen(0, r.ssao_pipeline_state)
+        renderer_ao_fullscreen(0, r.gtao_pipeline_state)
         renderer_bind_srv(.Texture_T8, r.ao_srv_start)
-        renderer_ssao_fullscreen(1, r.ssao_blur_pipeline_state)
+        renderer_ao_fullscreen(1, r.ao_blur_pipeline_state)
     }
-    renderer_end_gpu_pass(.SSAO)
+    renderer_end_gpu_pass(.GTAO)
 }
 
-renderer_ssao_fullscreen :: proc(target_index: int, pso: ^d3d12.IPipelineState) {
+renderer_ao_fullscreen :: proc(target_index: int, pso: ^d3d12.IPipelineState) {
     r := &g_renderer
     target := r.ao_targets[target_index]
 
