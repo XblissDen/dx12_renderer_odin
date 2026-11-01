@@ -101,7 +101,9 @@ renderer_render_depth_prepass :: proc(frame: ^FrameDraws) {
 
     // What the camera saw last frame, then (after the late cull tests the
     // rest against this depth) what it newly sees.
+    renderer_begin_event("Early draws")
     renderer_draw_batches(draws, frame.scene_batches, r.depth_prepass_pipeline_states)
+    renderer_end_event()
     depth_barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
     depth_barrier.Transition = {
         pResource = r.depth_buffer,
@@ -115,7 +117,9 @@ renderer_render_depth_prepass :: proc(frame: ^FrameDraws) {
     depth_barrier.Transition.StateBefore = {.DEPTH_READ, .NON_PIXEL_SHADER_RESOURCE}
     depth_barrier.Transition.StateAfter = {.DEPTH_WRITE}
     r.command_list->ResourceBarrier(1, &depth_barrier)
+    renderer_begin_event("Late draws")
     renderer_draw_batches(draws, frame.late_scene_batches, r.depth_prepass_pipeline_states)
+    renderer_end_event()
 
     // Read-only from here to the end of the frame: SSAO and SSR sample it and
     // the lit and selection passes test against it.

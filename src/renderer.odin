@@ -54,6 +54,15 @@ GPU_Pass :: enum u32{
     Occlusion,
 }
 
+// As the Profiler panel and GPU captures name the passes.
+GPU_PASS_NAMES := [GPU_Pass]string{
+    .Shadow = "Shadow", .Scene = "Scene", .Bloom_Prefilter = "Bloom prefilter",
+    .Bloom_Downsample = "Bloom downsample", .Bloom_Upsample = "Bloom upsample", .Post_Process = "Post + UI",
+    .Depth_Prepass = "Depth prepass", .SSAO = "SSAO + blur", .FXAA = "FXAA / sharpen", .TAA = "TAA resolve",
+    .Auto_Exposure = "Auto exposure", .SSR = "SSR", .Light_Clusters = "Light clusters", .Fog = "Volumetric fog",
+    .Culling = "GPU culling", .Occlusion = "Occlusion culling",
+}
+
 Vertex :: struct {
     position:   [3]f32,
     normal:     [3]f32,
@@ -1965,8 +1974,10 @@ renderer_render_frame :: proc(scene: ^Scene) {
     renderer_print_debug_messages()
 }
 
+// A pass's start timestamp, and an event of the same name in captures.
 renderer_begin_gpu_pass :: proc(pass: GPU_Pass) {
     r := &g_renderer
+    renderer_begin_event(GPU_PASS_NAMES[pass])
     r.command_list->EndQuery(
         r.timestamp_heap,
         .TIMESTAMP,
@@ -1981,6 +1992,21 @@ renderer_end_gpu_pass :: proc(pass: GPU_Pass) {
         .TIMESTAMP,
         r.frame_slot * GPU_TIMESTAMP_COUNT + u32(pass) * 2 + 1,
     )
+    renderer_end_event()
+}
+
+// Named, nestable regions of the command list, which PIX and RenderDoc show
+// as a tree of events: every GPU pass is one, and larger passes mark their
+// steps inside. They cost next to nothing without a capture tool attached.
+renderer_begin_event :: proc(name: string) {
+    // Metadata 0 marks the data as a null-terminated UTF-16 name, the plain
+    // form that PIX's own event library also writes.
+    wide := win32.utf8_to_utf16(name, context.temp_allocator)
+    g_renderer.command_list->BeginEvent(0, raw_data(wide), u32((len(wide) + 1) * size_of(u16)))
+}
+
+renderer_end_event :: proc() {
+    g_renderer.command_list->EndEvent()
 }
 
 renderer_read_gpu_timings :: proc(slot: u32) {

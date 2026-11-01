@@ -327,6 +327,26 @@ so every pass has a value each frame (zero when skipped). The **GPU timings**
 table in the Profiler panel lists them; "Post + UI" includes tone mapping and
 the UI draw.
 
+## GPU captures
+
+The command list carries named events (`renderer_begin_event`), so a capture
+in PIX or RenderDoc shows each frame as a tree that follows the pass table
+above. Every timed pass is an event with its Profiler name, and the larger
+passes mark their steps:
+
+| Pass | Steps inside |
+| --- | --- |
+| Shadow | `Sun cascade 0`–`3`, then `Spot light slot n` and `Point light slot n` for each slot in use |
+| Depth prepass | `Early draws`, the `Occlusion culling` pass (with `Depth pyramid`), `Late draws` |
+| Scene | `Sky`, `Opaque`, `Blended` (when there are blended draws), `Fog` |
+| Post + UI | `Tone mapping`, the `FXAA / sharpen` pass, `Debug lines`, `Selection outline`, `UI` |
+
+Changing the environment adds `Irradiance bake` and `Prefilter bake` outside
+the frame. A pass that is switched off still shows as an empty event, as it
+still records its timestamps. Events are plain UTF-16 names (metadata 0),
+the format PIX's own event library writes for strings, so no extra library
+is needed; without a capture tool attached they cost next to nothing.
+
 ## Shader hot-reload
 
 Saving any file in `shaders/` while the program runs rebuilds every pipeline,

@@ -19,6 +19,7 @@ renderer_render_scene_pass :: proc(draws: []Draw, batches, late_batches, transpa
     r.hdr_rtv_heap->GetCPUDescriptorHandleForHeapStart(&hdr_rtv)
 
     // First fill the HDR target with the sky, without a depth buffer.
+    renderer_begin_event("Sky")
     r.command_list->OMSetRenderTargets(1, &hdr_rtv, false, nil)
 
     clear_color := [4]f32{0.1, 0.1, 0.2, 1.0}
@@ -37,8 +38,10 @@ renderer_render_scene_pass :: proc(draws: []Draw, batches, late_batches, transpa
     r.command_list->RSSetScissorRects(1, &r.scissor_rect)
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
     r.command_list->DrawInstanced(3, 1, 0, 0)
+    renderer_end_event()
 
     // Now draw scene geometry over the sky, testing against the prepass depth.
+    renderer_begin_event("Opaque")
     dsv_handle := renderer_depth_dsv(read_only = true)
     r.command_list->OMSetRenderTargets(1, &hdr_rtv, false, &dsv_handle)
 
@@ -63,11 +66,14 @@ renderer_render_scene_pass :: proc(draws: []Draw, batches, late_batches, transpa
     // The prepass's early and late calls.
     renderer_draw_batches(draws, batches, r.hdr_pipeline_states)
     renderer_draw_batches(draws, late_batches, r.hdr_pipeline_states)
+    renderer_end_event()
 
     // Blended surfaces over the result, farthest first. They also write their
     // motion into the prepass's velocity target where they are mostly
     // opaque, so TAA follows moving glass instead of what is behind it.
     if len(transparent_batches) > 0 {
+        renderer_begin_event("Blended")
+        defer renderer_end_event()
         velocity_barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
         velocity_barrier.Transition = {
             pResource = r.velocity_texture,
@@ -98,8 +104,10 @@ renderer_render_scene_pass :: proc(draws: []Draw, batches, late_batches, transpa
     }
 
     // Fog over everything, glass included (at the depth behind the glass).
+    renderer_begin_event("Fog")
     r.command_list->OMSetRenderTargets(1, &hdr_rtv, false, nil)
     renderer_apply_fog()
+    renderer_end_event()
 
     hdr_barrier.Transition.StateBefore = {.RENDER_TARGET}
     hdr_barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
@@ -142,6 +150,7 @@ renderer_render_post_process :: proc(scene: ^Scene) {
         r.ldr_rtv_heap->GetCPUDescriptorHandleForHeapStart(&tone_map_rtv)
     }
 
+    renderer_begin_event("Tone mapping")
     r.command_list->OMSetRenderTargets(1, &tone_map_rtv, false, nil)
 
     r.command_list->SetGraphicsRootSignature(r.root_signature)
@@ -159,6 +168,7 @@ renderer_render_post_process :: proc(scene: ^Scene) {
     r.command_list->RSSetScissorRects(1, &r.scissor_rect)
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
     r.command_list->DrawInstanced(3, 1, 0, 0)
+    renderer_end_event()
 
     if final_pass {
         ldr_barrier.Transition.StateBefore = {.RENDER_TARGET}
@@ -179,11 +189,16 @@ renderer_render_post_process :: proc(scene: ^Scene) {
 
     // Debug lines, the outline and the UI draw after anti-aliasing, so they
     // stay crisp.
+    renderer_begin_event("Debug lines")
     renderer_render_debug_lines(scene, rtv_handle)
+    renderer_end_event()
+    renderer_begin_event("Selection outline")
     renderer_render_selection(scene, rtv_handle)
+    renderer_end_event()
+    renderer_begin_event("UI")
     r.command_list->OMSetRenderTargets(1, &rtv_handle, false, nil)
-
     debug_ui_render()
+    renderer_end_event()
 
     back_buffer_barrier.Transition.StateBefore = {.RENDER_TARGET}
     back_buffer_barrier.Transition.StateAfter = d3d12.RESOURCE_STATE_PRESENT

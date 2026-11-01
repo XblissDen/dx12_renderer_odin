@@ -271,11 +271,6 @@ debug_ui_draw_profiler :: proc() {
         }
         ui_separator()
 
-        pass_names := [GPU_PASS_COUNT]string{
-            "Shadow", "Scene", "Bloom prefilter", "Bloom downsample",
-            "Bloom upsample", "Post + UI", "Depth prepass", "SSAO + blur", "FXAA / sharpen", "TAA resolve",
-            "Auto exposure", "SSR", "Light clusters", "Volumetric fog", "GPU culling", "Occlusion culling",
-        }
         if ui_begin_table("GPU timings") {
             ui_table_column("GPU pass")
             ui_table_column("Milliseconds")
@@ -283,7 +278,7 @@ debug_ui_draw_profiler :: proc() {
             for i in 0..<GPU_PASS_COUNT {
                 ui_table_row()
                 ui_table_next_column()
-                debug_ui_text(pass_names[i])
+                debug_ui_text(GPU_PASS_NAMES[GPU_Pass(i)])
                 ui_table_next_column()
                 debug_ui_text(fmt.bprintf(text_buffer[:], "%.3f", r.gpu_pass_ms[i]))
             }

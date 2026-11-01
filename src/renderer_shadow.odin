@@ -1,5 +1,6 @@
 package main
 
+import "core:fmt"
 import "core:math"
 import "core:slice"
 import alg "core:math/linalg"
@@ -397,6 +398,8 @@ renderer_render_shadow_pass :: proc(
     renderer_bind_cbv(.Frame_Constants, renderer_frame_cb_address())
 
     for cascade in 0..<SHADOW_CASCADE_COUNT {
+        renderer_begin_event(fmt.tprintf("Sun cascade %d", cascade))
+        defer renderer_end_event()
         dsv_handle := descriptor_handle(r.shadow_dsv_heap, .DSV, u32(cascade))
         r.command_list->OMSetRenderTargets(0, nil, false, &dsv_handle)
         r.command_list->ClearDepthStencilView(
@@ -424,6 +427,8 @@ renderer_render_shadow_pass :: proc(
     r.command_list->RSSetScissorRects(1, &spot_scissor)
     for slot in 0..<SPOT_SHADOW_COUNT {
         if r.spot_shadow_entities[slot] < 0 do continue
+        renderer_begin_event(fmt.tprintf("Spot light slot %d", slot))
+        defer renderer_end_event()
         dsv_handle := descriptor_handle(r.spot_shadow_dsv_heap, .DSV, u32(slot))
         r.command_list->OMSetRenderTargets(0, nil, false, &dsv_handle)
         r.command_list->ClearDepthStencilView(dsv_handle, {.DEPTH}, 1.0, 0, 0, nil)
@@ -446,6 +451,8 @@ renderer_render_shadow_pass :: proc(
     r.command_list->RSSetScissorRects(1, &point_scissor)
     for slot in 0..<POINT_SHADOW_COUNT {
         if r.point_shadow_entities[slot] < 0 do continue
+        renderer_begin_event(fmt.tprintf("Point light slot %d", slot))
+        defer renderer_end_event()
         for face in 0..<POINT_SHADOW_FACES {
             face_index := slot * POINT_SHADOW_FACES + face
             dsv_handle := descriptor_handle(r.point_shadow_dsv_heap, .DSV, u32(face_index))

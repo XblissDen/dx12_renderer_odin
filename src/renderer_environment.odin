@@ -386,6 +386,7 @@ renderer_generate_irradiance :: proc(source_srv_index: u32) {
     // The environment upload has completed before this procedure runs.
     dx_check(r.command_allocators[0]->Reset())
     dx_check(r.command_list->Reset(r.command_allocators[0], nil))
+    renderer_begin_event("Irradiance bake")
 
     barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
     barrier.Transition = {
@@ -428,6 +429,7 @@ renderer_generate_irradiance :: proc(source_srv_index: u32) {
     barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
     r.command_list->ResourceBarrier(1, &barrier)
 
+    renderer_end_event()
     dx_check(r.command_list->Close())
     lists := []^d3d12.ICommandList{r.command_list}
     r.command_queue->ExecuteCommandLists(u32(len(lists)), raw_data(lists))
@@ -511,6 +513,7 @@ renderer_generate_prefiltered_environment :: proc(source_srv_index: u32) {
 
     dx_check(r.command_allocators[0]->Reset())
     dx_check(r.command_list->Reset(r.command_allocators[0], nil))
+    renderer_begin_event("Prefilter bake")
 
     barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
     barrier.Transition = {
@@ -563,6 +566,7 @@ renderer_generate_prefiltered_environment :: proc(source_srv_index: u32) {
     barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
     r.command_list->ResourceBarrier(1, &barrier)
 
+    renderer_end_event()
     dx_check(r.command_list->Close())
     lists := []^d3d12.ICommandList{r.command_list}
     r.command_queue->ExecuteCommandLists(u32(len(lists)), raw_data(lists))

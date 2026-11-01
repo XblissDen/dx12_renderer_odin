@@ -772,7 +772,11 @@ renderer_cull_late :: proc(data: ^FrameDraws) {
     defer renderer_end_gpu_pass(.Occlusion)
 
     renderer_bind_cull(late = true)
-    if r.occlusion_culling_enabled do renderer_build_hiz()
+    if r.occlusion_culling_enabled {
+        renderer_begin_event("Depth pyramid")
+        renderer_build_hiz()
+        renderer_end_event()
+    }
 
     barriers := [2]d3d12.RESOURCE_BARRIER{
         resource_transition(r.indirect_buffer, {.INDIRECT_ARGUMENT}, {.UNORDERED_ACCESS}),

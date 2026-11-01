@@ -7,7 +7,8 @@ README](../README.md) covers building and running.
 - [Frame structure](frame.md): the main loop, frames in flight, the order of
   GPU passes, per-frame data, instanced batching, GPU frustum and occlusion
   culling with indirect draws, bindless textures,
-  the depth prepass, the root signature, GPU timings, and shader hot-reload.
+  the depth prepass, the root signature, GPU timings, named events for GPU
+  captures, and shader hot-reload.
 - [Lighting](lighting.md): surface shading, materials, the sun, point and spot
   lights, clustered lighting, shadows, image-based lighting and the sky,
   volumetric fog, SSAO, and screen-space reflections.
