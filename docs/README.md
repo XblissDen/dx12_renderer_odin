@@ -57,7 +57,7 @@ README](../README.md) covers building and running.
 | `src/renderer_post.odin` | HDR/LDR targets, bloom, auto exposure |
 | `src/renderer_environment.odin` | HDR panoramas, sun extraction, IBL baking |
 | `src/renderer_selection.odin` | Selection outline and debug lines |
-| `src/texture_mips.odin`, `src/texture_cache.odin` | Mip chains; BC7/BC5/BC4 compression and the texture cache |
+| `src/texture_mips.odin`, `src/texture_cache.odin` | Mip chains; BC7/BC5/BC4/BC6H compression and the texture cache |
 | `src/assets.odin`, `src/gltf.odin`, `src/mesh.odin` | Asset catalog, glTF and OBJ loading |
 | `src/scene.odin`, `src/scene_file.odin` | Entities, components and parents; saving and loading scenes |
 | `src/camera.odin`, `src/frustum.odin` | Fly camera; frustum culling |

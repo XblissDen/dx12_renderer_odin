@@ -1,7 +1,6 @@
 package main
 
 import c "core:c"
-import "base:runtime"
 import "core:math"
 import "core:os"
 import "core:strings"
@@ -257,8 +256,8 @@ renderer_set_environment :: proc(settings: EnvironmentSettings) -> string {
         // Earlier frames may still reference the old textures, descriptors,
         // and the upload allocator.
         renderer_wait_for_gpu()
-        path := g_assets.environments[settings.asset].desc.path
-        if error := renderer_load_environment(path, load_sky, bake, remove_sun); error != "" do return error
+        desc := g_assets.environments[settings.asset].desc
+        if error := renderer_load_environment(desc, load_sky, bake, remove_sun); error != "" do return error
         r.environment_sun_asset = settings.asset
         if load_sky {
             r.environment_loaded_asset = settings.asset
@@ -282,15 +281,17 @@ renderer_process_environment_change :: proc() {
 }
 
 // Decodes the panorama, finds its sun, uploads it for the sky when `load_sky`,
-// and rebuilds the IBL maps when `bake`. With `remove_sun`, the maps are baked
-// from a temporary copy without the sun, which then lights the scene as the
-// shadowed directional light instead. The sky always shows the original.
-renderer_load_environment :: proc(path: string, load_sky, bake, remove_sun: bool) -> string {
+// and rebuilds the IBL maps when `bake`. The sky is BC6H (environment_prepare),
+// whose half floats would clamp a sun brighter than 65504 and blur it into
+// its blocks, so the maps are baked from a temporary full-float copy instead.
+// With `remove_sun`, that copy leaves the sun out, which then lights the scene
+// as the shadowed directional light. The sky always shows the original.
+renderer_load_environment :: proc(desc: EnvironmentDesc, load_sky, bake, remove_sun: bool) -> string {
     r := &g_renderer
 
     width, height, channels: c.int
     decoded := stbi.loadf(
-        strings.clone_to_cstring(path, context.temp_allocator) or_else panic("Environment path allocation failed"),
+        strings.clone_to_cstring(desc.path, context.temp_allocator) or_else panic("Environment path allocation failed"),
         &width, &height, &channels,
         4, // Request RGBA floats.
     )
@@ -305,183 +306,34 @@ renderer_load_environment :: proc(path: string, load_sky, bake, remove_sun: bool
     r.environment_sun = hdri_extract_sun(pixels, int(width), int(height), false)
 
     if load_sky {
-        texture, error := renderer_upload_environment(pixels, u32(width), u32(height), r.environment_srv_index)
-        if error != "" do return error
+        sky_data := environment_prepare(desc, pixels, u32(width), u32(height))
+        defer texture_data_destroy(&sky_data)
+        sky := GpuTexture{srv_index = r.environment_srv_index}
+        if renderer_upload_texture(&sky, sky_data) < 0 do return "Could not upload the environment texture."
         if r.environment_texture != nil do r.environment_texture->Release()
-        r.environment_texture = texture
+        r.environment_texture = sky.resource
     }
     if !bake {
         return ""
     }
 
-    // Baking needs HDRI lighting, so the sky texture already holds this
-    // panorama (just uploaded, or cached for the same asset).
-    source_srv_index := r.environment_srv_index
-    bake_source: ^d3d12.IResource
-    defer if bake_source != nil do bake_source->Release()
-
     if remove_sun && r.environment_sun.found {
         hdri_extract_sun(pixels, int(width), int(height), true)
-        error: string
-        bake_source, error = renderer_upload_environment(pixels, u32(width), u32(height), r.environment_bake_srv_index)
-        if error != "" do return error
-        source_srv_index = r.environment_bake_srv_index
     }
+    source_data := environment_encode(pixels, u32(width), u32(height), .R32G32B32A32_FLOAT)
+    defer texture_data_destroy(&source_data)
+    source := GpuTexture{srv_index = r.environment_bake_srv_index}
+    if renderer_upload_texture(&source, source_data) < 0 do return "Could not upload the environment for baking."
+    // Both passes below wait for the GPU, so the source can be released after.
+    defer source.resource->Release()
 
     r.environment_average_radiance = hdri_average_radiance(pixels, int(width), int(height))
 
     if r.irradiance_texture == nil do renderer_create_irradiance_map()
     if r.prefilter_texture == nil do renderer_create_prefiltered_environment()
-    renderer_generate_irradiance(source_srv_index)
-    renderer_generate_prefiltered_environment(source_srv_index)
-    // Both passes wait for the GPU, so the temporary source can be released.
+    renderer_generate_irradiance(source.srv_index)
+    renderer_generate_prefiltered_environment(source.srv_index)
     return ""
-}
-
-// Uploads a panorama with its mip chain and writes its SRV at `srv_index`.
-renderer_upload_environment :: proc(
-    pixels: []f32,
-    width, height: u32,
-    srv_index: u32,
-) -> (texture: ^d3d12.IResource, message: string) {
-    r := &g_renderer
-
-    mips := make([dynamic][]f32)
-    append(&mips, pixels)
-    defer {
-        for mip in mips[1:] do delete(mip)
-        delete(mips)
-    }
-    mip_width, mip_height := width, height
-    for mip_width > 1 || mip_height > 1 {
-        next, next_width, next_height := texture_next_environment_mip(
-            mips[len(mips) - 1], mip_width, mip_height,
-        )
-        append(&mips, next)
-        mip_width, mip_height = next_width, next_height
-    }
-
-    renderer_wait_for_gpu()
-    candidate: ^d3d12.IResource
-    defer if message != "" && candidate != nil do candidate->Release()
-
-    texture_desc := d3d12.RESOURCE_DESC{
-        Dimension = .TEXTURE2D,
-        Width = u64(width),
-        Height = u32(height),
-        DepthOrArraySize = 1,
-        MipLevels = u16(len(mips)),
-        // Keep the sun's full radiance while filtering, including values above
-        // half-float range. The convolved lighting maps remain RGBA16F.
-        Format = .R32G32B32A32_FLOAT,
-        SampleDesc = {Count = 1},
-    }
-    default_heap := d3d12.HEAP_PROPERTIES{Type = .DEFAULT}
-
-    hr := r.device->CreateCommittedResource(
-        &default_heap,
-        {},
-        &texture_desc,
-        {.COPY_DEST},
-        nil,
-        d3d12.IResource_UUID,
-        (^rawptr)(&candidate),
-    )
-    if hr < 0 do return nil, "Could not allocate the environment texture."
-
-    layouts := make([]d3d12.PLACED_SUBRESOURCE_FOOTPRINT, len(mips))
-    row_counts := make([]u32, len(mips))
-    row_sizes := make([]u64, len(mips))
-    defer delete(layouts)
-    defer delete(row_counts)
-    defer delete(row_sizes)
-    upload_size: u64
-    r.device->GetCopyableFootprints(
-        &texture_desc, 0, u32(len(mips)), 0,
-        raw_data(layouts), raw_data(row_counts), raw_data(row_sizes), &upload_size,
-    )
-
-    upload_desc := d3d12.RESOURCE_DESC{
-        Dimension = .BUFFER,
-        Width = upload_size,
-        Height = 1,
-        DepthOrArraySize = 1,
-        MipLevels = 1,
-        SampleDesc = {Count = 1},
-        Layout = .ROW_MAJOR,
-    }
-    upload_heap := d3d12.HEAP_PROPERTIES{Type = .UPLOAD}
-
-    upload_buffer: ^d3d12.IResource
-    hr = r.device->CreateCommittedResource(
-        &upload_heap,
-        {},
-        &upload_desc,
-        d3d12.RESOURCE_STATE_GENERIC_READ,
-        nil,
-        d3d12.IResource_UUID,
-        (^rawptr)(&upload_buffer),
-    )
-    if hr < 0 do return nil, "Could not allocate the environment upload buffer."
-    defer upload_buffer->Release()
-
-    mapped: rawptr
-    hr = upload_buffer->Map(0, nil, &mapped)
-    if hr < 0 do return nil, "Could not map the environment upload buffer."
-
-    for mip in 0..<len(mips) {
-        layout := layouts[mip]
-        for y in 0..<int(row_counts[mip]) {
-            destination := uintptr(mapped) + uintptr(layout.Offset) +
-                uintptr(u64(y) * u64(layout.Footprint.RowPitch))
-            source := uintptr(raw_data(mips[mip])) + uintptr(u64(y) * row_sizes[mip])
-            runtime.mem_copy(rawptr(destination), rawptr(source), int(row_sizes[mip]))
-        }
-    }
-    upload_buffer->Unmap(0, nil)
-
-    hr = r.command_allocators[0]->Reset()
-    if hr < 0 do return nil, "Could not reset the environment upload allocator."
-    hr = r.command_list->Reset(r.command_allocators[0], nil)
-    if hr < 0 do return nil, "Could not reset the environment upload command list."
-
-    for mip in 0..<len(mips) {
-        source := d3d12.TEXTURE_COPY_LOCATION{
-            pResource = upload_buffer,
-            Type = .PLACED_FOOTPRINT,
-            PlacedFootprint = layouts[mip],
-        }
-        destination := d3d12.TEXTURE_COPY_LOCATION{
-            pResource = candidate,
-            Type = .SUBRESOURCE_INDEX,
-            SubresourceIndex = u32(mip),
-        }
-        r.command_list->CopyTextureRegion(&destination, 0, 0, 0, &source, nil)
-    }
-
-    barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
-    barrier.Transition = {
-        pResource = candidate,
-        StateBefore = {.COPY_DEST},
-        StateAfter = {.PIXEL_SHADER_RESOURCE},
-        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
-    }
-    r.command_list->ResourceBarrier(1, &barrier)
-
-    hr = r.command_list->Close()
-    if hr < 0 do return nil, "Could not close the environment upload command list."
-    lists := []^d3d12.ICommandList{r.command_list}
-    r.command_queue->ExecuteCommandLists(u32(len(lists)), raw_data(lists))
-    renderer_wait_for_gpu()
-
-    srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
-        Format = .R32G32B32A32_FLOAT,
-        ViewDimension = .TEXTURE2D,
-        Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
-    }
-    srv_desc.Texture2D = {MipLevels = u32(len(mips))}
-    r.device->CreateShaderResourceView(candidate, &srv_desc, renderer_srv_cpu(srv_index))
-    return candidate, ""
 }
 
 renderer_create_irradiance_map :: proc() {

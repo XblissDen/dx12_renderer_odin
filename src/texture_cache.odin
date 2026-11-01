@@ -7,17 +7,24 @@ package main
 // takes a while, so file textures are prepared once and kept in
 // cache/textures/ as DDS files, named by the texture's id and a hash of the
 // source file and its settings; later runs only read them.
+//
+// HDR panoramas are stored the same way for the sky, as BC6H (half floats,
+// a sixteenth of RGBA32F), and cached in cache/environments/.
 
 import "base:runtime"
 import "core:fmt"
 import "core:hash"
 import "core:math"
 import "core:os"
+import "core:slice"
 import "core:strings"
+import "core:sync"
+import "core:thread"
 import "core:time"
 import dxgi "vendor:directx/dxgi"
 
 TEXTURE_CACHE_DIRECTORY :: "cache/textures"
+ENVIRONMENT_CACHE_DIRECTORY :: "cache/environments"
 // Part of every cache key: bump it when the mips or the encoders change, so
 // existing cache files are rebuilt.
 TEXTURE_CACHE_VERSION :: 1
@@ -48,10 +55,14 @@ texture_data_destroy :: proc(texture: ^TextureData) {
 texture_prepare :: proc(desc: TextureDesc) -> (texture: TextureData) {
     cache_path: string
     if desc.source == .file {
-        cache_path = texture_cache_path(desc)
-        if cached, ok := texture_cache_read(cache_path, desc.usage); ok {
-            cached.alpha = texture_data_alpha(desc.usage, cached)
-            return cached
+        settings := fmt.tprintf("%v|%v|%v", desc.usage, desc.settings.channel, desc.settings.flip_green)
+        cache_path = texture_cache_path(TEXTURE_CACHE_DIRECTORY, desc.id, desc.path, settings)
+        if cached, ok := texture_cache_read(cache_path); ok {
+            if cached.format == texture_format(desc.usage, cached.width, cached.height) {
+                cached.alpha = texture_data_alpha(desc.usage, cached)
+                return cached
+            }
+            texture_data_destroy(&cached)
         }
     }
     pixels, width, height, message := assets_try_texture_pixels(desc, runtime.heap_allocator())
@@ -79,11 +90,11 @@ texture_format :: proc(usage: TextureUsage, width, height: u32) -> dxgi.FORMAT {
     return .R8G8B8A8_UNORM
 }
 
-// Bytes per 4x4 block, or 0 for RGBA8.
+// Bytes per 4x4 block, or 0 for uncompressed formats.
 texture_block_bytes :: proc(format: dxgi.FORMAT) -> int {
     #partial switch format {
     case .BC4_UNORM: return 8
-    case .BC5_UNORM, .BC7_UNORM_SRGB: return 16
+    case .BC5_UNORM, .BC6H_UF16, .BC7_UNORM_SRGB: return 16
     }
     return 0
 }
@@ -93,7 +104,7 @@ texture_level_rows :: proc(format: dxgi.FORMAT, width, height: u32) -> (row_size
     if block := texture_block_bytes(format); block > 0 {
         return int((width + 3) / 4) * block, int((height + 3) / 4)
     }
-    return int(width) * 4, int(height)
+    return int(width) * (16 if format == .R32G32B32A32_FLOAT else 4), int(height)
 }
 
 // Points `levels` at `count` levels in `data`, starting `offset` bytes in,
@@ -208,25 +219,17 @@ Bc7_Fit :: struct {
     error: f32,
 }
 
-// BC7 using only mode 6: one line segment through RGBA space per block, 16
-// steps along it. That suits most material textures; the partitioned modes
-// would do better on blocks with two distinct colors. The segment follows the
-// block's principal axis, then is refitted twice by least squares to the
-// indices chosen.
-bc7_encode_block :: proc(texels: [16][4]u8) -> [16]u8 {
-    opaque := true
+// A line segment through a block's 16 values: along their principal axis (by
+// power iteration, from the channel that varies most), spanning their
+// projections onto it.
+block_principal_segment :: proc(points: [16][4]f32) -> (ends: [2][4]f32) {
     mean: [4]f32
-    for texel in texels {
-        for c in 0..<4 do mean[c] += f32(texel[c]) / 16
-        opaque &&= texel[3] == 255
-    }
+    for point in points do mean += point / 16
     covariance: [4][4]f32
-    for texel in texels {
-        d: [4]f32
-        for c in 0..<4 do d[c] = f32(texel[c]) - mean[c]
+    for point in points {
+        d := point - mean
         for i in 0..<4 do for j in 0..<4 do covariance[i][j] += d[i] * d[j]
     }
-    // The principal axis by power iteration, from the channel that varies most.
     axis: [4]f32
     widest := 0
     for c in 1..<4 do if covariance[c][c] > covariance[widest][widest] do widest = c
@@ -239,38 +242,52 @@ bc7_encode_block :: proc(texels: [16][4]u8) -> [16]u8 {
         axis = next / length
     }
     low, high := max(f32), -max(f32)
-    for texel in texels {
-        t: f32
-        for c in 0..<4 do t += (f32(texel[c]) - mean[c]) * axis[c]
+    for point in points {
+        d := point - mean
+        t := d[0] * axis[0] + d[1] * axis[1] + d[2] * axis[2] + d[3] * axis[3]
         low, high = min(low, t), max(high, t)
     }
-    if low > high do low, high = 0, 0
-    ends := [2][4]f32{mean + axis * low, mean + axis * high}
+    return {mean + axis * low, mean + axis * high}
+}
 
+// The endpoints that best fit the values for the chosen 4-bit indices (least
+// squares); false when the indices cannot tell the endpoints apart.
+block_refit_segment :: proc(points: [16][4]f32, indices: [16]u8) -> (ends: [2][4]f32, ok: bool) {
+    a, b, c: f32
+    x0, x1: [4]f32
+    for point, i in points {
+        w := f32(BC7_WEIGHTS[indices[i]]) / 64
+        a += (1 - w) * (1 - w)
+        b += w * (1 - w)
+        c += w * w
+        x0 += (1 - w) * point
+        x1 += w * point
+    }
+    determinant := a * c - b * b
+    if abs(determinant) < 0.0001 do return
+    return {(c * x0 - b * x1) / determinant, (a * x1 - b * x0) / determinant}, true
+}
+
+// BC7 using only mode 6: one line segment through RGBA space per block, 16
+// steps along it. That suits most material textures; the partitioned modes
+// would do better on blocks with two distinct colors. The segment follows the
+// block's principal axis, then is refitted twice by least squares to the
+// indices chosen.
+bc7_encode_block :: proc(texels: [16][4]u8) -> [16]u8 {
+    opaque := true
+    points: [16][4]f32
+    for texel, i in texels {
+        for c in 0..<4 do points[i][c] = f32(texel[c])
+        opaque &&= texel[3] == 255
+    }
+    ends := block_principal_segment(points)
     best := Bc7_Fit{error = max(f32)}
     for iteration in 0..<3 {
         fit := bc7_fit(texels, ends, opaque)
         if fit.error < best.error do best = fit
         if iteration == 2 || best.error == 0 do break
-        // The endpoints that best fit these indices (least squares).
-        a, b, c: f32
-        x0, x1: [4]f32
-        for texel, i in texels {
-            w := f32(BC7_WEIGHTS[fit.indices[i]]) / 64
-            a += (1 - w) * (1 - w)
-            b += w * (1 - w)
-            c += w * w
-            for ch in 0..<4 {
-                x0[ch] += (1 - w) * f32(texel[ch])
-                x1[ch] += w * f32(texel[ch])
-            }
-        }
-        determinant := a * c - b * b
-        if abs(determinant) < 0.0001 do break
-        for ch in 0..<4 {
-            ends[0][ch] = (c * x0[ch] - b * x1[ch]) / determinant
-            ends[1][ch] = (a * x1[ch] - b * x0[ch]) / determinant
-        }
+        ok: bool
+        if ends, ok = block_refit_segment(points, fit.indices); !ok do break
     }
     return bc7_pack_mode6(best)
 }
@@ -377,6 +394,243 @@ bc7_decode_alpha :: proc(block: []u8) -> (alpha: [16]u8) {
     return
 }
 
+// The format the sky stores a panorama in: BC6H when both sides are
+// multiples of 4, else full floats.
+environment_format :: proc(width, height: u32) -> dxgi.FORMAT {
+    return .BC6H_UF16 if width % 4 == 0 && height % 4 == 0 else .R32G32B32A32_FLOAT
+}
+
+// The sky's copy of a panorama (RGBA floats): read from the cache when its
+// entry is current, otherwise built and, when compressed, cached.
+environment_prepare :: proc(desc: EnvironmentDesc, pixels: []f32, width, height: u32) -> (texture: TextureData) {
+    format := environment_format(width, height)
+    if format != .BC6H_UF16 do return environment_encode(pixels, width, height, format)
+    cache_path := texture_cache_path(ENVIRONMENT_CACHE_DIRECTORY, desc.id, desc.path, "sky")
+    if cached, ok := texture_cache_read(cache_path); ok {
+        if cached.format == format && cached.width == width && cached.height == height do return cached
+        texture_data_destroy(&cached)
+    }
+    texture = environment_encode(pixels, width, height, format)
+    if cache_path != "" do texture_cache_write(cache_path, desc.id, texture)
+    return
+}
+
+// A panorama's mip chain (texture_next_environment_mip) in `format`: BC6H or
+// RGBA32F.
+environment_encode :: proc(pixels: []f32, width, height: u32, format: dxgi.FORMAT) -> (texture: TextureData) {
+    heap := runtime.heap_allocator()
+    texture.format, texture.width, texture.height = format, width, height
+    texture_allocate_levels(&texture, int(texture_mip_count(width, height)))
+    level, level_width, level_height := pixels, width, height
+    for i in 0..<len(texture.levels) {
+        if format == .BC6H_UF16 {
+            bc6h_encode_level(level, level_width, level_height, texture.levels[i])
+        } else {
+            copy(texture.levels[i], slice.to_bytes(level))
+        }
+        if i + 1 == len(texture.levels) do break
+        next, next_width, next_height := texture_next_environment_mip(level, level_width, level_height, heap)
+        if i > 0 do delete(level, heap)
+        level, level_width, level_height = next, next_width, next_height
+    }
+    if len(texture.levels) > 1 do delete(level, heap)
+    return
+}
+
+// One BC6H level, its rows of blocks shared out to a thread per core (a 4K
+// panorama has over half a million blocks).
+bc6h_encode_level :: proc(pixels: []f32, width, height: u32, out: []u8) {
+    Job :: struct {
+        pixels: []f32,
+        width, height: u32,
+        out: []u8,
+        next_row: int,
+    }
+    encode_rows :: proc(job: ^Job) {
+        blocks_x, blocks_y := (job.width + 3) / 4, (job.height + 3) / 4
+        for {
+            by := u32(sync.atomic_add(&job.next_row, 1))
+            if by >= blocks_y do break
+            for bx in 0..<blocks_x {
+                texels: [16][3]f32
+                for i in 0..<u32(16) {
+                    x := min(bx * 4 + i % 4, job.width - 1)
+                    y := min(by * 4 + i / 4, job.height - 1)
+                    offset := int(y * job.width + x) * 4
+                    texels[i] = {job.pixels[offset], job.pixels[offset + 1], job.pixels[offset + 2]}
+                }
+                encoded := bc6h_encode_block(texels)
+                copy(job.out[int(by * blocks_x + bx) * 16:][:16], encoded[:])
+            }
+        }
+    }
+    job := Job{pixels = pixels, width = width, height = height, out = out}
+    // Small levels are not worth starting threads for.
+    helpers := clamp(os.get_processor_core_count(), 1, 16) - 1 if height >= 256 else 0
+    threads := make([]^thread.Thread, helpers, context.temp_allocator)
+    for &t in threads do t = thread.create_and_start_with_poly_data(&job, encode_rows)
+    encode_rows(&job)
+    thread.join_multiple(..threads)
+    for t in threads do thread.destroy(t)
+}
+
+// BC6H's single-region modes (11 to 14 in D3D's numbering): the mode's bits,
+// the endpoint precision, and how many bits store the second endpoint as a
+// signed difference from the first (0: stored whole, at 10 bits). More
+// precision with a smaller difference suits smooth blocks, such as most of a
+// sky.
+Bc6h_Mode :: struct {bits, precision, delta: u32}
+BC6H_MODES := [4]Bc6h_Mode{{0x03, 10, 0}, {0x07, 11, 9}, {0x0b, 12, 8}, {0x0f, 16, 4}}
+
+// A BC6H block being fitted: quantized RGB endpoints (the mode's precision)
+// and a 4-bit index per texel.
+Bc6h_Fit :: struct {
+    mode: int,
+    endpoints: [2][3]i32,
+    indices: [16]u8,
+    error: f32,
+}
+
+// A radiance value as BC6H's unsigned half floats see it: the half's bits,
+// clamped to the largest finite half. Interpolating these bits is roughly
+// interpolating the logarithm, so errors measured on them are relative.
+bc6h_half_bits :: proc(value: f32) -> f32 {
+    if !(value > 0) do return 0
+    return f32(transmute(u16)f16(min(value, 65504)))
+}
+
+// An endpoint from `precision` bits to 16, as the decoder expands it.
+bc6h_unquantize :: proc(value: i32, precision: u32) -> i32 {
+    if precision >= 15 || value == 0 do return value
+    if value == (i32(1) << precision) - 1 do return 0xFFFF
+    return ((value << 16) + 0x8000) >> precision
+}
+
+// The `precision`-bit endpoint whose expansion is nearest `target` (0 to 65535).
+bc6h_quantize :: proc(target: f32, precision: u32) -> i32 {
+    top := (i32(1) << precision) - 1
+    guess := clamp(i32(target * f32(top + 1) / 65536), 0, top)
+    best := guess
+    for value in max(guess - 1, 0)..=min(guess + 1, top) {
+        if abs(f32(bc6h_unquantize(value, precision)) - target) < abs(f32(bc6h_unquantize(best, precision)) - target) do best = value
+    }
+    return best
+}
+
+// The half-float bits a texel decodes to: expanded endpoints interpolated,
+// then scaled by 31/64 into the finite half range.
+bc6h_interpolate :: proc(a, b, w: i32) -> f32 {
+    return f32(((((64 - w) * a + w * b + 32) >> 6) * 31) >> 6)
+}
+
+// Like bc7_encode_block, in half-float bits: a segment along the principal
+// axis, refitted twice by least squares, with each round trying every
+// single-region mode. The two-region modes, which would suit blocks with two
+// distinct colors, are not used.
+bc6h_encode_block :: proc(pixels: [16][3]f32) -> [16]u8 {
+    points: [16][4]f32
+    for pixel, i in pixels do for c in 0..<3 do points[i][c] = bc6h_half_bits(pixel[c])
+    ends := block_principal_segment(points)
+    best := Bc6h_Fit{error = max(f32)}
+    for iteration in 0..<3 {
+        round := Bc6h_Fit{error = max(f32)}
+        for mode in 0..<len(BC6H_MODES) {
+            fit := bc6h_fit(points, ends, mode)
+            if fit.error < round.error do round = fit
+        }
+        if round.error < best.error do best = round
+        if iteration == 2 || best.error == 0 do break
+        ok: bool
+        if ends, ok = block_refit_segment(points, round.indices); !ok do break
+    }
+    return bc6h_pack(best)
+}
+
+// Quantizes two endpoints (in half-float bits) for one mode and picks each
+// texel's index. The error is max(f32) when the mode cannot hold the block.
+bc6h_fit :: proc(points: [16][4]f32, ends: [2][4]f32, mode: int) -> (fit: Bc6h_Fit) {
+    m := BC6H_MODES[mode]
+    fit.mode = mode
+    limit := i32(1) << m.delta >> 1
+    colors: [2][3]i32
+    for c in 0..<3 {
+        // From half bits back to the 16-bit range the endpoints expand to.
+        a := bc6h_quantize(clamp(ends[0][c] * 64 / 31, 0, 65535), m.precision)
+        b := bc6h_quantize(clamp(ends[1][c] * 64 / 31, 0, 65535), m.precision)
+        if m.delta > 0 do b = a + clamp(b - a, -limit, limit - 1)
+        fit.endpoints[0][c], fit.endpoints[1][c] = a, b
+        colors[0][c], colors[1][c] = bc6h_unquantize(a, m.precision), bc6h_unquantize(b, m.precision)
+    }
+
+    // As in bc7_fit: the nearest palette entry is near the projection.
+    low, high: [3]f32
+    direction: [3]f32
+    for c in 0..<3 {
+        low[c], high[c] = bc6h_interpolate(colors[0][c], colors[1][c], 0), bc6h_interpolate(colors[0][c], colors[1][c], 64)
+        direction[c] = high[c] - low[c]
+    }
+    length2 := direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2]
+    for point, i in points {
+        t: f32
+        if length2 > 0 {
+            for c in 0..<3 do t += (point[c] - low[c]) * direction[c]
+            t /= length2
+        }
+        guess := 0
+        for w, index in BC7_WEIGHTS do if abs(f32(w) / 64 - t) < abs(f32(BC7_WEIGHTS[guess]) / 64 - t) do guess = index
+        best, best_error := guess, max(f32)
+        for index in max(guess - 1, 0)..=min(guess + 1, 15) {
+            error: f32
+            for c in 0..<3 {
+                d := bc6h_interpolate(colors[0][c], colors[1][c], BC7_WEIGHTS[index]) - point[c]
+                error += d * d
+            }
+            if error < best_error do best, best_error = index, error
+        }
+        fit.indices[i] = u8(best)
+        fit.error += best_error
+    }
+
+    // The first index's top bit must be 0: swapping the endpoints flips every
+    // index, and a difference must then fit the other way round.
+    if fit.indices[0] >= 8 {
+        fit.endpoints[0], fit.endpoints[1] = fit.endpoints[1], fit.endpoints[0]
+        for &index in fit.indices do index = 15 - index
+        for c in 0..<3 {
+            if m.delta > 0 && fit.endpoints[1][c] - fit.endpoints[0][c] >= limit do fit.error = max(f32)
+        }
+    }
+    return
+}
+
+// The single-region layouts, from the lowest bit: the mode, the first
+// endpoint's low 10 bits (R, G, B), then for each channel either the second
+// endpoint (10 bits), or its difference followed by the first endpoint's
+// remaining bits from the highest down; then the indices, the first with 3
+// bits since its top bit is 0.
+bc6h_pack :: proc(fit: Bc6h_Fit) -> (block: [16]u8) {
+    m := BC6H_MODES[fit.mode]
+    bits, position: u128
+    put :: proc(bits, position: ^u128, value: u32, count: u32) {
+        bits^ |= u128(value & ((u32(1) << count) - 1)) << position^
+        position^ += u128(count)
+    }
+    put(&bits, &position, m.bits, 5)
+    for c in 0..<3 do put(&bits, &position, u32(fit.endpoints[0][c]), 10)
+    for c in 0..<3 {
+        if m.delta == 0 {
+            put(&bits, &position, u32(fit.endpoints[1][c]), 10)
+            continue
+        }
+        put(&bits, &position, u32(fit.endpoints[1][c] - fit.endpoints[0][c]), m.delta)
+        for bit := m.precision - 1; bit >= 10; bit -= 1 do put(&bits, &position, u32(fit.endpoints[0][c]) >> bit, 1)
+    }
+    for index, i in fit.indices do put(&bits, &position, u32(index), 3 if i == 0 else 4)
+    assert(position == 128)
+    for i in 0..<16 do block[i] = u8(bits >> u128(8 * i))
+    return
+}
+
 // Albedo textures with any transparency: level 0's alpha, for picking.
 texture_data_alpha :: proc(usage: TextureUsage, texture: TextureData) -> TextureAlpha {
     if usage != .albedo || len(texture.levels) == 0 do return {}
@@ -413,17 +667,18 @@ texture_cache_name :: proc(id: string) -> string {
     return string(name)
 }
 
-// Where a file texture's cache entry is: the hash covers the source file's
-// path, size and write time, the texture's settings and the cache version,
-// so changing any of them makes a new entry. "" if the source is missing.
-texture_cache_path :: proc(desc: TextureDesc) -> string {
-    info, error := os.stat(desc.path, context.temp_allocator)
+// Where an asset's cache entry is, in `directory`: the hash covers the source
+// file's path, size and write time, the asset's settings and the cache
+// version, so changing any of them makes a new entry. "" if the source is
+// missing.
+texture_cache_path :: proc(directory, id, source, settings: string) -> string {
+    info, error := os.stat(source, context.temp_allocator)
     if error != nil do return ""
     key := fmt.tprintf(
-        "%d|%s|%d|%d|%v|%v|%v", TEXTURE_CACHE_VERSION, desc.path, info.size,
-        time.to_unix_nanoseconds(info.modification_time), desc.usage, desc.settings.channel, desc.settings.flip_green,
+        "%d|%s|%d|%d|%s", TEXTURE_CACHE_VERSION, source, info.size,
+        time.to_unix_nanoseconds(info.modification_time), settings,
     )
-    return fmt.tprintf("%s/%s@%016x.dds", TEXTURE_CACHE_DIRECTORY, texture_cache_name(desc.id), hash.fnv64a(transmute([]u8)key))
+    return fmt.tprintf("%s/%s@%016x.dds", directory, texture_cache_name(id), hash.fnv64a(transmute([]u8)key))
 }
 
 // The DDS file header with its DX10 extension, which names the DXGI format.
@@ -441,8 +696,9 @@ Dds_Header :: struct #packed {
 DDS_MAGIC :: 0x20534444 // "DDS "
 DDS_FOURCC_DX10 :: 0x30315844 // "DX10"
 
-// A cache entry, if it exists and holds what `usage` and its size call for.
-texture_cache_read :: proc(path: string, usage: TextureUsage) -> (texture: TextureData, ok: bool) {
+// A cache entry, if it exists and holds a full mip chain. Callers check that
+// its format is the one they want.
+texture_cache_read :: proc(path: string) -> (texture: TextureData, ok: bool) {
     if path == "" do return
     data, error := os.read_entire_file(path, runtime.heap_allocator())
     if error != nil do return
@@ -453,7 +709,6 @@ texture_cache_read :: proc(path: string, usage: TextureUsage) -> (texture: Textu
     texture.format = dxgi.FORMAT(header.dxgi_format)
     if header.magic != DDS_MAGIC || header.pixel_format.four_cc != DDS_FOURCC_DX10 || header.array_size != 1 ||
        texture.width == 0 || texture.height == 0 || texture.width > 32768 || texture.height > 32768 ||
-       texture.format != texture_format(usage, texture.width, texture.height) ||
        u32(header.mip_map_count) != texture_mip_count(texture.width, texture.height) {
         return
     }
@@ -461,10 +716,11 @@ texture_cache_read :: proc(path: string, usage: TextureUsage) -> (texture: Textu
     return texture, true
 }
 
-// Writes a cache entry and removes the texture's older ones. A failure only
-// means the next run prepares the texture again.
+// Writes a cache entry and removes the asset's older ones in that directory.
+// A failure only means the next run prepares the texture again.
 texture_cache_write :: proc(path, id: string, texture: TextureData) {
-    _ = os.make_directory_all(TEXTURE_CACHE_DIRECTORY)
+    directory := path[:strings.last_index_byte(path, '/')]
+    _ = os.make_directory_all(directory)
     compressed := texture_block_bytes(texture.format) > 0
     header := Dds_Header{
         magic = DDS_MAGIC,
@@ -496,12 +752,12 @@ texture_cache_write :: proc(path, id: string, texture: TextureData) {
         os.remove(path)
         return
     }
-    texture_cache_forget(id, keep = path)
+    texture_cache_forget(id, keep = path, directory = directory)
 }
 
-// Removes a texture's cache entries, except `keep`.
-texture_cache_forget :: proc(id: string, keep := "") {
-    entries, error := os.read_all_directory_by_path(TEXTURE_CACHE_DIRECTORY, context.temp_allocator)
+// Removes an asset's cache entries, except `keep`.
+texture_cache_forget :: proc(id: string, keep := "", directory := TEXTURE_CACHE_DIRECTORY) {
+    entries, error := os.read_all_directory_by_path(directory, context.temp_allocator)
     if error != nil do return
     prefix := fmt.tprintf("%s@", texture_cache_name(id))
     keep_name := keep[strings.last_index_byte(keep, '/') + 1:] if keep != "" else ""

@@ -176,6 +176,25 @@ panorama is loaded only when lighting or the background uses it.
 Loading decodes it, finds its sun, uploads it with a mip chain, and bakes the
 image-based lighting maps; see [Lighting](lighting.md#image-based-lighting-and-the-sky).
 
+The sky's copy is stored as `BC6H_UF16` (1 byte per texel; half floats in
+4 × 4 blocks) when both sides are multiples of 4, else as `R32G32B32A32_FLOAT`.
+A 4K panorama with its mips takes 11 MB instead of 179 MB.
+
+- **Encoder**: it works on the bits of each half float, where interpolating is
+  close to interpolating the logarithm, so its error is relative to the
+  brightness. Like the BC7 encoder it fits one line segment per block, and
+  each block takes whichever of the four single-region modes fits best: one
+  stores both endpoints at 10 bits; the others store the second as a
+  difference from the first, which buys precision for smooth blocks (most of
+  a sky).
+- **Cache**: encoding takes about 0.6 s on 16 threads, so the result is
+  cached in `cache/environments/`, keyed like the textures. A cached
+  panorama loads in about 0.3 s, against 0.38 s before compression, and the
+  sky renders within a few levels of the uncompressed one.
+- **Baking**: the maps are not baked from the BC6H copy. Half floats top out
+  at 65504, which the sun can exceed, and a block holding the sun's edge
+  smears it, so baking uploads a temporary full-float copy instead.
+
 ## Removing assets
 
 The Assets panel also removes a model or texture from the catalog, after a

@@ -153,11 +153,13 @@ the edges. Each shadowed point light draws its casters six times per frame.
 
 ### Environment panoramas
 
-The environment is an HDR panorama (equirectangular, 2:1). It is decoded,
-uploaded with a full mip chain built on the CPU (each level weights rows by
-their solid angle, so the panorama's total light is preserved), and baked into
-two maps for lighting. **Environment rotation** turns it around the Y axis;
-**IBL intensity** scales the light it gives.
+The environment is an HDR panorama (equirectangular, 2:1). It is decoded and
+given a full mip chain on the CPU (each level weights rows by their solid
+angle, so the panorama's total light is preserved). The sky samples a BC6H
+copy (see [Assets](assets.md#environments)); the two lighting maps are baked
+from a temporary full-float copy, which keeps the sun's full radiance.
+**Environment rotation** turns it around the Y axis; **IBL intensity** scales
+the light it gives.
 
 - **Irradiance** (64 × 32): for each normal direction, the cosine-weighted
   average of incoming light from 1024 Hammersley samples. Each sample reads the

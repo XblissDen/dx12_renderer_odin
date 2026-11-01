@@ -16,8 +16,8 @@ written in Odin on DirectX 12, with a Dear ImGui interface.
   ACES, AgX or Reinhard tone mapping.
 - **Assets**: OBJ and glTF 2.0 import with materials (normal, roughness and
   metallic, emissive and occlusion maps; cutout, blended and double-sided
-  materials); block-compressed textures (BC7, BC5, BC4) with full mip chains,
-  cached on disk after the first load.
+  materials); block-compressed textures (BC7, BC5, BC4) and HDR panoramas
+  (BC6H) with full mip chains, cached on disk after the first load.
 - **Editor**: picking and multiple selection, parent/child hierarchies
   (glTF models come in as their node trees),
   move/rotate/scale gizmos, viewport icons and debug lines (light ranges,
@@ -56,8 +56,9 @@ dx12_renderer.exe
   `shaders/` paths resolve.
 - Assets are listed in `assets.json`; if it is missing, startup creates one
   with the starter assets.
-- The first start compresses the textures into `cache/textures/`, which takes
-  a few seconds; later starts read them from there. Deleting `cache/` is safe.
+- The first start compresses the textures and panoramas into `cache/`, which
+  takes a few seconds; later starts read them from there. Deleting `cache/` is
+  safe.
 - Saving a file in `shaders/` while the program runs reloads the shaders.
 
 ## Controls
