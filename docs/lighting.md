@@ -50,9 +50,43 @@ glTF materials map onto this.
 - **Cutouts** discard pixels whose albedo alpha is below the cutoff, in the
   prepass and shadow passes; the alpha is scaled up with the mip level (Ben
   Golus' method) so thin cutouts keep their coverage in the distance.
-- **Blended** surfaces are drawn after all opaque ones, back to front, with
-  alpha = albedo alpha × opacity. They skip SSAO and SSR, which come from the
-  opaque surface behind them.
+- **Blended** surfaces are drawn after all opaque ones, with alpha = albedo
+  alpha × opacity, order-independently ([below](#blended-surfaces)). They
+  skip SSAO and SSR, which come from the opaque surface behind them.
+
+### Blended surfaces
+
+Ordinary alpha blending needs surfaces drawn back to front. Sorting whole
+objects by their centers gets crossing or interlocking glass wrong, and
+nothing can sort the triangles within one mesh. Blended surfaces therefore use
+**weighted blended order-independent transparency** (McGuire and Bavoil,
+2013), in which the result does not depend on the order at all:
+
+1. **Accumulate**: each blended pixel adds its premultiplied color and its
+   alpha, times a weight, into an accumulation target (`R32G32B32A32_FLOAT`,
+   cleared to 0). It also multiplies a revealage target (`R16_FLOAT`,
+   cleared to 1) by 1 − alpha, leaving how much of the opaque image still
+   shows through. Both are sums and products, so order does not matter.
+2. **Weight**: alpha × clamp(10 / (10⁻⁵ + (d/10)³ + (d/200)⁶), 0.01, 3000),
+   with d the view depth, one of the paper's suggested weights. It falls with
+   the cube of the distance, so a surface 25% nearer counts about twice as
+   much, and the front pane of glass reads as being in front.
+3. **Composite**: a full-screen pass divides the accumulated color by the
+   accumulated alpha (the weighted average color) and lays it over the lit
+   image: average × (1 − revealage) + scene × revealage. Pixels with no blended
+   surface are skipped.
+
+The coverage (how much of the background shows) is exact. The color is an
+average, so where two surfaces of similar distance overlap, each tints the
+other's area about equally instead of the front one covering the back one.
+That is the method's trade-off for not sorting. The accumulation is 32-bit,
+because weights up to 3000 times bright HDR highlights would overflow half
+floats.
+
+Double-sided blended surfaces draw both faces in one draw. Blended draws are
+still sorted back to front, but only so that the nearest mostly-opaque
+surface writes the motion vector TAA follows
+([Frame structure](frame.md#instanced-batching)).
 
 ## The sun
 

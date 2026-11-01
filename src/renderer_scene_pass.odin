@@ -1,6 +1,61 @@
 package main
 
 import d3d12 "vendor:directx/d3d12"
+import dxgi "vendor:directx/dxgi"
+
+// Weighted blended order-independent transparency (McGuire and Bavoil,
+// 2013). Each blended surface adds its premultiplied color and alpha, times
+// a weight that falls with distance, into the accumulation target, and
+// multiplies the revealage target (how much of the scene still shows) by
+// 1 - alpha. The composite then lays the weighted average color over the lit
+// image by 1 - revealage. Neither sum depends on the order surfaces arrive
+// in. The accumulation is 32-bit float: weights reach 3000 and HDR
+// highlights are bright, which would overflow half floats.
+OIT_ACCUMULATION_FORMAT :: dxgi.FORMAT.R32G32B32A32_FLOAT
+OIT_REVEALAGE_FORMAT :: dxgi.FORMAT.R16_FLOAT
+// Nothing accumulated, everything revealed.
+OIT_CLEAR_COLORS := [2][4]f32{{0, 0, 0, 0}, {1, 0, 0, 0}}
+
+// (Re)creates the accumulation and revealage targets with the other
+// screen-sized targets.
+renderer_create_oit_targets :: proc() {
+    r := &g_renderer
+    if r.oit_rtv_heap == nil {
+        heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{NumDescriptors = len(r.oit_targets), Type = .RTV}
+        dx_check(r.device->CreateDescriptorHeap(&heap_desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&r.oit_rtv_heap)))
+    }
+    formats := [2]dxgi.FORMAT{OIT_ACCUMULATION_FORMAT, OIT_REVEALAGE_FORMAT}
+    heap_props := d3d12.HEAP_PROPERTIES{Type = .DEFAULT}
+    for &target, i in r.oit_targets {
+        desc := d3d12.RESOURCE_DESC{
+            Dimension = .TEXTURE2D,
+            Width = u64(r.width),
+            Height = r.height,
+            DepthOrArraySize = 1,
+            MipLevels = 1,
+            Format = formats[i],
+            SampleDesc = {Count = 1},
+            Flags = {.ALLOW_RENDER_TARGET},
+        }
+        clear_value := d3d12.CLEAR_VALUE{Format = formats[i]}
+        clear_value.Color = OIT_CLEAR_COLORS[i]
+        dx_check(r.device->CreateCommittedResource(
+            &heap_props, {}, &desc, {.PIXEL_SHADER_RESOURCE}, &clear_value,
+            d3d12.IResource_UUID, (^rawptr)(&target),
+        ))
+        r.device->CreateRenderTargetView(target, nil, renderer_oit_rtv(i))
+        renderer_write_srv(target, formats[i], r.oit_srv_start + u32(i))
+    }
+}
+
+renderer_release_oit_targets :: proc() {
+    for target in g_renderer.oit_targets do target->Release()
+}
+
+// 0: accumulation, 1: revealage.
+renderer_oit_rtv :: proc(index: int) -> d3d12.CPU_DESCRIPTOR_HANDLE {
+    return descriptor_handle(g_renderer.oit_rtv_heap, .RTV, u32(index))
+}
 
 renderer_render_scene_pass :: proc(draws: []Draw, batches, late_batches, transparent_batches: []DrawBatch) {
     r := &g_renderer
@@ -69,39 +124,50 @@ renderer_render_scene_pass :: proc(draws: []Draw, batches, late_batches, transpa
     renderer_draw_batches(draws, late_batches, r.hdr_pipeline_states)
     renderer_end_event()
 
-    // Blended surfaces over the result, farthest first. They also write their
-    // motion into the prepass's velocity target where they are mostly
-    // opaque, so TAA follows moving glass instead of what is behind it.
+    // Blended surfaces, order-independent: they accumulate into their own
+    // targets, then one full-screen pass composites them over the result.
+    // They also write their motion into the prepass's velocity target where
+    // they are mostly opaque, so TAA follows moving glass instead of what is
+    // behind it.
     if len(transparent_batches) > 0 {
         renderer_begin_event("Blended")
         defer renderer_end_event()
-        velocity_barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
-        velocity_barrier.Transition = {
-            pResource = r.velocity_texture,
-            StateBefore = {.PIXEL_SHADER_RESOURCE},
-            StateAfter = {.RENDER_TARGET},
-            Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+        barriers := [3]d3d12.RESOURCE_BARRIER{
+            resource_transition(r.oit_targets[0], {.PIXEL_SHADER_RESOURCE}, {.RENDER_TARGET}),
+            resource_transition(r.oit_targets[1], {.PIXEL_SHADER_RESOURCE}, {.RENDER_TARGET}),
+            resource_transition(r.velocity_texture, {.PIXEL_SHADER_RESOURCE}, {.RENDER_TARGET}),
         }
-        r.command_list->ResourceBarrier(1, &velocity_barrier)
-        rtvs := [2]d3d12.CPU_DESCRIPTOR_HANDLE{hdr_rtv, renderer_velocity_rtv()}
+        r.command_list->ResourceBarrier(len(barriers), &barriers[0])
+        rtvs := [3]d3d12.CPU_DESCRIPTOR_HANDLE{renderer_oit_rtv(0), renderer_oit_rtv(1), renderer_velocity_rtv()}
+        for target, i in OIT_CLEAR_COLORS {
+            clear := target
+            r.command_list->ClearRenderTargetView(rtvs[i], &clear, 0, nil)
+        }
         r.command_list->OMSetRenderTargets(len(rtvs), &rtvs[0], false, &dsv_handle)
 
-        // One draw per call, in sorted order (renderer_batch_draws without
-        // merging); culled ones draw no instances.
+        // One draw per call, sorted back to front (renderer_batch_draws
+        // without merging): the colors do not depend on the order, but the
+        // motion of the nearest mostly-opaque surface, drawn last, wins.
+        // Culled calls draw no instances.
         renderer_bind_objects()
         for batch in transparent_batches {
-            draw := &draws[batch.draw]
-            if draw.variant == .Double_Sided || draw.variant == .Masked_Double_Sided {
-                r.command_list->SetPipelineState(r.transparent_back_pipeline_state)
-                renderer_execute_draws(batch.command, 1)
-            }
-            r.command_list->SetPipelineState(r.transparent_front_pipeline_state)
+            variant := draws[batch.draw].variant
+            double_sided := variant == .Double_Sided || variant == .Masked_Double_Sided
+            r.command_list->SetPipelineState(r.transparent_pipeline_states[int(double_sided)])
             renderer_execute_draws(batch.command, 1)
         }
 
-        velocity_barrier.Transition.StateBefore = {.RENDER_TARGET}
-        velocity_barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
-        r.command_list->ResourceBarrier(1, &velocity_barrier)
+        for &barrier in barriers {
+            barrier.Transition.StateBefore = {.RENDER_TARGET}
+            barrier.Transition.StateAfter = {.PIXEL_SHADER_RESOURCE}
+        }
+        r.command_list->ResourceBarrier(len(barriers), &barriers[0])
+
+        r.command_list->OMSetRenderTargets(1, &hdr_rtv, false, nil)
+        r.command_list->SetPipelineState(r.oit_composite_pipeline_state)
+        renderer_bind_srv(.Texture_T0, r.oit_srv_start)
+        renderer_bind_srv(.Texture_T1, r.oit_srv_start + 1)
+        r.command_list->DrawInstanced(3, 1, 0, 0)
     }
 
     // Fog over everything, glass included (at the depth behind the glass).

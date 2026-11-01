@@ -52,7 +52,7 @@ frame never overwrites them while an earlier one still reads them.
 | SSR | Reflections traced through depth, read from last frame's image | [Lighting](lighting.md#screen-space-reflections-ssr) |
 | Light clusters | Compute pass listing the lights that reach each view cluster | [Lighting](lighting.md#clustered-lighting) |
 | Volumetric fog | Compute passes lighting the fog's cells and integrating them front to back | [Lighting](lighting.md#volumetric-fog) |
-| Scene | Sky, then lit opaque surfaces, then blended surfaces back to front, then the fog, into the HDR target | [Lighting](lighting.md) |
+| Scene | Sky, then lit opaque surfaces, then blended surfaces (accumulated, then composited), then the fog, into the HDR target | [Lighting](lighting.md) |
 | TAA | Blends the frame into the reprojected history, in HDR | [Post-processing](post_processing.md#taa) |
 | Auto exposure | Luminance histogram and exposure adaptation (compute) | [Post-processing](post_processing.md#auto-exposure) |
 | Bloom | Threshold, downsample chain, upsample chain | [Post-processing](post_processing.md#bloom) |
@@ -132,9 +132,11 @@ index to the pixel shader as a `nointerpolation` value. That way the pixel
 shader reads the same object's material values and textures. The prepass and
 the lit pass use the same calls.
 
-Blended draws are not merged, because they must stay in back-to-front order:
-the CPU sorts all of them by distance to their center, in view or not, and
-each is its own call of at most one instance.
+Blended draws are not merged, because they stay in back-to-front order: the
+CPU sorts all of them by distance to their center, in view or not, and each
+is its own call of at most one instance. Their colors blend independently of
+order ([Lighting](lighting.md#blended-surfaces)), so the order only decides
+whose motion vector wins where they overlap: the nearest's.
 
 The Profiler panel's **Draw calls** count is the camera's calls that drew something,
 per pass (early and late together), next to the visible draws, and the

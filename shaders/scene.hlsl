@@ -1090,22 +1090,39 @@ float4 PSCaptureMasked(PSInput input, bool is_front_face : SV_IsFrontFace) : SV_
 // least this much; thinner glass leaves the motion of what is seen through it.
 #define TRANSPARENT_MOTION_COVERAGE 0.5f
 
+// Blended materials, order-independent (weighted blended OIT,
+// renderer_scene_pass.odin): the targets sum what PSTransparentComposite
+// lays over the opaque image.
 struct TransparentOutput
 {
-    float4 color  : SV_TARGET0; // Blended by alpha.
+    // Premultiplied color and alpha, times the weight; added up.
+    float4 accumulation : SV_TARGET0;
+    // Alpha; the target is multiplied by 1 - alpha.
+    float revealage : SV_TARGET1;
     // Motion in xy; alpha 1 replaces the pixel's motion, 0 keeps it.
-    float4 motion : SV_TARGET1;
+    float4 motion : SV_TARGET2;
 };
 
-// Blended materials, drawn over the opaque image (alpha blending).
+// How much a surface counts in the average color: nearer and more opaque
+// surfaces dominate the ones behind them. One of McGuire and Bavoil's
+// weights, for view depths up to a few hundred units; falling with the cube
+// of the distance, a surface 25% nearer counts about twice as much.
+float TransparentWeight(float view_depth, float alpha)
+{
+    float d = abs(view_depth);
+    return alpha * clamp(10.0f / (1e-5f + pow(d / 10.0f, 3.0f) + pow(d / 200.0f, 6.0f)), 1e-2f, 3e3f);
+}
+
 TransparentOutput PSTransparent(PSInput input, bool is_front_face : SV_IsFrontFace)
 {
     g_object = g_objects[input.draw];
+    float4 color = g_object.unlit != 0 ? UnlitColor() : ShadeSurface(input, is_front_face, true);
     TransparentOutput output;
-    output.color = g_object.unlit != 0 ? UnlitColor() : ShadeSurface(input, is_front_face, true);
+    output.accumulation = float4(color.rgb * color.a, color.a) * TransparentWeight(input.view_depth, color.a);
+    output.revealage = color.a;
     output.motion = float4(
         ScreenMotion(input.current_clip, input.previous_clip), 0.0f,
-        output.color.a >= TRANSPARENT_MOTION_COVERAGE ? 1.0f : 0.0f
+        color.a >= TRANSPARENT_MOTION_COVERAGE ? 1.0f : 0.0f
     );
     return output;
 }
@@ -1119,6 +1136,22 @@ struct FullscreenInput
     float4 position : SV_POSITION;
     float2 uv       : TEXCOORD0;
 };
+
+// The blended surfaces' targets (PSTransparent).
+Texture2D<float4> g_oit_accumulation : register(t0);
+Texture2D<float> g_oit_revealage : register(t1);
+
+// The blended surfaces' weighted average color, with alpha the revealage:
+// the pipeline computes average * (1 - revealage) + scene * revealage.
+float4 PSTransparentComposite(FullscreenInput input) : SV_TARGET
+{
+    int3 pixel = int3(input.position.xy, 0);
+    float revealage = g_oit_revealage.Load(pixel);
+    // Nothing blended over this pixel.
+    if (revealage >= 1.0f) discard;
+    float4 accumulation = g_oit_accumulation.Load(pixel);
+    return float4(accumulation.rgb / max(accumulation.a, 1e-5f), revealage);
+}
 
 // Row-vector perspective: device depth d = P22 + P32 / z.
 float ViewDepthFromDevice(float device_depth)

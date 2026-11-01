@@ -634,7 +634,8 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
 
     // Every draw goes to the GPU as a candidate for each view that could
     // draw it; the cull pass (renderer_cull_draws) tests them. Blended draws
-    // keep their back-to-front order, so they are sorted here, culled or not.
+    // keep a back-to-front order (for their motion vectors), so they are
+    // sorted here, culled or not.
     Transparent_Draw :: struct {index: u32, distance: f32}
     transparent := make([dynamic]Transparent_Draw, context.temp_allocator)
     opaque := make([dynamic]u32, context.temp_allocator)
@@ -648,9 +649,9 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         if draw.casts_shadow do append(&casters, u32(draw_index))
     }
 
-    // Back to front, so nearer surfaces blend over farther ones. Sorting by
-    // submesh center is approximate: interpenetrating or large surfaces can
-    // still blend in the wrong order.
+    // Back to front. Blending is order-independent, so this only decides
+    // whose motion vector wins where blended surfaces overlap: the last one
+    // drawn, the nearest by submesh center.
     slice.sort_by(transparent[:], proc(a, b: Transparent_Draw) -> bool {return a.distance > b.distance})
     transparent_order := make([]u32, len(transparent), context.temp_allocator)
     for draw, i in transparent do transparent_order[i] = draw.index

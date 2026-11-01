@@ -400,8 +400,14 @@ Renderer :: struct {
     hdr_rtv_heap: ^d3d12.IDescriptorHeap,
 
     hdr_pipeline_states: [Draw_Variant]^d3d12.IPipelineState,
-    // Blended surfaces: front faces, and back faces of double-sided ones.
-    transparent_front_pipeline_state, transparent_back_pipeline_state: ^d3d12.IPipelineState,
+    // Blended surfaces (one-sided, double-sided), their order-independent
+    // targets (accumulation, revealage) with RTVs and SRVs, and the pass
+    // that composites them over the lit image.
+    transparent_pipeline_states: [2]^d3d12.IPipelineState,
+    oit_targets: [2]^d3d12.IResource,
+    oit_rtv_heap: ^d3d12.IDescriptorHeap,
+    oit_srv_start: u32,
+    oit_composite_pipeline_state: ^d3d12.IPipelineState,
     post_pipeline_state: ^d3d12.IPipelineState,
 
     // One texture with the whole chain (renderer_post.odin); per-level RTVs
@@ -783,7 +789,7 @@ renderer_pipeline_slots :: proc() -> []^^d3d12.IPipelineState {
     }
     for &pso in r.bloom_pipeline_states do append(&slots, &pso)
     append(&slots,
-        &r.transparent_front_pipeline_state, &r.transparent_back_pipeline_state,
+        &r.transparent_pipeline_states[0], &r.transparent_pipeline_states[1], &r.oit_composite_pipeline_state,
         &r.post_pipeline_state, &r.fxaa_pipeline_state, &r.sharpen_pipeline_state,
         &r.taa_resolve_pipeline_state, &r.sky_pipeline_state,
         &r.irradiance_pipeline_state, &r.prefilter_pipeline_state,
@@ -1427,28 +1433,42 @@ renderer_create_pipelines :: proc() {
         renderer_create_pso(&lit_desc, &r.hdr_pipeline_states[variant])
     }
 
-    // Blended surfaces: over the lit image by their alpha, depth-tested
-    // against the prepass without writing. Double-sided ones draw twice, back
-    // faces (front culled) and then front faces.
+    // Blended surfaces, order-independent (renderer_scene_pass.odin):
+    // depth-tested against the prepass without writing, they add their
+    // weighted color into the accumulation target and multiply the
+    // revealage target by 1 - alpha. Double-sided ones draw both faces at once.
     transparent_desc := mesh_desc
     transparent_desc.PS = shader_bytecode(transparent_ps)
+    transparent_desc.NumRenderTargets = 3
+    transparent_desc.RTVFormats[0] = OIT_ACCUMULATION_FORMAT
+    transparent_desc.RTVFormats[1] = OIT_REVEALAGE_FORMAT
+    transparent_desc.BlendState.IndependentBlendEnable = true
     transparent_desc.BlendState.RenderTarget[0] = {
         BlendEnable = true,
-        SrcBlend = .SRC_ALPHA,
-        DestBlend = .INV_SRC_ALPHA,
+        SrcBlend = .ONE,
+        DestBlend = .ONE,
         BlendOp = .ADD,
         SrcBlendAlpha = .ONE,
-        DestBlendAlpha = .INV_SRC_ALPHA,
+        DestBlendAlpha = .ONE,
         BlendOpAlpha = .ADD,
         LogicOp = .NOOP,
         RenderTargetWriteMask = u8(d3d12.COLOR_WRITE_ENABLE_ALL),
     }
+    transparent_desc.BlendState.RenderTarget[1] = {
+        BlendEnable = true,
+        SrcBlend = .ZERO,
+        DestBlend = .INV_SRC_COLOR,
+        BlendOp = .ADD,
+        SrcBlendAlpha = .ZERO,
+        DestBlendAlpha = .INV_SRC_ALPHA,
+        BlendOpAlpha = .ADD,
+        LogicOp = .NOOP,
+        RenderTargetWriteMask = u8(d3d12.COLOR_WRITE_ENABLE_MASK{.RED}),
+    }
     // Their motion vectors, into the prepass's velocity target: the shader's
     // alpha (0 or 1) chooses between its motion and what is there.
-    transparent_desc.NumRenderTargets = 2
-    transparent_desc.RTVFormats[1] = .R16G16_FLOAT
-    transparent_desc.BlendState.IndependentBlendEnable = true
-    transparent_desc.BlendState.RenderTarget[1] = {
+    transparent_desc.RTVFormats[2] = .R16G16_FLOAT
+    transparent_desc.BlendState.RenderTarget[2] = {
         BlendEnable = true,
         SrcBlend = .SRC_ALPHA,
         DestBlend = .INV_SRC_ALPHA,
@@ -1461,9 +1481,9 @@ renderer_create_pipelines :: proc() {
     }
     transparent_desc.DepthStencilState.DepthFunc = .LESS_EQUAL
     transparent_desc.DepthStencilState.DepthWriteMask = .ZERO
-    renderer_create_pso(&transparent_desc, &r.transparent_front_pipeline_state)
-    transparent_desc.RasterizerState.CullMode = .FRONT
-    renderer_create_pso(&transparent_desc, &r.transparent_back_pipeline_state)
+    renderer_create_pso(&transparent_desc, &r.transparent_pipeline_states[0])
+    transparent_desc.RasterizerState.CullMode = .NONE
+    renderer_create_pso(&transparent_desc, &r.transparent_pipeline_states[1])
 
     // Full-screen triangle: no input layout, culling, or depth.
     fullscreen := mesh_desc
@@ -1491,6 +1511,12 @@ renderer_create_pipelines :: proc() {
     }
 
     renderer_create_probe_pipelines(mesh_desc, fullscreen)
+    // out = average * (1 - revealage) + scene * revealage.
+    composite := fullscreen
+    composite.BlendState.RenderTarget[0].BlendEnable = true
+    composite.BlendState.RenderTarget[0].SrcBlend = .INV_SRC_ALPHA
+    composite.BlendState.RenderTarget[0].DestBlend = .SRC_ALPHA
+    renderer_create_fullscreen_pso(composite, "shaders/scene.hlsl", "PSTransparentComposite", .R16G16B16A16_FLOAT, &r.oit_composite_pipeline_state)
     renderer_create_fullscreen_pso(fullscreen, "shaders/sky.hlsl", "PSMain", .R16G16B16A16_FLOAT, &r.sky_pipeline_state)
     renderer_create_fullscreen_pso(fullscreen, "shaders/irradiance.hlsl", "PSMain", .R16G16B16A16_FLOAT, &r.irradiance_pipeline_state)
     renderer_create_fullscreen_pso(fullscreen, "shaders/environment_prefilter.hlsl", "PSMain", .R16G16B16A16_FLOAT, &r.prefilter_pipeline_state)
@@ -1736,6 +1762,7 @@ renderer_resize:: proc(width, height: u32){
     for target in r.ao_targets do target->Release()
     renderer_release_taa_targets()
     renderer_release_ssr_targets()
+    renderer_release_oit_targets()
     r.hiz_texture->Release()
     r.bloom_texture->Release()
     r.selection_mask->Release()
@@ -1770,6 +1797,7 @@ renderer_resize:: proc(width, height: u32){
     renderer_create_ssao_targets()
     renderer_create_taa_targets()
     renderer_create_ssr_targets()
+    renderer_create_oit_targets()
     renderer_create_hiz()
     renderer_create_selection_mask()
 }
@@ -1807,6 +1835,7 @@ renderer_load_textures :: proc(){
     r.depth_srv_index = renderer_alloc_srv()
     r.surface_srv_index = renderer_alloc_srv()
     r.ssr_srv_index = renderer_alloc_srv()
+    r.oit_srv_start = renderer_alloc_srv(len(r.oit_targets))
     // These slots stay valid before an HDRI is loaded or its IBL maps are baked.
     null_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
         Format = .R16G16B16A16_FLOAT, ViewDimension = .TEXTURE2D,
@@ -2125,6 +2154,8 @@ renderer_destroy :: proc(){
     r.taa_rtv_heap->Release()
     r.velocity_rtv_heap->Release()
     renderer_release_ssr_targets()
+    renderer_release_oit_targets()
+    r.oit_rtv_heap->Release()
     renderer_release_light_clusters()
     renderer_release_fog()
     renderer_release_probes()
