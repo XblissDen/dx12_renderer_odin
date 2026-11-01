@@ -82,15 +82,12 @@ GpuLight :: struct {
     spot_offset: f32,
     direction: [3]f32, // The cone's axis; unused for point lights.
     spot_scale: f32,
-    // Shadow slot: for a spot light, its spot_shadow_view_projection and
-    // spot shadow map slice; for a point light, its cube in the point shadow
-    // map. -1 for none.
+    // Its first tile in the frame's GpuShadowTile list (a point light's six
+    // faces follow in order), or -1 without a drawn shadow.
     shadow_index: i32,
     // World size of one shadow-map texel per unit of distance along the axis.
     shadow_texel_scale: f32,
-    // Point lights: the cube faces' near plane (the far plane is the range).
-    shadow_near: f32,
-    _pad: f32,
+    _pad: [2]f32,
 }
 
 GpuMesh :: struct {
@@ -203,10 +200,8 @@ FrameConstants :: struct #align(256) {
     fog_frame: u32,
     _fog_pad: [3]f32,
 
-    // View-projection of each spot shadow slot (GpuLight.shadow_index).
-    spot_shadow_view_projection: [SPOT_SHADOW_COUNT]alg.Matrix4f32,
-    // Each point shadow slot's six cube faces.
-    point_shadow_face_view_projection: [POINT_SHADOW_COUNT * POINT_SHADOW_FACES]alg.Matrix4f32,
+    // The light views drawn into the shadow atlas this frame (VSShadow).
+    shadow_view_projection: [SHADOW_TILE_VIEWS]alg.Matrix4f32,
 }
 
 #assert(SHADOW_CASCADE_COUNT == 4) // Packed as float4 rows in scene.hlsl.
@@ -381,20 +376,21 @@ Renderer :: struct {
     shadow_map: ^d3d12.IResource,
     shadow_dsv_heap: ^d3d12.IDescriptorHeap,
     shadow_pipeline_states: [Draw_Variant]^d3d12.IPipelineState,
-    // Spot light shadows (renderer_shadow.odin): one slice per slot, the
-    // entity each slot went to this frame (-1: unused), and pipelines with a
-    // slope-scaled depth bias.
-    spot_shadow_map: ^d3d12.IResource,
-    spot_shadow_dsv_heap: ^d3d12.IDescriptorHeap,
-    spot_shadow_srv_index: u32,
-    spot_shadow_entities: [SPOT_SHADOW_COUNT]int,
-    spot_shadow_pipeline_states: [Draw_Variant]^d3d12.IPipelineState,
-    // Point light shadows: six slices (cube faces) per slot. They use the
-    // spot pipelines (same bias).
-    point_shadow_map: ^d3d12.IResource,
-    point_shadow_dsv_heap: ^d3d12.IDescriptorHeap,
-    point_shadow_srv_index: u32,
-    point_shadow_entities: [POINT_SHADOW_COUNT]int,
+    // Spot and point light shadows (renderer_shadow.odin): the atlas, the
+    // lights holding tiles and which cells are taken, this frame's views
+    // drawn into it, the drawn lights' tiles per frame slot for the shaders,
+    // and pipelines with a slope-scaled depth bias.
+    shadow_atlas: ^d3d12.IResource,
+    shadow_atlas_dsv_heap: ^d3d12.IDescriptorHeap,
+    shadow_atlas_srv_index: u32,
+    shadow_lights: [MAX_SHADOW_LIGHTS]ShadowLight,
+    shadow_light_count: int,
+    shadow_atlas_cells: [SHADOW_ATLAS_CELLS][SHADOW_ATLAS_CELLS]bool,
+    shadow_tile_views: [SHADOW_TILE_VIEWS]ShadowTileView,
+    shadow_tile_view_count: int,
+    shadow_tile_buffer: ^d3d12.IResource,
+    shadow_tile_mapped: [^]GpuShadowTile,
+    light_shadow_pipeline_states: [Draw_Variant]^d3d12.IPipelineState,
 
     hdr_texture: ^d3d12.IResource,
     hdr_rtv_heap: ^d3d12.IDescriptorHeap,
@@ -783,7 +779,7 @@ renderer_pipeline_slots :: proc() -> []^^d3d12.IPipelineState {
     slots := make([dynamic]^^d3d12.IPipelineState, context.temp_allocator)
     for variant in Draw_Variant {
         append(&slots,
-            &r.shadow_pipeline_states[variant], &r.spot_shadow_pipeline_states[variant],
+            &r.shadow_pipeline_states[variant], &r.light_shadow_pipeline_states[variant],
             &r.depth_prepass_pipeline_states[variant], &r.hdr_pipeline_states[variant],
         )
     }
@@ -900,8 +896,6 @@ renderer_init :: proc() {
 
     r.post_exposure = 1.0
     r.auto_exposure = DEFAULT_AUTO_EXPOSURE
-    for &entity in r.spot_shadow_entities do entity = -1
-    for &entity in r.point_shadow_entities do entity = -1
     r.post_threshold = 1.0
     r.post_strength = 0.6
     r.post_tone_mapper = .ACES
@@ -1050,8 +1044,8 @@ Root_Slot :: enum u32 {
     Texture_T8,          // t8: ambient occlusion, or TAA motion vectors
     Depth,               // t9: scene depth
     Exposure_Buffer,     // t16: root SRV, the automatic exposure (auto_exposure.hlsl)
-    Spot_Shadows,        // t5: spot light shadow maps (one slice per slot)
-    Point_Shadows,       // t6: point light shadow cube maps (one cube per slot)
+    Shadow_Atlas,        // t5: the spot and point light shadow atlas
+    Shadow_Tiles,        // t6: root SRV, this frame's atlas tiles of the drawn lights (GpuShadowTile)
     Surface,             // t7: view-space normal and roughness from the prepass
     Reflections,         // t17: screen-space reflections for the lit pass
     Lights,              // t18: root SRV, this frame's visible point and spot lights
@@ -1090,8 +1084,8 @@ ROOT_LAYOUT := [Root_Slot]Root_Param{
     .Texture_T8          = {.Table, 8, 1, .PIXEL},
     .Depth               = {.Table, 9, 1, .PIXEL},
     .Exposure_Buffer     = {.SRV, 16, 0, .PIXEL},
-    .Spot_Shadows        = {.Table, 5, 1, .PIXEL},
-    .Point_Shadows       = {.Table, 6, 1, .PIXEL},
+    .Shadow_Atlas        = {.Table, 5, 1, .PIXEL},
+    .Shadow_Tiles        = {.SRV, 6, 0, .PIXEL},
     .Surface             = {.Table, 7, 1, .PIXEL},
     .Reflections         = {.Table, 17, 1, .PIXEL},
     .Lights              = {.SRV, 18, 0, .PIXEL},
@@ -1406,12 +1400,12 @@ renderer_create_pipelines :: proc() {
         shadow_desc.RTVFormats[0] = .UNKNOWN
         renderer_create_pso(&shadow_desc, &r.shadow_pipeline_states[variant])
 
-        // Spot shadows are perspective, where a fixed receiver bias does not
-        // fit every distance; a rasterizer slope-scaled bias does the bulk.
-        spot_shadow_desc := shadow_desc
-        spot_shadow_desc.RasterizerState.DepthBias = SPOT_SHADOW_DEPTH_BIAS
-        spot_shadow_desc.RasterizerState.SlopeScaledDepthBias = SPOT_SHADOW_SLOPE_BIAS
-        renderer_create_pso(&spot_shadow_desc, &r.spot_shadow_pipeline_states[variant])
+        // Spot and point shadows are perspective, where a fixed receiver bias
+        // does not fit every distance; a rasterizer slope-scaled bias does the bulk.
+        light_shadow_desc := shadow_desc
+        light_shadow_desc.RasterizerState.DepthBias = SPOT_SHADOW_DEPTH_BIAS
+        light_shadow_desc.RasterizerState.SlopeScaledDepthBias = SPOT_SHADOW_SLOPE_BIAS
+        renderer_create_pso(&light_shadow_desc, &r.light_shadow_pipeline_states[variant])
 
         // Depth prepass, which also writes per-pixel motion for TAA and the
         // surface buffer for SSR. VSDepth computes positions with the same
@@ -1820,8 +1814,7 @@ renderer_load_textures :: proc(){
     r.srv_descriptor_size = r.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV)
 
     r.shadow_srv_index = renderer_alloc_srv()
-    r.spot_shadow_srv_index = renderer_alloc_srv()
-    r.point_shadow_srv_index = renderer_alloc_srv()
+    r.shadow_atlas_srv_index = renderer_alloc_srv()
     r.hdr_srv_index = renderer_alloc_srv()
     r.ldr_srv_index = renderer_alloc_srv()
     r.taa_srv_start = renderer_alloc_srv(2)
@@ -2141,10 +2134,9 @@ renderer_destroy :: proc(){
 
     r.shadow_map->Release()
     r.shadow_dsv_heap->Release()
-    r.spot_shadow_map->Release()
-    r.spot_shadow_dsv_heap->Release()
-    r.point_shadow_map->Release()
-    r.point_shadow_dsv_heap->Release()
+    r.shadow_atlas->Release()
+    r.shadow_atlas_dsv_heap->Release()
+    r.shadow_tile_buffer->Release()
 
     r.hdr_texture->Release()
     r.hdr_rtv_heap->Release()

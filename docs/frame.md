@@ -45,7 +45,7 @@ frame never overwrites them while an earlier one still reads them.
 | Pass | What it does | Details |
 | --- | --- | --- |
 | GPU culling | Compute pass testing draws against every view's frustum, filling in the shadow views' calls and the camera's early ones | [below](#gpu-culling) |
-| Shadows | Sun cascades, then spot shadow slots, then point shadow cube faces | [Lighting](lighting.md#shadows) |
+| Shadows | Sun cascades, then the shadow atlas tiles of lights that changed (at most 28 views) | [Lighting](lighting.md#shadows) |
 | Probe capture | On frames that capture a reflection probe: its six faces, their mips, and the prefiltered levels | [Lighting](lighting.md#reflection-probes) |
 | Depth prepass | Depth, motion vectors, and the surface buffer (normal, roughness): the camera's early calls, then the depth pyramid and the late cull, then its late calls | [below](#depth-prepass) |
 | GTAO | Ambient occlusion from depth and the prepass normals, then a depth-aware blur | [Lighting](lighting.md#ambient-occlusion-gtao) |
@@ -156,7 +156,7 @@ Every draw has a world-space bounding box: the mesh's local box under the
 entity's transform, kept as a center and three half axes so rotation does not
 inflate it. A box is tested against the six planes of a view's frustum and
 rejected only if it lies entirely outside one plane. The camera, each sun
-cascade, each spot shadow slot, each point shadow cube face, and each face
+cascade, each light view drawn into the shadow atlas, and each face
 of a reflection probe capture cull separately, so shadow passes draw only
 their own casters.
 
@@ -167,8 +167,9 @@ CPU writes three things per frame:
 
 - **Bounds**: each draw's box. Draws without bounds get huge boxes, so they
   pass every test.
-- **View planes**: the six planes of all 39 views (the camera, the 32
-  shadow views, then the six faces of a probe capture), in `CullConstants`.
+- **View planes**: the six planes of all 39 views (the camera, the 32 shadow
+  views (four cascades and up to 28 atlas views), then the six faces of a
+  probe capture), in `CullConstants`.
   Capture faces get calls, with the camera's opaque draws, only on frames
   that capture a probe, and are left out of the Profiler's counts.
 - **Cull entries**: one per candidate of each view's calls, naming the draw,
@@ -305,7 +306,7 @@ assigns registers:
 | Shadow view | b5 | Root constant: the cascade, spot slot or point face being drawn |
 | Texture T0, T1 | t0, t1 | Main inputs of full-screen passes; t1 is the sun's shadow cascades in the lit pass |
 | Environment, Irradiance, Prefiltered | t2, t3, t4 | Panorama and IBL maps |
-| Spot shadows, Point shadows | t5, t6 | Shadow map arrays |
+| Shadow atlas, Shadow tiles | t5, t6 | Spot and point light shadow atlas; root SRV, the drawn lights' tiles |
 | Surface | t7 | Prepass normal and roughness |
 | Texture T8, Depth | t8, t9 | AO or motion vectors; scene depth |
 | Probes, Probe maps | t10, t11 | Root SRV, this frame's reflection probes; their prefiltered cube map array |
@@ -343,7 +344,7 @@ passes mark their steps:
 
 | Pass | Steps inside |
 | --- | --- |
-| Shadow | `Sun cascade 0`–`3`, then `Spot light slot n` and `Point light slot n` for each slot in use |
+| Shadow | `Sun cascade 0`–`3`, then `Spot light <entity> (<size> px)` or `Point light <entity> (<size> px)` for each light drawn into the atlas this frame |
 | Probe capture | `Face +X` … `Face -Z`, `Capture mips`, `Prefilter` (empty on frames without a capture) |
 | Depth prepass | `Early draws`, the `Occlusion culling` pass (with `Depth pyramid`), `Late draws` |
 | Scene | `Sky`, `Opaque`, `Blended` (when there are blended draws), `Fog` |

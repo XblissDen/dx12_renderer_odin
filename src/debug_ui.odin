@@ -227,10 +227,17 @@ debug_ui_draw_profiler :: proc() {
         ui_separator()
 
         stats := r.culling_stats
-        spot_shadow_count := 0
-        for entity in r.spot_shadow_entities do if entity >= 0 do spot_shadow_count += 1
-        point_shadow_count := 0
-        for entity in r.point_shadow_entities do if entity >= 0 do point_shadow_count += 1
+        // Lights with atlas tiles, and the atlas cells they take.
+        spot_shadow_count, point_shadow_count, atlas_cells := 0, 0, 0
+        for light in r.shadow_lights[:r.shadow_light_count] {
+            if light.point {
+                point_shadow_count += 1
+            } else {
+                spot_shadow_count += 1
+            }
+            cells := int(light.tiles[0].size / SHADOW_ATLAS_CELL)
+            atlas_cells += cells * cells * (POINT_SHADOW_FACES if light.point else 1)
+        }
         // Visible draws and nonempty calls come from the GPU cull pass.
         debug_ui_text(fmt.bprintf(
             text_buffer[:],
@@ -254,10 +261,14 @@ debug_ui_draw_profiler :: proc() {
         ))
         debug_ui_text(fmt.bprintf(
             text_buffer[:],
-            "Shadow views: %d cascades, %d spot, %d point",
-            SHADOW_CASCADE_COUNT,
+            "Shadow atlas: %d spot, %d point lights, %.0f%% full",
             spot_shadow_count,
             point_shadow_count,
+            f32(atlas_cells) * 100 / (SHADOW_ATLAS_CELLS * SHADOW_ATLAS_CELLS),
+        ))
+        debug_ui_text(fmt.bprintf(
+            text_buffer[:], "Shadow views drawn: %d cascades, %d atlas (the rest cached)",
+            SHADOW_CASCADE_COUNT, r.shadow_tile_view_count,
         ))
         debug_ui_text(fmt.bprintf(
             text_buffer[:], "Point and spot lights: %d in view of %d (clustered)",

@@ -113,6 +113,10 @@ Draw :: struct {
     blended: bool,
     bounds: WorldBounds,
     casts_shadow: bool,
+    // What a cutout's shadow depends on besides its placement, for the
+    // shadow atlas's change test.
+    alpha_texture: TextureHandle,
+    alpha_cutoff: f32,
 }
 
 // One draw call: indirect call `command`, drawing instances of `draw`'s
@@ -324,101 +328,11 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     r.previous_sky_view_projection = sky_view_projection
     post.sharpness = r.post_sharpness
 
-    // Spot shadow slots first: the lights below say which slot they use.
-    spot_shadows := renderer_select_spot_shadows(scene, camera_position)
-    spot_shadow_view_projection: [SPOT_SHADOW_COUNT]alg.Matrix4f32
-    spot_shadow_frustums: [SPOT_SHADOW_COUNT]Frustum
-    point_shadows := renderer_select_point_shadows(scene, camera_position)
-    point_shadow_face_view_projection: [POINT_SHADOW_COUNT * POINT_SHADOW_FACES]alg.Matrix4f32
-    point_shadow_frustums: [POINT_SHADOW_COUNT * POINT_SHADOW_FACES]Frustum
-    for shadow, slot in point_shadows {
-        if shadow.entity < 0 do continue
-        for face in 0..<POINT_SHADOW_FACES {
-            index := slot * POINT_SHADOW_FACES + face
-            point_shadow_face_view_projection[index] = shadow.face_view_projection[face]
-            point_shadow_frustums[index] = frustum_from_matrix(shadow.face_view_projection[face])
-        }
-    }
-    for shadow, slot in spot_shadows {
-        if shadow.entity < 0 do continue
-        spot_shadow_view_projection[slot] = shadow.view_projection
-        spot_shadow_frustums[slot] = frustum_from_matrix(shadow.view_projection)
-    }
-
     // A probe captured this frame sees in every direction, so it needs every
     // light, not only those reaching the camera's view.
     renderer_update_probes(scene)
     capturing := r.probes.capture_slot >= 0
 
-    // Point and spot lights whose range reaches the view, straight into this
-    // frame's light buffer (write-combined memory: each written once, whole).
-    frame_lights := renderer_frame_lights()
-    light_count := 0
-    r.scene_light_count = 0
-
-    for i in 0..<scene.entity_count {
-        if !scene.alive[i] || !scene.has_transform[i] {
-            continue
-        }
-        if !scene.has_point_light[i] && !scene.has_spot_light[i] {
-            continue
-        }
-        r.scene_light_count += 1
-
-        light: GpuLight
-        world := scene_world_matrix(scene, i)
-        world_position := alg.Vector3f32{world[0, 3], world[1, 3], world[2, 3]}
-        if scene.has_point_light[i] {
-            point := scene.point_lights[i]
-            light = GpuLight{
-                position = world_position,
-                range = point.range,
-                radiance = point.color * point.intensity,
-                spot_offset = 1,
-                shadow_index = -1,
-            }
-            for shadow, slot in point_shadows {
-                if shadow.entity != i do continue
-                light.shadow_index = i32(slot)
-                light.shadow_texel_scale = POINT_SHADOW_TEXEL_SCALE
-                light.shadow_near = shadow.near
-            }
-        } else {
-            spot := scene.spot_lights[i]
-            // Full brightness inside the inner cone, none outside the outer.
-            cos_inner := math.cos(spot.inner_angle)
-            cos_outer := math.cos(spot.outer_angle)
-            scale := 1 / max(cos_inner - cos_outer, 0.0001)
-            light = GpuLight{
-                position = world_position,
-                range = spot.range,
-                radiance = spot.color * spot.intensity,
-                direction = spot_light_direction(world),
-                spot_scale = scale,
-                spot_offset = -cos_outer * scale,
-                shadow_index = -1,
-            }
-            for shadow, slot in spot_shadows {
-                if shadow.entity != i do continue
-                light.shadow_index = i32(slot)
-                light.shadow_texel_scale = shadow.texel_scale
-            }
-        }
-
-        // The range sphere's box against the camera frustum.
-        range_bounds := WorldBounds{
-            center = light.position,
-            half_axes = {{light.range, 0, 0}, {0, light.range, 0}, {0, 0, light.range}},
-            valid = true,
-        }
-        if r.frustum_culling_enabled && !capturing && !frustum_intersects_bounds(camera_frustum, range_bounds) {
-            continue
-        }
-        assert(light_count < MAX_LIGHTS)
-        frame_lights[light_count] = light
-        light_count += 1
-    }
-    r.visible_light_count = light_count
 
     sun: DirectionalLight
     sun_found := false
@@ -509,6 +423,8 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
                 bounds = bounds_to_world(submesh.bounds, model),
                 // Unlit marker meshes do not cast shadows.
                 casts_shadow = !material.unlit,
+                alpha_texture = material.texture if cutout else 0,
+                alpha_cutoff = alpha_cutoff if cutout else 0,
             }
 
             if draw.casts_shadow {
@@ -545,6 +461,74 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         }
     }
 
+    // Shadow-casting lights get atlas tiles, drawn when they or the casters
+    // around them changed; the lights below point at their tiles.
+    renderer_update_shadow_atlas(scene, data, camera_position, camera_frustum)
+
+    // Point and spot lights whose range reaches the view, straight into this
+    // frame's light buffer (write-combined memory: each written once, whole).
+    frame_lights := renderer_frame_lights()
+    light_count := 0
+    r.scene_light_count = 0
+
+    for i in 0..<scene.entity_count {
+        if !scene.alive[i] || !scene.has_transform[i] {
+            continue
+        }
+        if !scene.has_point_light[i] && !scene.has_spot_light[i] {
+            continue
+        }
+        r.scene_light_count += 1
+
+        light: GpuLight
+        world := scene_world_matrix(scene, i)
+        world_position := alg.Vector3f32{world[0, 3], world[1, 3], world[2, 3]}
+        if scene.has_point_light[i] {
+            point := scene.point_lights[i]
+            light = GpuLight{
+                position = world_position,
+                range = point.range,
+                radiance = point.color * point.intensity,
+                spot_offset = 1,
+                shadow_index = -1,
+            }
+        } else {
+            spot := scene.spot_lights[i]
+            // Full brightness inside the inner cone, none outside the outer.
+            cos_inner := math.cos(spot.inner_angle)
+            cos_outer := math.cos(spot.outer_angle)
+            scale := 1 / max(cos_inner - cos_outer, 0.0001)
+            light = GpuLight{
+                position = world_position,
+                range = spot.range,
+                radiance = spot.color * spot.intensity,
+                direction = spot_light_direction(world),
+                spot_scale = scale,
+                spot_offset = -cos_outer * scale,
+                shadow_index = -1,
+            }
+        }
+
+        if atlas := renderer_shadow_light_of(i, scene.has_point_light[i]); atlas != nil && atlas.gpu_index >= 0 {
+            light.shadow_index = i32(atlas.gpu_index)
+            light.shadow_texel_scale = atlas.texel_scale
+        }
+
+        // The range sphere's box against the camera frustum.
+        range_bounds := WorldBounds{
+            center = light.position,
+            half_axes = {{light.range, 0, 0}, {0, light.range, 0}, {0, 0, light.range}},
+            valid = true,
+        }
+        if r.frustum_culling_enabled && !capturing && !frustum_intersects_bounds(camera_frustum, range_bounds) {
+            continue
+        }
+        assert(light_count < MAX_LIGHTS)
+        frame_lights[light_count] = light
+        light_count += 1
+    }
+    r.visible_light_count = light_count
+
     shadow := renderer_fit_shadow(
         sun.direction,
         camera_position,
@@ -573,6 +557,8 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     }
     fog_ambient *= r.fog.ambient
     cluster_depth_scale, cluster_depth_bias := light_cluster_depth_params(CAMERA_NEAR_CLIP, camera_far_clip(camera))
+    shadow_view_projection: [SHADOW_TILE_VIEWS]alg.Matrix4f32
+    for view, i in r.shadow_tile_views[:r.shadow_tile_view_count] do shadow_view_projection[i] = view.view_projection
     constants := FrameConstants{
         view = view,
         projection = rendered_proj,
@@ -624,8 +610,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         // Last frame's volume maps onto this one only at the same distance.
         fog_history_valid = u32(r.fog_history_ready && r.fog_history_distance == r.fog.distance),
         fog_frame = u32(r.frame_counter),
-        spot_shadow_view_projection = spot_shadow_view_projection,
-        point_shadow_face_view_projection = point_shadow_face_view_projection,
+        shadow_view_projection = shadow_view_projection,
     }
     r.frame_cb_mapped_data[r.frame_slot] = constants
     if capturing do renderer_write_probe_capture_constants(constants, sky^, camera_far_clip(camera))
@@ -666,7 +651,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     data.transparent_batches = renderer_add_view_batches(data, renderer_batch_draws(data, transparent_order, merge = false), 0)
     data.camera_entry_count = data.entry_count
 
-    // Only shadow views with a light this frame get calls.
+    // Only the cascades and this frame's atlas views get calls.
     view_frustums: [CULL_VIEW_COUNT]Frustum
     view_frustums[0] = camera_frustum
     view_active: [SHADOW_VIEW_COUNT]bool
@@ -674,16 +659,9 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         view_frustums[1 + cascade] = cascade_frustums[cascade]
         view_active[cascade] = true
     }
-    for shadow, slot in spot_shadows {
-        view_frustums[1 + SHADOW_CASCADE_COUNT + slot] = spot_shadow_frustums[slot]
-        view_active[SHADOW_CASCADE_COUNT + slot] = shadow.entity >= 0
-    }
-    for shadow, slot in point_shadows {
-        for face in 0..<POINT_SHADOW_FACES {
-            index := slot * POINT_SHADOW_FACES + face
-            view_frustums[1 + POINT_SHADOW_FIRST_VIEW + index] = point_shadow_frustums[index]
-            view_active[POINT_SHADOW_FIRST_VIEW + index] = shadow.entity >= 0
-        }
+    for view, i in r.shadow_tile_views[:r.shadow_tile_view_count] {
+        view_frustums[1 + SHADOW_CASCADE_COUNT + i] = frustum_from_matrix(view.view_projection)
+        view_active[SHADOW_CASCADE_COUNT + i] = true
     }
     caster_layout := renderer_batch_draws(data, casters[:], merge = true)
     for view in 0..<SHADOW_VIEW_COUNT {

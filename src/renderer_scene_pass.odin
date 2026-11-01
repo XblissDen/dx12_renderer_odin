@@ -102,8 +102,8 @@ renderer_render_scene_pass :: proc(draws: []Draw, batches, late_batches, transpa
 
     r.command_list->SetGraphicsRootSignature(r.root_signature)
     renderer_bind_srv(.Texture_T1, r.shadow_srv_index)
-    renderer_bind_srv(.Spot_Shadows, r.spot_shadow_srv_index)
-    renderer_bind_srv(.Point_Shadows, r.point_shadow_srv_index)
+    renderer_bind_srv(.Shadow_Atlas, r.shadow_atlas_srv_index)
+    renderer_bind_buffer_srv(.Shadow_Tiles, renderer_shadow_tile_address())
     renderer_bind_srv(.Irradiance, r.irradiance_srv_index)
     renderer_bind_srv(.Prefiltered, r.prefilter_srv_index)
     // Blurred ambient occlusion (ignored by the shader while disabled).

@@ -165,23 +165,48 @@ shader; cutouts and blended surfaces (where alpha ≥ 0.5) run the alpha test.
 - **Show shadow cascades** tints receivers red, green, blue and yellow by
   cascade.
 
-### Spot lights
+### Spot and point lights: the shadow atlas
 
-The four shadow-casting spot lights nearest the camera each get a 1024²
-perspective map per frame: the outer cone is the field of view and the range
-is the far plane. Casters get a slope-scaled rasterizer depth bias, and
-receivers look up 1.5 texels off their surface (the texel size grows with
-distance from the light). Filtering uses the sun's 5 × 5 tent. The Inspector
-says whether a light got a shadow slot this frame.
+Spot and point light shadows share one 4096² depth atlas
+(`src/renderer_shadow.odin`). Every shadow-casting light whose range reaches
+the view gets square tiles in it, so any number of lights can cast shadows, up
+to what fits (and 64 lights).
 
-### Point lights
+- **Views**: a spot light has one tile, a perspective view whose field of
+  view is the outer cone and whose far plane is the range. A point light has
+  six, its cube faces in D3D's order (+X, −X, +Y, −Y, +Z, −Z). Each face is
+  drawn three texels wider than 90° on every side, so filtering near a face's
+  edge never reads a neighbouring tile.
+- **Sizes**: a tile's size follows how large the light's range looks on
+  screen, as a power of two: 128–1024 texels for spot lights, 64–512 per face
+  for point lights. Nearby lights keep the previous fixed sizes (1024 and
+  512). A light keeps its size until the wanted size is well off (below 35% or
+  above 150% of it), so walking around does not keep resizing tiles.
+- **Placement**: tiles sit on a grid of 64-texel cells, each at the first free
+  aligned square. When a light does not fit but outranks one that holds
+  tiles, every tile is placed again, biggest lights first; lights that still
+  do not fit have no shadow. The Inspector shows a light's tile size, or why
+  it has none.
+- **Caching**: a tile is drawn again only when it has to: when its light
+  moved or changed (its view matrices differ), or when the shadow casters
+  around the light changed. That is a hash of every caster whose bounds reach
+  into the light's range: placement, mesh, pipeline variant, and a cutout's
+  texture and cutoff. A scene that stands still draws no light views at all.
+- **Budget**: at most 28 light views are drawn per frame (as many as the four
+  spot and four point slots used to take). Changed lights are taken in order of
+  size on screen times frames waited, so every light gets its turn even when
+  more change than fit. A light never drawn comes first, and has no shadow
+  until it is drawn.
+- **Lookup**: the tiles' views and atlas rectangles go to the shaders in a
+  buffer (`g_shadow_tiles`), each light pointing at its first. A spot light's
+  receiver goes through its tile's view. A point light's receiver picks the
+  face by the direction's dominant axis, then does the same with that face's
+  tile. Both look up 1.5 texels off the surface (the texel size grows with
+  distance from the light) and filter with the sun's 5 × 5 tent, kept inside the
+  tile. Casters get a slope-scaled rasterizer depth bias.
 
-The four shadow-casting point lights nearest the camera each get a cube map of
-six 512² faces: 90° views in D3D's cube layout out to the range, sharing the
-spot lights' bias pipelines. The shader picks the face by direction and turns
-the receiver's distance along the dominant axis into that face's depth. A 3 × 3
-tent of filtered comparisons, one texel apart across the direction, softens
-the edges. Each shadowed point light draws its casters six times per frame.
+The Profiler shows how many spot and point lights hold tiles, how full the
+atlas is, and how many light views were drawn this frame.
 
 ## Image-based lighting and the sky
 

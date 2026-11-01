@@ -9,11 +9,9 @@
 // Each cell: its light count, then up to this many light indices.
 #define MAX_LIGHTS_PER_CLUSTER 127
 #define LIGHT_CLUSTER_STRIDE (MAX_LIGHTS_PER_CLUSTER + 1)
-// Shadow slots; must match renderer_shadow.odin.
+// Shadow views; must match renderer_shadow.odin.
 #define SHADOW_CASCADE_COUNT 4
-#define SPOT_SHADOW_COUNT 4
-#define POINT_SHADOW_COUNT 4
-#define POINT_SHADOW_FACES 6
+#define SHADOW_TILE_VIEWS 28
 // Receivers look up a shadow map this many texels off their surface, along
 // the geometric normal, which removes most acne without a large depth bias:
 // sun cascades, and spot and point lights (texels at the receiver's
@@ -34,10 +32,10 @@ struct GpuLight
     float  spot_offset;
     float3 direction;
     float  spot_scale;
-    int    shadow_index;       // Spot shadow slot or point shadow cube, or -1.
+    // First tile in g_shadow_tiles (a point light's six faces follow), or -1.
+    int    shadow_index;
     float  shadow_texel_scale; // Texel size per unit of distance along the axis.
-    float  shadow_near;        // Point lights: the cube faces' near plane.
-    float  _light_pad;
+    float2 _light_pad;
 };
 
 // Per-draw data (renderer.odin's ObjectData): one per submesh of each entity,
@@ -181,8 +179,8 @@ cbuffer FrameConstants : register(b4)
     uint   fog_frame;
     float3 _fog_pad;
 
-    float4x4 spot_shadow_view_projection[SPOT_SHADOW_COUNT];
-    float4x4 point_shadow_face_view_projection[POINT_SHADOW_COUNT * POINT_SHADOW_FACES];
+    // The light views drawn into the shadow atlas this frame (VSShadow).
+    float4x4 shadow_view_projection[SHADOW_TILE_VIEWS];
 };
 
 // The visible point and spot lights (light_count of them), and each light
@@ -261,8 +259,17 @@ SamplerState g_sampler : register(s0);
 SamplerState g_material_sampler : register(s2);
 SamplerState g_environment_sampler : register(s3);
 Texture2DArray<float> g_shadow_map : register(t1);
-Texture2DArray<float> g_spot_shadow_map : register(t5); // One slice per spot shadow slot.
-TextureCubeArray<float> g_point_shadow_map : register(t6); // One cube per point shadow slot.
+// Spot and point light shadows (renderer_shadow.odin): one depth atlas, and
+// each drawn light's tiles in it: the view a tile was drawn with, and where
+// the tile is in atlas UVs (offset, size).
+Texture2DArray<float> g_shadow_atlas : register(t5);
+struct GpuShadowTile
+{
+    float4x4 view_projection;
+    float4 rect;
+    float4 _pad;
+};
+StructuredBuffer<GpuShadowTile> g_shadow_tiles : register(t6);
 SamplerComparisonState g_shadow_sampler : register(s1);
 Texture2D<float4> g_irradiance : register(t3);
 Texture2D<float4> g_prefiltered_environment : register(t4);
@@ -403,22 +410,11 @@ ShadowInput VSShadow(VSInput input)
     ShadowInput output;
     output.draw = LoadInstanceObject(input.instance);
     float4 world_pos = mul(float4(input.position, 1.0f), g_object.model);
-    // Views: the sun's cascades, the spot shadow slots, then the point
-    // shadow cube faces.
+    // Views: the sun's cascades, then this frame's shadow atlas views.
     uint view = shadow_view_index;
-    float4x4 light_view_projection;
-    if (view < SHADOW_CASCADE_COUNT)
-    {
-        light_view_projection = cascade_view_projection[view];
-    }
-    else if (view < SHADOW_CASCADE_COUNT + SPOT_SHADOW_COUNT)
-    {
-        light_view_projection = spot_shadow_view_projection[view - SHADOW_CASCADE_COUNT];
-    }
-    else
-    {
-        light_view_projection = point_shadow_face_view_projection[view - SHADOW_CASCADE_COUNT - SPOT_SHADOW_COUNT];
-    }
+    float4x4 light_view_projection = view < SHADOW_CASCADE_COUNT
+        ? cascade_view_projection[view]
+        : shadow_view_projection[view - SHADOW_CASCADE_COUNT];
     output.position = mul(world_pos, light_view_projection);
     output.texcoord = input.texcoord;
     return output;
@@ -476,10 +472,40 @@ float SampleShadowTent5x5(Texture2DArray<float> shadow_map, float2 uv, float dep
     return sum / 144.0f;
 }
 
+// How much of a light reaches `world_pos` according to one atlas tile: the
+// point goes through the view the tile was drawn with, and the 5x5 tent
+// filter is kept inside the tile. 1 outside the tile's view. Single exit:
+// see CascadeVisibility.
+float AtlasTileVisibility(uint tile_index, float3 world_pos)
+{
+    GpuShadowTile tile = g_shadow_tiles[tile_index];
+    float visibility = 1.0f;
+    float4 clip = mul(float4(world_pos, 1.0f), tile.view_projection);
+    if (clip.w > 0.0f)
+    {
+        float3 ndc = clip.xyz / clip.w;
+        float2 uv = float2(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f);
+        if (all(uv >= 0.0f) && all(uv <= 1.0f) && ndc.z <= 1.0f)
+        {
+            uint width, height, elements;
+            g_shadow_atlas.GetDimensions(width, height, elements);
+            // The tent reaches 2.5 texels from its center.
+            float2 margin = 2.5f / float2(width, height);
+            float2 atlas_uv = clamp(
+                tile.rect.xy + uv * tile.rect.zw,
+                tile.rect.xy + margin, tile.rect.xy + tile.rect.zw - margin
+            );
+            visibility = SampleShadowTent5x5(g_shadow_atlas, atlas_uv, ndc.z, 0u);
+        }
+    }
+    return visibility;
+}
+
 // How much of a spot light reaches this point past shadow casters; 1 when the
-// light has no shadow slot. The lookup starts slightly off the surface along
+// light has no drawn shadow. The lookup starts slightly off the surface along
 // its normal, by texels at this distance from the light; the casters' own
-// slope-scaled bias does the rest. Single exit: see CascadeVisibility.
+// slope-scaled bias does the rest. Outside the tile is outside the cone,
+// which is dark anyway. Single exit: see CascadeVisibility.
 float SpotShadowVisibility(GpuLight light, float3 world_pos, float3 geometric_normal)
 {
     float visibility = 1.0f;
@@ -488,27 +514,17 @@ float SpotShadowVisibility(GpuLight light, float3 world_pos, float3 geometric_no
         float axis_distance = max(dot(world_pos - light.position, light.direction), 0.0f);
         float3 offset_pos = world_pos + geometric_normal *
             (SPOT_SHADOW_NORMAL_OFFSET_TEXELS * light.shadow_texel_scale * axis_distance);
-        float4 clip = mul(float4(offset_pos, 1.0f), spot_shadow_view_projection[light.shadow_index]);
-        if (clip.w > 0.0f)
-        {
-            float3 ndc = clip.xyz / clip.w;
-            float2 uv = float2(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f);
-            // Outside the map is outside the cone, which is dark anyway.
-            if (all(uv >= 0.0f) && all(uv <= 1.0f) && ndc.z <= 1.0f)
-            {
-                visibility = SampleShadowTent5x5(g_spot_shadow_map, uv, ndc.z, uint(light.shadow_index));
-            }
-        }
+        visibility = AtlasTileVisibility(uint(light.shadow_index), offset_pos);
     }
     return visibility;
 }
 
 // How much of a point light reaches this point past shadow casters; 1 when
-// the light has no shadow slot. The cube face is picked by direction (the
-// faces follow D3D's cube layout), and the receiver's depth is put into that
-// face's projection: its distance along the dominant axis. A 3x3 tent of
-// filtered comparisons, one texel apart across the direction, softens edges.
-// Single exit: see CascadeVisibility.
+// the light has no drawn shadow. The cube face is picked by the direction's
+// dominant axis (faces in D3D's order: +X, -X, +Y, -Y, +Z, -Z), and that
+// face's tile is read like a spot light's. Each face was drawn a few texels
+// wider than 90 degrees, so the filter near its edge stays on it. Single
+// exit: see CascadeVisibility.
 float PointShadowVisibility(GpuLight light, float3 world_pos, float3 geometric_normal)
 {
     float visibility = 1.0f;
@@ -518,38 +534,14 @@ float PointShadowVisibility(GpuLight light, float3 world_pos, float3 geometric_n
         float axis_distance = max(max(abs(to_point.x), abs(to_point.y)), abs(to_point.z));
         float3 direction = to_point + geometric_normal *
             (SPOT_SHADOW_NORMAL_OFFSET_TEXELS * light.shadow_texel_scale * axis_distance);
-        float face_depth = max(max(abs(direction.x), abs(direction.y)), abs(direction.z));
-
-        // perspective_lh's depth: far / (far - near) - near * far / ((far - near) * z).
-        float near = light.shadow_near;
-        float far = light.range;
-        float depth = (far - near * far / max(face_depth, near)) / (far - near);
-
-        float3 axis = normalize(direction);
-        float3 helper = abs(axis.y) < 0.99f ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
-        float3 tangent = normalize(cross(helper, axis));
-        float3 bitangent = cross(axis, tangent);
-        float texel = light.shadow_texel_scale * face_depth;
-
-        float sum = 0.0f;
-        [unroll]
-        for (int y = -1; y <= 1; ++y)
-        {
-            [unroll]
-            for (int x = -1; x <= 1; ++x)
-            {
-                float weight = float((2 - abs(x)) * (2 - abs(y)));
-                float3 tap = direction + (tangent * float(x) + bitangent * float(y)) * texel;
-                sum += weight * g_point_shadow_map.SampleCmpLevelZero(
-                    g_shadow_sampler, float4(tap, float(light.shadow_index)), depth
-                );
-            }
-        }
-        visibility = sum / 16.0f;
+        float3 extent = abs(direction);
+        uint face = extent.x >= extent.y && extent.x >= extent.z ? (direction.x < 0.0f ? 1u : 0u)
+                  : extent.y >= extent.z ? (direction.y < 0.0f ? 3u : 2u)
+                  : (direction.z < 0.0f ? 5u : 4u);
+        visibility = AtlasTileVisibility(uint(light.shadow_index) + face, light.position + direction);
     }
     return visibility;
 }
-
 // Sun visibility from one cascade; 1 outside its map.
 float CascadeVisibility(uint cascade, float3 world_pos, float3 geometric_normal, float tan_angle)
 {

@@ -37,8 +37,9 @@ so text stays sharp.
   light clusters, fog, and the frustum and occlusion culling switches. **Show ImGui demo** opens
   ImGui's own demo window.
 - **Profiler**: frame rate and frame time, the camera's and shadow views'
-  draws and calls after culling (with how many were occluded), the point and
-  spot lights in view, a warning when a frame had more draws than fit, and
+  draws and calls after culling (with how many were occluded), the shadow
+  atlas (lights holding tiles, how full it is, light views drawn this frame),
+  the point and spot lights in view, a warning when a frame had more draws than fit, and
   the [GPU timings](frame.md#gpu-timings) of every pass.
 - **Scene**: add models (a glTF model with several nodes as its node tree,
   see [Hierarchy](hierarchy.md#gltf-node-trees)), lights and reflection
@@ -286,8 +287,9 @@ shade and cast shadows.
   horizontally at **Orbit radius**, and the center's y is the orbit's height.
   Turning orbit on sets the center so the light stays where it is. A
   duplicated orbiting light starts 45° further along.
-- **Cast shadows**: shadow slots go to the shadow-casting lights nearest the
-  camera each frame; the Inspector says whether this light got one.
+- **Cast shadows**: the light gets tiles in the shadow atlas, sized by how
+  large it looks on screen ([Lighting](lighting.md#spot-and-point-lights-the-shadow-atlas)).
+  The Inspector shows the tile size, or why the light has none.
 - A scene can have up to 1024 point and spot lights together. Adding,
   duplicating, or undoing past that is refused with a note. The sun cannot be
   deleted.

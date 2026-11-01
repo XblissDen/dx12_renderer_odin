@@ -43,8 +43,8 @@ PointLight :: struct{
     // Distance at which the light has faded out completely. Zero in scenes
     // saved before ranges existed; loading derives one (light_default_range).
     range: f32,
-    // Up to POINT_SHADOW_COUNT of these get a cube shadow map each frame: the
-    // nearest to the camera.
+    // Shadows come from the shadow atlas: a tile per cube face, sized by how
+    // large the light looks on screen.
     cast_shadows: bool,
 }
 
@@ -72,8 +72,8 @@ SpotLight :: struct {
     // Half-angles of the cone in radians: full brightness inside the inner
     // angle, fading to none at the outer one.
     inner_angle, outer_angle: f32,
-    // Up to SPOT_SHADOW_COUNT of these get a shadow each frame: the nearest
-    // to the camera.
+    // Shadows come from a tile of the shadow atlas, sized by how large the
+    // light looks on screen.
     cast_shadows: bool,
 }
 

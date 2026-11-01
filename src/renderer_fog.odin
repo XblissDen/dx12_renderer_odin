@@ -73,8 +73,8 @@ Fog_Root_Slot :: enum u32 {
     Lights,          // t18: root SRV
     Cluster_Lights,  // t19: root SRV
     Cascades,        // t1
-    Spot_Shadows,    // t5
-    Point_Shadows,   // t6
+    Shadow_Atlas,    // t5
+    Shadow_Tiles,    // t6: root SRV
     Input,           // t0: the volume read
     Output,          // u0: the volume written
 }
@@ -88,8 +88,8 @@ renderer_create_fog_root_signature :: proc() {
         .Lights = {},
         .Cluster_Lights = {},
         .Cascades = {RangeType = .SRV, NumDescriptors = 1, BaseShaderRegister = 1},
-        .Spot_Shadows = {RangeType = .SRV, NumDescriptors = 1, BaseShaderRegister = 5},
-        .Point_Shadows = {RangeType = .SRV, NumDescriptors = 1, BaseShaderRegister = 6},
+        .Shadow_Atlas = {RangeType = .SRV, NumDescriptors = 1, BaseShaderRegister = 5},
+        .Shadow_Tiles = {},
         .Input = {RangeType = .SRV, NumDescriptors = 1, BaseShaderRegister = 0},
         .Output = {RangeType = .UAV, NumDescriptors = 1, BaseShaderRegister = 0},
     }
@@ -104,6 +104,8 @@ renderer_create_fog_root_signature :: proc() {
         params[slot].ParameterType = .DESCRIPTOR_TABLE
         params[slot].DescriptorTable = {NumDescriptorRanges = 1, pDescriptorRanges = &table_ranges[slot]}
     }
+    params[.Shadow_Tiles].ParameterType = .SRV
+    params[.Shadow_Tiles].Descriptor = {ShaderRegister = 6}
 
     // The same registers and settings as the main root signature's.
     samplers := [2]d3d12.STATIC_SAMPLER_DESC{
@@ -229,8 +231,8 @@ renderer_render_fog :: proc() {
     r.command_list->SetComputeRootShaderResourceView(u32(Fog_Root_Slot.Lights), renderer_light_buffer_address())
     r.command_list->SetComputeRootShaderResourceView(u32(Fog_Root_Slot.Cluster_Lights), r.cluster_buffer->GetGPUVirtualAddress())
     r.command_list->SetComputeRootDescriptorTable(u32(Fog_Root_Slot.Cascades), renderer_srv_gpu(r.shadow_srv_index))
-    r.command_list->SetComputeRootDescriptorTable(u32(Fog_Root_Slot.Spot_Shadows), renderer_srv_gpu(r.spot_shadow_srv_index))
-    r.command_list->SetComputeRootDescriptorTable(u32(Fog_Root_Slot.Point_Shadows), renderer_srv_gpu(r.point_shadow_srv_index))
+    r.command_list->SetComputeRootDescriptorTable(u32(Fog_Root_Slot.Shadow_Atlas), renderer_srv_gpu(r.shadow_atlas_srv_index))
+    r.command_list->SetComputeRootShaderResourceView(u32(Fog_Root_Slot.Shadow_Tiles), renderer_shadow_tile_address())
 
     // Each cell's light, blended with the history in the other volume.
     r.command_list->SetComputeRootDescriptorTable(u32(Fog_Root_Slot.Input), renderer_srv_gpu(r.fog_srv_start + u32(read)))

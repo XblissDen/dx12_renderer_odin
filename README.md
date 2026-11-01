@@ -9,8 +9,8 @@ written in Odin on DirectX 12, with a Dear ImGui interface.
   lights shaded through clustered lighting; image-based lighting from HDR
   panoramas, with the panorama's sun extracted as a shadowed light; and
   box-projected reflection probes captured from the scene.
-- **Shadows**: four cascaded sun shadow maps, plus shadow maps for the four
-  nearest spot lights and cube maps for the four nearest point lights.
+- **Shadows**: four cascaded sun shadow maps, and a cached shadow atlas for up
+  to 64 spot and point lights, each sized by how large it looks on screen.
 - **Screen-space and volumetric effects**: ground-truth ambient occlusion (GTAO),
   reflections (SSR), and volumetric fog with light shafts.
 - **Post-processing**: TAA with sharpening or FXAA, auto exposure, bloom, and
