@@ -52,6 +52,7 @@ GPU_Pass :: enum u32{
     Fog,
     Culling,
     Occlusion,
+    Probe_Capture,
 }
 
 // As the Profiler panel and GPU captures name the passes.
@@ -60,7 +61,7 @@ GPU_PASS_NAMES := [GPU_Pass]string{
     .Bloom_Downsample = "Bloom downsample", .Bloom_Upsample = "Bloom upsample", .Post_Process = "Post + UI",
     .Depth_Prepass = "Depth prepass", .SSAO = "SSAO + blur", .FXAA = "FXAA / sharpen", .TAA = "TAA resolve",
     .Auto_Exposure = "Auto exposure", .SSR = "SSR", .Light_Clusters = "Light clusters", .Fog = "Volumetric fog",
-    .Culling = "GPU culling", .Occlusion = "Occlusion culling",
+    .Culling = "GPU culling", .Occlusion = "Occlusion culling", .Probe_Capture = "Probe capture",
 }
 
 Vertex :: struct {
@@ -178,7 +179,14 @@ FrameConstants :: struct #align(256) {
     cluster_depth_bias: f32,
     // Nonzero shows each pixel's cluster light count instead of lighting.
     light_show_clusters: u32,
-    _cluster_pad: [3]f32,
+    // Nonzero while drawing a reflection probe's capture: shading uses every
+    // light in the buffer (the clusters are the camera's) and the sun's
+    // cascades by where the point falls, not by view depth.
+    capture_view: u32,
+    // Reflection probes in the probe buffer, and whether they also replace
+    // the sky's diffuse light.
+    probe_count: u32,
+    probe_diffuse: u32,
 
     // Volumetric fog (renderer_fog.odin). Density is extinction per unit at
     // or below fog_height, falling off exponentially above it.
@@ -291,9 +299,14 @@ SkyConstants :: struct #align(256) {
 
 #assert(size_of(SkyConstants) == 256)
 
+// For environment_prefilter.hlsl: the panorama's prefiltered levels, and the
+// reflection probes' downsample and prefilter draws (renderer_probes.odin).
 PrefilterConstants :: struct #align(256) {
     roughness: f32,
-    _pad0: [3]f32,
+    // Probes: the cube face being drawn.
+    face: u32,
+    sample_count: u32,
+    _pad0: f32,
 }
 
 Renderer :: struct {
@@ -506,6 +519,9 @@ Renderer :: struct {
     light_show_clusters: bool,
     // Point and spot lights in view this frame, and in the scene (display only).
     visible_light_count, scene_light_count: int,
+
+    // Reflection probes: settings, slots, captures (renderer_probes.odin).
+    probes: Probes,
 
     // Volumetric fog (renderer_fog.odin): the settings, the cell volumes (two
     // written in turn, then the integrated one) with their SRVs and UAVs, and
@@ -777,7 +793,9 @@ renderer_pipeline_slots :: proc() -> []^^d3d12.IPipelineState {
         &r.selection_pipeline_state, &r.selection_outline_pipeline_state,
         &r.debug_line_pipeline_states[0], &r.debug_line_pipeline_states[1],
         &r.exposure_histogram_pipeline, &r.exposure_adapt_pipeline,
+        &r.probes.downsample_pipeline_state, &r.probes.prefilter_pipeline_state,
     )
+    for &pso in r.probes.capture_pipeline_states do append(&slots, &pso)
     return slots[:]
 }
 
@@ -899,6 +917,7 @@ renderer_init :: proc() {
     r.ssr_max_roughness = DEFAULT_SSR_MAX_ROUGHNESS
 
     r.fog = renderer_default_fog_settings()
+    r.probes.enabled = true
 
     r.frustum_culling_enabled = true
     r.occlusion_culling_enabled = true
@@ -1033,6 +1052,8 @@ Root_Slot :: enum u32 {
     Cluster_Lights,      // t19: root SRV, each light cluster's light list
     Objects,             // t20: root SRV, this frame's ObjectData
     Instance_Draws,      // t21: root SRV, this frame's instance lists
+    Probes,              // t10: root SRV, this frame's reflection probes (GpuProbe)
+    Probe_Maps,          // t11: the reflection probes' prefiltered cubes
 }
 
 // SRV: a root shader-resource view of a buffer, bound by GPU address.
@@ -1071,6 +1092,8 @@ ROOT_LAYOUT := [Root_Slot]Root_Param{
     .Cluster_Lights      = {.SRV, 19, 0, .PIXEL},
     .Objects             = {.SRV, 20, 0, .ALL},
     .Instance_Draws      = {.SRV, 21, 0, .VERTEX},
+    .Probes              = {.SRV, 10, 0, .PIXEL},
+    .Probe_Maps          = {.Table, 11, 1, .PIXEL},
 }
 
 // Binds this frame's objects and instance lists, and the bindless textures
@@ -1467,6 +1490,7 @@ renderer_create_pipelines :: proc() {
         renderer_create_fullscreen_pso(bloom, POST, entry, .R16G16B16A16_FLOAT, &r.bloom_pipeline_states[i])
     }
 
+    renderer_create_probe_pipelines(mesh_desc, fullscreen)
     renderer_create_fullscreen_pso(fullscreen, "shaders/sky.hlsl", "PSMain", .R16G16B16A16_FLOAT, &r.sky_pipeline_state)
     renderer_create_fullscreen_pso(fullscreen, "shaders/irradiance.hlsl", "PSMain", .R16G16B16A16_FLOAT, &r.irradiance_pipeline_state)
     renderer_create_fullscreen_pso(fullscreen, "shaders/environment_prefilter.hlsl", "PSMain", .R16G16B16A16_FLOAT, &r.prefilter_pipeline_state)
@@ -1941,6 +1965,8 @@ renderer_render_frame :: proc(scene: ^Scene) {
 
     draws := frame.draws[:frame.draw_count]
     renderer_render_shadow_pass(draws, frame.shadow_batches)
+    // Lit with the shadow maps just drawn, ready for this frame's lit pass.
+    renderer_render_probe_capture(draws, frame.probe_batches)
 
     // Depth first: SSAO and SSR read it, and the lit pass only shades
     // visible pixels. SSR reads last frame's image before the lit pass
@@ -2101,6 +2127,7 @@ renderer_destroy :: proc(){
     renderer_release_ssr_targets()
     renderer_release_light_clusters()
     renderer_release_fog()
+    renderer_release_probes()
     r.ssr_rtv_heap->Release()
     r.selection_root_signature->Release()
     r.selection_mask->Release()

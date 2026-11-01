@@ -46,6 +46,7 @@ frame never overwrites them while an earlier one still reads them.
 | --- | --- | --- |
 | GPU culling | Compute pass testing draws against every view's frustum, filling in the shadow views' calls and the camera's early ones | [below](#gpu-culling) |
 | Shadows | Sun cascades, then spot shadow slots, then point shadow cube faces | [Lighting](lighting.md#shadows) |
+| Probe capture | On frames that capture a reflection probe: its six faces, their mips, and the prefiltered levels | [Lighting](lighting.md#reflection-probes) |
 | Depth prepass | Depth, motion vectors, and the surface buffer (normal, roughness): the camera's early calls, then the depth pyramid and the late cull, then its late calls | [below](#depth-prepass) |
 | SSAO | Ambient occlusion from depth, then a depth-aware blur | [Lighting](lighting.md#ambient-occlusion-ssao) |
 | SSR | Reflections traced through depth, read from last frame's image | [Lighting](lighting.md#screen-space-reflections-ssr) |
@@ -153,8 +154,9 @@ Every draw has a world-space bounding box: the mesh's local box under the
 entity's transform, kept as a center and three half axes so rotation does not
 inflate it. A box is tested against the six planes of a view's frustum and
 rejected only if it lies entirely outside one plane. The camera, each sun
-cascade, each spot shadow slot, and each point shadow cube face cull
-separately, so shadow passes draw only their own casters.
+cascade, each spot shadow slot, each point shadow cube face, and each face
+of a reflection probe capture cull separately, so shadow passes draw only
+their own casters.
 
 The test runs on the GPU, in a compute pass before the shadow pass
 (`renderer_cull_draws`, `shaders/cull.hlsl`), except for what the camera
@@ -163,8 +165,10 @@ CPU writes three things per frame:
 
 - **Bounds**: each draw's box. Draws without bounds get huge boxes, so they
   pass every test.
-- **View planes**: the six planes of all 33 views (the camera, then the 32
-  shadow views), in `CullConstants`.
+- **View planes**: the six planes of all 39 views (the camera, the 32
+  shadow views, then the six faces of a probe capture), in `CullConstants`.
+  Capture faces get calls, with the camera's opaque draws, only on frames
+  that capture a probe, and are left out of the Profiler's counts.
 - **Cull entries**: one per candidate of each view's calls, naming the draw,
   its call, and the view.
 
@@ -302,6 +306,7 @@ assigns registers:
 | Spot shadows, Point shadows | t5, t6 | Shadow map arrays |
 | Surface | t7 | Prepass normal and roughness |
 | Texture T8, Depth | t8, t9 | AO or motion vectors; scene depth |
+| Probes, Probe maps | t10, t11 | Root SRV, this frame's reflection probes; their prefiltered cube map array |
 | Textures | t22 onwards | The whole SRV heap, the bindless texture array |
 | Exposure buffer | t16 | Root SRV, the automatic exposure |
 | Reflections | t17 | SSR result |
@@ -337,6 +342,7 @@ passes mark their steps:
 | Pass | Steps inside |
 | --- | --- |
 | Shadow | `Sun cascade 0`–`3`, then `Spot light slot n` and `Point light slot n` for each slot in use |
+| Probe capture | `Face +X` … `Face -Z`, `Capture mips`, `Prefilter` (empty on frames without a capture) |
 | Depth prepass | `Early draws`, the `Occlusion culling` pass (with `Depth pyramid`), `Late draws` |
 | Scene | `Sky`, `Opaque`, `Blended` (when there are blended draws), `Fog` |
 | Post + UI | `Tone mapping`, the `FXAA / sharpen` pass, `Debug lines`, `Selection outline`, `UI` |

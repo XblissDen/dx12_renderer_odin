@@ -268,6 +268,8 @@ renderer_set_environment :: proc(settings: EnvironmentSettings) -> string {
             r.environment_filtered_without_sun = remove_sun
         }
     }
+    // The probes captured this environment's light.
+    if settings != r.environment_settings do renderer_recapture_probes()
     r.environment_settings = settings
     return ""
 }
@@ -501,8 +503,10 @@ renderer_create_prefiltered_environment :: proc() {
     r.prefilter_cb_mapped_data = ([^]PrefilterConstants)(mapped)
 
     for mip in 0..<PREFILTER_MIP_COUNT {
-        r.prefilter_cb_mapped_data[mip].roughness =
-            f32(mip) / f32(PREFILTER_MIP_COUNT - 1)
+        r.prefilter_cb_mapped_data[mip] = {
+            roughness = f32(mip) / f32(PREFILTER_MIP_COUNT - 1),
+            sample_count = 1024,
+        }
     }
 }
 

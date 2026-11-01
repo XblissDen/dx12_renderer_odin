@@ -10,8 +10,8 @@ SCENE_FILE_PATH :: "scene.json"
 // 7: extra material slots per entity. 8: emission, occlusion, cutouts.
 // 9: blending. 10: auto-exposure. 11: light ranges, spot lights.
 // 12: spot light shadows. 13: point light shadows. 14: orbit centers.
-// 15: TAA sharpening. 16: parents.
-SCENE_FILE_VERSION :: 16
+// 15: TAA sharpening. 16: parents. 17: reflection probes.
+SCENE_FILE_VERSION :: 17
 
 ScenePostSettings :: struct{
     exposure: f32,
@@ -43,6 +43,8 @@ SceneFileEntity :: struct {
     point_light: Maybe(PointLight),
     // Version 11+.
     spot_light: Maybe(SpotLight),
+    // Version 17+.
+    reflection_probe: Maybe(ReflectionProbe),
     directional_light: Maybe(DirectionalLight),
     camera: Maybe(Camera),
     // Version 16+: the parent's position in `entities`; absent for roots
@@ -65,6 +67,14 @@ SceneFile :: struct {
     reflections: Maybe(SceneReflectionSettings),
     // Absent in files saved before volumetric fog; they load with it off.
     fog: Maybe(FogSettings),
+    // Absent in files saved before reflection probes; they load with the
+    // defaults (and have no probes to use them).
+    probes: Maybe(SceneProbeSettings),
+}
+
+SceneProbeSettings :: struct {
+    enabled: bool,
+    diffuse: bool,
 }
 
 SceneAmbientOcclusionSettings :: struct {
@@ -224,6 +234,15 @@ scene_file_validate :: proc(scene: ^Scene) -> string{
             light_count += 1
         }
 
+        if scene.has_reflection_probe[i] {
+            if !scene.has_transform[i] {
+                return "Reflection probe needs a Transform."
+            }
+            if !reflection_probe_valid(scene.reflection_probes[i]) {
+                return "Invalid reflection probe settings."
+            }
+        }
+
         if scene.has_mesh_renderer[i]{
             if !scene.has_transform[i] || !scene.has_material[i]{
                 return "Mesh needs Transform and Material."
@@ -314,6 +333,7 @@ scene_save_to_file :: proc(scene: ^Scene, path: string) -> (ok: bool, message: s
         }
         if scene.has_point_light[i] do entity.point_light = scene.point_lights[i]
         if scene.has_spot_light[i] do entity.spot_light = scene.spot_lights[i]
+        if scene.has_reflection_probe[i] do entity.reflection_probe = scene.reflection_probes[i]
         if scene.has_directional_light[i] do entity.directional_light = scene.directional_lights[i]
         if scene.has_camera[i] do entity.camera = scene.cameras[i]
         append(&entities, entity)
@@ -349,6 +369,10 @@ scene_save_to_file :: proc(scene: ^Scene, path: string) -> (ok: bool, message: s
             max_roughness = g_renderer.ssr_max_roughness,
         },
         fog = g_renderer.fog,
+        probes = SceneProbeSettings{
+            enabled = g_renderer.probes.enabled,
+            diffuse = g_renderer.probes.diffuse,
+        },
     }
 
     data, encode_error := json.marshal(file, json.Marshal_Options{
@@ -450,6 +474,7 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
             if header.version <= 11 do light.cast_shadows = true
             scene_add_spot_light(staged, entity, light)
         }
+        if probe, ok := source.reflection_probe.?; ok do scene_add_reflection_probe(staged, entity, probe)
         if directional_light, ok := source.directional_light.?; ok do scene_add_directional_light(staged, entity, directional_light)
         if camera, ok := source.camera.?; ok do scene_add_camera(staged, entity, camera)
 
@@ -545,6 +570,7 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
         adapt_bright = DEFAULT_AUTO_EXPOSURE.adapt_bright,
     }
     if !auto_exposure_settings_valid(auto_exposure) do return false, "Invalid auto-exposure settings."
+    probes := file.probes.? or_else SceneProbeSettings{enabled = true}
 
     for i in 0..<staged.entity_count{
         if staged.has_directional_light[i]{
@@ -588,6 +614,10 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
     g_renderer.ssr_thickness = reflections.thickness
     g_renderer.ssr_max_roughness = reflections.max_roughness
     g_renderer.fog = fog
+    g_renderer.probes.enabled = probes.enabled
+    g_renderer.probes.diffuse = probes.diffuse
+    // The slots' entities and captures belong to the old scene.
+    renderer_recapture_probes(forget = true)
 
     commited = true
     return true, "Scene loaded."

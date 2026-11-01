@@ -159,7 +159,14 @@ cbuffer FrameConstants : register(b4)
     float  cluster_depth_bias;
     // Nonzero shows each pixel's cluster light count instead of lighting.
     uint   light_show_clusters;
-    float3 _cluster_pad;
+    // Nonzero while drawing a reflection probe's capture: every light in
+    // g_lights applies (the clusters are the camera's), and the sun's cascade
+    // is the first that covers the point.
+    uint   capture_view;
+    // Reflection probes in g_probes; nonzero probe_diffuse lets them replace
+    // the sky's diffuse light too.
+    uint   probe_count;
+    uint   probe_diffuse;
 
     // Volumetric fog (renderer_fog.odin). Density is extinction per unit at
     // or below fog_height, falling off exponentially above it.
@@ -182,6 +189,21 @@ cbuffer FrameConstants : register(b4)
 // cluster's count and light indices, built by CSBuildLightClusters.
 StructuredBuffer<GpuLight> g_lights : register(t18);
 StructuredBuffer<uint> g_cluster_lights : register(t19);
+
+// A reflection probe (renderer_probes.odin). Its box is the unit cube (-0.5
+// to 0.5) in box space; its cube was captured from the box's center.
+struct GpuProbe
+{
+    float4x4 world_to_box;
+    float4x4 box_to_world;
+    float3 size; // World length of the box's edges.
+    float blend_distance;
+    uint slot;   // Its cube in g_probe_maps.
+    uint box_projection;
+    float2 _pad;
+};
+StructuredBuffer<GpuProbe> g_probes : register(t10);
+TextureCubeArray<float4> g_probe_maps : register(t11);
 
 // The first element of the cluster holding this pixel (SV_Position.xy) at
 // this view depth.
@@ -749,6 +771,72 @@ PrepassOutput PSPrepassMasked(VelocityInput input, bool is_front_face : SV_IsFro
 // Lit surface color; `transparent` adds coverage in alpha for blending.
 // Unlit materials are handled by the entry points: an early return here makes
 // FXC report X4000 (see CascadeVisibility).
+// The prefiltered levels of a probe, like the environment's: level =
+// roughness * PROBE_LEVEL_SCALE, the last one standing in for diffuse light.
+#define PROBE_LEVEL_SCALE 4.0f
+
+// Replaces the environment's specular (and, with probe_diffuse, diffuse)
+// light with the probes whose boxes hold the point. Each probe fades out
+// over its blend distance inside its faces. Where boxes overlap the probes
+// are averaged by weight; where their weights add up to less than 1, the
+// environment fills the rest.
+void ApplyProbes(float3 world_pos, float3 R, float3 N, float material_roughness,
+                 inout float3 specular, inout float3 diffuse)
+{
+    float3 specular_sum = 0.0f;
+    float3 diffuse_sum = 0.0f;
+    float weight_sum = 0.0f;
+    for (uint i = 0; i < probe_count; ++i)
+    {
+        GpuProbe probe = g_probes[i];
+        float3 local = mul(float4(world_pos, 1.0f), probe.world_to_box).xyz;
+        // World distance to the nearest face, inside the box.
+        float3 inside = (0.5f - abs(local)) * probe.size;
+        float distance = min(inside.x, min(inside.y, inside.z));
+        if (distance <= 0.0f) continue;
+        float weight = probe.blend_distance > 0.0f ? saturate(distance / probe.blend_distance) : 1.0f;
+
+        float3 direction = R;
+        if (probe.box_projection != 0u)
+        {
+            // Where the reflected ray leaves the box, seen from the box's
+            // center (the capture point).
+            float3 ray = mul(R, (float3x3)probe.world_to_box);
+            float3 safe_ray = abs(ray) < 1e-6f ? 1e-6f : ray;
+            float3 exits = (sign(safe_ray) * 0.5f - local) / safe_ray;
+            float t = min(exits.x, min(exits.y, exits.z));
+            direction = mul(local + ray * t, (float3x3)probe.box_to_world);
+        }
+        specular_sum += weight * g_probe_maps.SampleLevel(
+            g_environment_sampler, float4(direction, probe.slot), material_roughness * PROBE_LEVEL_SCALE
+        ).rgb;
+        diffuse_sum += weight * g_probe_maps.SampleLevel(
+            g_environment_sampler, float4(N, probe.slot), PROBE_LEVEL_SCALE
+        ).rgb;
+        weight_sum += weight;
+    }
+    if (weight_sum <= 0.0f) return;
+    float scale = 1.0f / max(weight_sum, 1.0f);
+    float rest = saturate(1.0f - weight_sum);
+    specular = specular_sum * scale + specular * rest;
+    if (probe_diffuse != 0u) diffuse = diffuse_sum * scale + diffuse * rest;
+}
+
+// In a probe capture, the sun's cascades cover the camera's view, not the
+// probe's: use the first (finest) one whose map holds the point, or none.
+uint CaptureCascade(float3 world_pos)
+{
+    uint cascade = SHADOW_CASCADE_COUNT;
+    [unroll]
+    for (uint c = SHADOW_CASCADE_COUNT; c > 0u; --c)
+    {
+        float4 clip = mul(float4(world_pos, 1.0f), cascade_view_projection[c - 1u]);
+        float3 ndc = clip.xyz / clip.w;
+        if (all(abs(ndc.xy) <= 1.0f) && ndc.z >= 0.0f && ndc.z <= 1.0f) cascade = c - 1u;
+    }
+    return cascade;
+}
+
 float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
 {
     // Albedo SRVs are _SRGB, so the sampler returns filtered linear values.
@@ -792,6 +880,11 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
         prefiltered_color = g_prefiltered_environment.SampleLevel(
             g_environment_sampler, DirectionToUV(reflection), material_roughness * 4.0f
         ).rgb * environment_intensity;
+    }
+    // Inside a probe's box, the light it captured stands in for the sky's.
+    if (probe_count > 0u)
+    {
+        ApplyProbes(input.world_pos, reflect(-V, N), N, material_roughness, prefiltered_color, incoming_diffuse);
     }
     // Where SSR found the reflected surface, it replaces the environment.
     // Like SSAO it is per pixel of the opaque surface, so blended ones skip it.
@@ -861,6 +954,7 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
     {
         if (input.view_depth < cascade_split_depth[c - 1u]) cascade = c - 1u;
     }
+    if (capture_view != 0u) cascade = CaptureCascade(input.world_pos);
 
     float sun_visibility = 1.0f;
     if (cascade < SHADOW_CASCADE_COUNT)
@@ -875,7 +969,7 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
         float cascade_end = cascade_split_depth[cascade];
         float blend_start = cascade_end -
                             (cascade_end - cascade_start) * SHADOW_CASCADE_BLEND_FRACTION;
-        if (cascade + 1u < SHADOW_CASCADE_COUNT && input.view_depth > blend_start)
+        if (capture_view == 0u && cascade + 1u < SHADOW_CASCADE_COUNT && input.view_depth > blend_start)
         {
             float next = CascadeVisibility(
                 cascade + 1u, input.world_pos, geometric_normal, tan_angle
@@ -894,6 +988,8 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
         (view_distance - shadow_fade_start) /
         max(shadow_fade_end - shadow_fade_start, 0.0001f)
     );
+    // A capture's distances are from the probe, not the camera the fade is for.
+    if (capture_view != 0u) shadow_fade = 0.0f;
     sun_visibility = lerp(sun_visibility, 1.0f, shadow_fade);
 
     float3 sun_radiance = sun_color * sun_intensity * sun_visibility;
@@ -903,12 +999,18 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
         sun_radiance
     );
 
-    // Only the lights listed for this pixel's cluster can reach it.
-    uint cluster_base = LightClusterBase(input.position.xy, input.view_depth);
-    uint cluster_light_count = g_cluster_lights[cluster_base];
+    // Only the lights listed for this pixel's cluster can reach it. A
+    // capture has no clusters of its own and tries every light.
+    uint cluster_base = 0u;
+    uint cluster_light_count = light_count;
+    if (capture_view == 0u)
+    {
+        cluster_base = LightClusterBase(input.position.xy, input.view_depth);
+        cluster_light_count = g_cluster_lights[cluster_base];
+    }
     for (uint i = 0; i < cluster_light_count; ++i)
     {
-        GpuLight light = g_lights[g_cluster_lights[cluster_base + 1u + i]];
+        GpuLight light = g_lights[capture_view != 0u ? i : g_cluster_lights[cluster_base + 1u + i]];
         float3 L;
         float attenuation = LightAttenuation(light, light.position - input.world_pos, L);
         // Spot lights have a cone (spot_scale > 0); point lights have none.
@@ -970,6 +1072,16 @@ float4 UnlitColor()
 float4 PSMain(PSInput input, bool is_front_face : SV_IsFrontFace) : SV_TARGET
 {
     g_object = g_objects[input.draw];
+    if (g_object.unlit != 0) return UnlitColor();
+    return ShadeSurface(input, is_front_face, false);
+}
+
+// Reflection probe captures (capture_view is set) shade with PSMain, but
+// have no prepass to hold cutouts' alpha test, so cutouts test it here.
+float4 PSCaptureMasked(PSInput input, bool is_front_face : SV_IsFrontFace) : SV_TARGET
+{
+    g_object = g_objects[input.draw];
+    ClipAlpha(input.texcoord);
     if (g_object.unlit != 0) return UnlitColor();
     return ShadeSurface(input, is_front_face, false);
 }

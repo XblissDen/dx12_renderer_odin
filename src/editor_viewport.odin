@@ -5,13 +5,18 @@ import alg "core:math/linalg"
 import "core:slice"
 
 // Viewport helpers: icons for entities with nothing to draw, which could not
-// be clicked otherwise, and debug lines (light ranges, orbits, mesh bounds).
+// be clicked otherwise, and debug lines (light ranges, orbits, probe boxes,
+// mesh bounds).
 EditorViewport :: struct {
     icons: bool,
     // Every light's range and orbit, not only the selected lights'.
     all_light_ranges: bool,
+    // Every reflection probe's box, not only the selected probes'.
+    all_probe_boxes: bool,
     mesh_bounds: bool,
 }
+
+PROBE_DISPLAY_COLOR :: [3]u8{150, 215, 255}
 g_editor_viewport := EditorViewport{icons = true}
 
 ICON_RADIUS_PIXELS :: f32(10)
@@ -94,7 +99,8 @@ editor_light_display_color :: proc(color: [3]f32, alpha: u8) -> u32 {
 
 // Behind the panels (on ImGui's background list), farthest first so nearer
 // icons cover farther ones. Light icons are a disc in the light's color with
-// rays (a spot light's point along its beam); empty entities get a diamond.
+// rays (a spot light's point along its beam); reflection probes are a shiny
+// ball; empty entities get a diamond.
 editor_draw_icons :: proc(scene: ^Scene) {
     if !g_editor_viewport.icons do return
     view, _, _, view_ok := editor_viewport_view(scene)
@@ -135,6 +141,11 @@ editor_draw_icons :: proc(scene: ^Scene) {
                     ui_draw_line(a.x, a.y, b.x, b.y, color, 1.5)
                 }
             }
+        } else if scene.has_reflection_probe[index] {
+            c := PROBE_DISPLAY_COLOR
+            color := gizmo_color(c.r, c.g, c.b)
+            ui_draw_circle(center.x, center.y, radius * 0.7, color, 1.5)
+            ui_draw_circle(center.x - radius * 0.25, center.y - radius * 0.25, radius * 0.2, color, 0)
         } else {
             color := gizmo_color(225, 225, 230)
             corners := [4][2]f32{{0, -1}, {1, 0}, {0, 1}, {-1, 0}}
@@ -239,8 +250,8 @@ editor_lines_box :: proc(lines: ^[dynamic]DebugLineVertex, bounds: MeshBounds, w
 }
 
 // This frame's debug lines, in world space, for renderer_render_debug_lines:
-// the ranges of selected lights (or of all of them), orbits, and mesh
-// bounds. None while the UI is hidden.
+// the ranges of selected lights (or of all of them), orbits, probe boxes and
+// mesh bounds. None while the UI is hidden.
 editor_debug_lines :: proc(scene: ^Scene) -> []DebugLineVertex {
     lines := make([dynamic]DebugLineVertex, context.temp_allocator)
     camera_index := camera_find_active(scene)
@@ -257,8 +268,13 @@ editor_debug_lines :: proc(scene: ^Scene) -> []DebugLineVertex {
         }
 
         selected := editor_is_selected(Entity(i))
-        if !selected && !g_editor_viewport.all_light_ranges do continue
         alpha := u8(255 if selected else 120)
+        if scene.has_reflection_probe[i] && (selected || g_editor_viewport.all_probe_boxes) {
+            c := PROBE_DISPLAY_COLOR
+            unit_box := MeshBounds{minimum = {-0.5, -0.5, -0.5}, maximum = {0.5, 0.5, 0.5}}
+            editor_lines_box(&lines, unit_box, scene_world_matrix(scene, i), gizmo_color(c.r, c.g, c.b, alpha))
+        }
+        if !selected && !g_editor_viewport.all_light_ranges do continue
 
         if scene.has_point_light[i] {
             light := scene.point_lights[i]
@@ -294,5 +310,6 @@ editor_debug_lines :: proc(scene: ^Scene) -> []DebugLineVertex {
 editor_draw_viewport_controls :: proc() {
     ui_checkbox("Icons for entities without a mesh", &g_editor_viewport.icons)
     ui_checkbox("Ranges of all lights", &g_editor_viewport.all_light_ranges)
+    ui_checkbox("Boxes of all reflection probes", &g_editor_viewport.all_probe_boxes)
     ui_checkbox("Mesh bounds", &g_editor_viewport.mesh_bounds)
 }

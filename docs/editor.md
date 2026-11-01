@@ -5,7 +5,7 @@
 A scene (`src/scene.odin`) is a fixed set of up to 1024 entity slots. Each
 component type is an array indexed by entity, with a matching `has_…` flag:
 transform, mesh renderer (a model handle), material slots, point light, spot
-light, directional light, and camera. An entity is just its index, plus an
+light, reflection probe, directional light, and camera. An entity is just its index, plus an
 `alive` flag and a name. Deleted slots are reused by later entities.
 
 - **Transform**: position, Euler rotation, and per-axis scale (positive on
@@ -17,6 +17,8 @@ light, directional light, and camera. An entity is just its index, plus an
 - **Lights**: point lights have color, intensity, range, shadow casting, and an
   optional orbit; spot lights add the inner and outer cone angles. There is
   exactly one directional light (the sun), and exactly one camera.
+- **Reflection probes** have a blend distance and box projection; their box
+  is the entity's transform ([below](#reflection-probes)).
 
 The default scene, built in code at startup, has three objects on a stone
 ground, the sun, two orbiting point lights, and the camera.
@@ -31,19 +33,20 @@ textures and draws onto the back buffer after tone mapping and anti-aliasing,
 so text stays sharp.
 
 - **Renderer controls**: shader reload status, exposure, bloom, tone mapping,
-  anti-aliasing, the environment, shadows, SSAO, SSR, light clusters, fog,
-  and the frustum and occlusion culling switches. **Show ImGui demo** opens
+  anti-aliasing, the environment, shadows, SSAO, SSR, reflection probes,
+  light clusters, fog, and the frustum and occlusion culling switches. **Show ImGui demo** opens
   ImGui's own demo window.
 - **Profiler**: frame rate and frame time, the camera's and shadow views'
   draws and calls after culling (with how many were occluded), the point and
   spot lights in view, a warning when a frame had more draws than fit, and
   the [GPU timings](frame.md#gpu-timings) of every pass.
 - **Scene**: add models (a glTF model with several nodes as its node tree,
-  see [Hierarchy](hierarchy.md#gltf-node-trees)) and lights, undo and redo,
+  see [Hierarchy](hierarchy.md#gltf-node-trees)), lights and reflection
+  probes, undo and redo,
   duplicate, delete, focus, save and load, and the entity tree (drag a row
   onto another to parent it).
 - **Inspector**: the primary selected entity's parent, transform, material
-  slot, light settings, and the gizmo's options.
+  slot, light or probe settings, and the gizmo's options.
 - **Assets...**: import and remove models and textures ([Assets](assets.md)).
 
 Panel positions and sizes are saved in `imgui.ini` in the working directory
@@ -174,17 +177,19 @@ not always, the smallest one.
 
 ## Viewport icons and debug lines
 
-Three checkboxes in the Scene panel control them (`src/editor_viewport.odin`).
+Four checkboxes in the Scene panel control them (`src/editor_viewport.odin`).
 Neither shows while the UI is hidden (F1).
 
 **Icons for entities without a mesh** (on by default): every placed entity
 that draws nothing gets a 10-pixel icon at its world position. These are
-empty entities, and lights whose marker mesh was removed; the camera gets
-none. The icons make such entities clickable in the viewport.
+empty entities, reflection probes, and lights whose marker mesh was removed;
+the camera gets none. The icons make such entities clickable in the
+viewport.
 
 - A **point light** is a disc in the light's color with eight rays.
 - A **spot light** is the same disc, with three rays fanning along its beam's
   direction on screen.
+- A **reflection probe** is a light blue ball with a highlight.
 - An **empty entity** is a diamond.
 - A selected icon gets a ring, orange for the primary and darker for the
   others.
@@ -204,6 +209,8 @@ in `src/renderer_selection.odin`). They show:
   range, four edges from the light to that circle, and a fainter circle for
   the inner angle. Lines use the light's color at full brightness.
 - **Orbits**: an orbiting point light's circle, in its parent's space.
+- **Probe boxes**, for the selected reflection probes, or for every probe
+  with **Boxes of all reflection probes**, in light blue.
 - **Mesh bounds**, with **Mesh bounds** checked: each drawn mesh's local
   bounding box, placed by its world matrix, which is the box that culling
   uses.
@@ -285,12 +292,34 @@ shade and cast shadows.
   duplicating, or undoing past that is refused with a note. The sun cannot be
   deleted.
 
+## Reflection probes
+
+**Add Reflection Probe** places a probe three units in front of the camera,
+with an 8 × 4 × 8 box. See [Lighting](lighting.md#reflection-probes) for
+how probes capture and shade.
+
+- **Placing**: move the probe to where reflections should be seen from
+  (usually the middle of a room), and scale it so the box matches the room:
+  Scale is the box's size in each axis. Surfaces outside every box keep the
+  environment's reflections.
+- **Blend distance**: how far inside its faces the probe fades in, so
+  neighbouring or nested boxes blend instead of meeting at a seam.
+- **Box projection** (on by default): reflections line up with the room's
+  walls; turn it off for probes in open spaces.
+- **Capturing**: a probe captures when added or moved, and every probe
+  captures after the environment changes or a scene loads. After moving
+  lights or models, use **Capture again** (Inspector) or **Capture all
+  probes again** (Renderer controls). The Inspector shows whether the probe
+  has been captured.
+- **Limits**: up to 16 probes are used. Any more are ignored, and their
+  Inspector says so.
+
 ## Scene files
 
 **Save Scene** and **Load Scene** write and read `scene.json`
 (`src/scene_file.odin`): every live entity with its components, plus the
-renderer settings (post-processing, environment, shadows, SSAO, SSR, fog, auto
-exposure). Assets are referenced by catalog ID.
+renderer settings (post-processing, environment, shadows, SSAO, SSR,
+reflection probes, fog, auto exposure). Assets are referenced by catalog ID.
 
 - **Validation**: a file is checked completely before anything changes. Every
   referenced asset must exist and suit its use (an albedo texture where an
@@ -301,7 +330,7 @@ exposure). Assets are referenced by catalog ID.
   entity slots now hold other entities and the old images show the old scene.
 - **Parents** are saved as positions in the file's entity list, and loading
   rejects cycles ([Hierarchy](hierarchy.md#scene-files)).
-- **Versions**: the format is at version 16. Newer settings are optional
+- **Versions**: the format is at version 17. Newer settings are optional
   sections or fields, and a file without one gets a default. Where a feature
   changed how existing scenes look, the default keeps the old look: Reinhard
   tone mapping, FXAA, no sharpening, auto exposure off, no volumetric fog,

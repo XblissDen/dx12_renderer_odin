@@ -342,7 +342,8 @@ debug_ui_exposure_controls :: proc() -> (changed: bool) {
     return
 }
 
-// Sun shadows, SSAO, SSR, the light cluster view and volumetric fog.
+// Sun shadows, SSAO, SSR, reflection probes, the light cluster view and
+// volumetric fog.
 debug_ui_lighting_controls :: proc() {
     r := &g_renderer
     ui_separator()
@@ -367,6 +368,18 @@ debug_ui_lighting_controls :: proc() {
         ui_slider_float("SSR thickness", &r.ssr_thickness, MIN_SSR_THICKNESS, MAX_SSR_THICKNESS)
         ui_slider_float("SSR max roughness", &r.ssr_max_roughness, MIN_SSR_MAX_ROUGHNESS, MAX_SSR_MAX_ROUGHNESS)
         ui_checkbox("Show reflections only", &r.ssr_show)
+    }
+
+    ui_separator()
+    probes := &r.probes
+    ui_checkbox("Reflection probes", &probes.enabled)
+    if probes.enabled {
+        ui_checkbox("Probes replace the sky's diffuse light", &probes.diffuse)
+        text_buffer: [96]u8
+        debug_ui_text(fmt.bprintf(text_buffer[:], "%d in the scene (up to %d are used)", probes.scene_count, MAX_REFLECTION_PROBES))
+        // Probes capture again on their own only when moved or the
+        // environment changes; not when lights or models do.
+        if ui_button("Capture all probes again") do renderer_recapture_probes()
     }
 
     ui_separator()

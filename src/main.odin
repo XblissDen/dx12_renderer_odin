@@ -27,6 +27,7 @@ main :: proc(){
     renderer_load_textures()
     renderer_create_fog_volumes()
     renderer_create_shadow_map()
+    renderer_create_probes()
     renderer_create_hdr_target()
     renderer_create_bloom_targets()
     renderer_create_ssao_targets()

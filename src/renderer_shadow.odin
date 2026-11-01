@@ -100,6 +100,18 @@ PointShadow :: struct {
     near: f32,
 }
 
+// Each face's view of a cube map rendered from `position` (point shadows,
+// reflection probe captures): look_at_lh with these targets and ups gives
+// D3D's face order and orientation (+X, -X, +Y, -Y, +Z, -Z).
+CUBE_FACE_DIRECTIONS := [6]alg.Vector3f32{{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}}
+CUBE_FACE_UPS := [6]alg.Vector3f32{{0, 1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {0, 1, 0}, {0, 1, 0}}
+
+cube_face_view_projections :: proc(position: alg.Vector3f32, near, far: f32) -> (faces: [6]alg.Matrix4f32) {
+    projection := perspective_lh(math.PI / 2, 1, near, far)
+    for &face, i in faces do face = look_at_lh(position, position + CUBE_FACE_DIRECTIONS[i], CUBE_FACE_UPS[i]) * projection
+    return
+}
+
 // World size of one cube-face texel per unit of distance along the face's
 // axis (90-degree field of view).
 POINT_SHADOW_TEXEL_SCALE :: f32(2.0 / POINT_SHADOW_MAP_SIZE)
@@ -107,9 +119,6 @@ POINT_SHADOW_TEXEL_SCALE :: f32(2.0 / POINT_SHADOW_MAP_SIZE)
 renderer_select_point_shadows :: proc(scene: ^Scene, camera_position: alg.Vector3f32) -> (shadows: [POINT_SHADOW_COUNT]PointShadow) {
     r := &g_renderer
     order := renderer_shadow_light_order(scene, camera_position, spot = false)
-    // look_at_lh with these targets and ups gives each face D3D's cube layout.
-    directions := [POINT_SHADOW_FACES]alg.Vector3f32{{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}}
-    ups := [POINT_SHADOW_FACES]alg.Vector3f32{{0, 1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {0, 1, 0}, {0, 1, 0}}
     for slot in 0..<POINT_SHADOW_COUNT {
         shadows[slot].entity = -1
         if slot < len(order) {
@@ -119,10 +128,7 @@ renderer_select_point_shadows :: proc(scene: ^Scene, camera_position: alg.Vector
             shadow := &shadows[slot]
             shadow.entity = entity
             shadow.near = max(light.range * 0.001, 0.02)
-            projection := perspective_lh(math.PI / 2, 1, shadow.near, light.range)
-            for face in 0..<POINT_SHADOW_FACES {
-                shadow.face_view_projection[face] = look_at_lh(position, position + directions[face], ups[face]) * projection
-            }
+            shadow.face_view_projection = cube_face_view_projections(position, shadow.near, light.range)
         }
         r.point_shadow_entities[slot] = shadows[slot].entity
     }

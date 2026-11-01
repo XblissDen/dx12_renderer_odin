@@ -3,7 +3,7 @@
 All lighting happens in one forward pass (`ShadeSurface` in
 `shaders/scene.hlsl`): each pixel of each surface sums the sun, the point and
 spot lights reaching its cluster, the environment's diffuse and specular
-light, and emission. The result goes to the HDR target in linear units;
+light (or a reflection probe's), and emission. The result goes to the HDR target in linear units;
 exposure and tone mapping come later ([Post-processing](post_processing.md)).
 
 ## Surface shading
@@ -207,6 +207,58 @@ the pixel covers, not from UV derivatives. Derivatives go wrong where the
 panorama's U wraps around and near the poles, both of which would show the
 smallest mip.
 
+## Reflection probes
+
+The environment's light comes from infinitely far away, so indoors it is
+wrong: a floor in a hall reflects the bright sky instead of the walls. A
+**reflection probe** (`src/renderer_probes.odin`) captures the scene from a
+point, and surfaces inside its box use that capture instead of the
+environment. See [Editor](editor.md#reflection-probes) for placing them.
+
+- **Box**: the probe entity's unit cube (−0.5 to 0.5) under its world
+  matrix, so Scale sets its size and Rotation turns it. The capture is taken
+  from the box's center.
+- **Capture**: the lit scene is drawn into the six faces of a 256 × 256 cube
+  map: the sky first, then the opaque surfaces (blended ones are left out)
+  with the lit pass's shader. They get the sun with its shadows, every point
+  and spot light, and the light of probes already captured, so capturing
+  again adds bounces. The capture's draws go through the
+  [GPU culling](frame.md#gpu-culling) as six more views.
+- **What a capture lacks**: SSAO, SSR, fog and the light clusters belong to
+  the camera's view, so a capture does without them and tries every light.
+  The sun's cascades follow the camera too: a captured point uses the finest
+  cascade that covers it and is unshadowed outside all four, so a probe far
+  beyond the shadow distance from the camera can show sunlight where there is
+  shadow. The sky in a capture is the environment as lighting uses it (IBL
+  intensity, or the ambient color), not the visible background.
+- **Filtering**: the capture gets a mip chain (2 × 2 averages, down to
+  1 × 1), then is prefiltered like the environment
+  (`shaders/environment_prefilter.hlsl`) into five levels for roughness 0,
+  0.25 … 1. Each texel takes 128 GGX samples, each reading the mip that
+  matches its footprint. The result goes to the probe's cube in an array of 16
+  cubes (4.2 MB each, 67 MB in all).
+- **When**: one probe per frame: a new probe, one that moved, every probe
+  after the environment changes or a scene loads, and on request (**Capture
+  again** in the Inspector, **Capture all probes again** in Renderer
+  controls). Changing lights, models or the sun does not capture again on its
+  own. A capture takes about 0.5 ms of GPU time in Sponza (the
+  **Probe capture** row in the Profiler).
+
+In the lit pass, each probe whose box holds the point gets a weight that
+rises from 0 at the box's faces to 1 at **Blend distance** inside them. Its
+reflection is read along the reflected ray, or, with **Box projection**,
+where that ray leaves the box as seen from the box's center. That corrects the
+parallax for rooms whose walls are near the box's faces. Overlapping probes
+are averaged by weight, and where the weights add up to less than 1 the
+environment fills the rest. SSR then replaces the result where it finds the
+reflected surface. Blended surfaces use probes too.
+
+**Probes replace the sky's diffuse light** (off by default) also swaps the
+irradiance map for the probe's roughest level read along the normal, which
+is close to the cosine-weighted average of the captured light. Interiors then
+come out much darker, since a capture holds the sky's light after one bounce
+(more with each capture again). It suits scenes with auto exposure.
+
 ## Volumetric fog
 
 Fog that scatters light: haze in the distance, glow around lights, and shafts
@@ -295,8 +347,9 @@ where it can find it (`src/renderer_ssr.odin`, `TraceReflection` in
    ray, on back faces (where the hit surface faces away from the ray), and as
    roughness approaches **SSR max roughness** (fading in from 60% of it).
    The result is stored premultiplied by its confidence.
-5. **Blend**: the lit pass mixes the environment's specular light with the SSR
-   color by the confidence, before the usual BRDF and specular occlusion.
+5. **Blend**: the lit pass mixes the environment's (or the reflection
+   probes') specular light with the SSR color by the confidence, before the
+   usual BRDF and specular occlusion.
 
 With TAA, each pixel's ray is drawn from the GGX lobe with noise that changes
 every frame, and TAA's history averages them into blurred reflections on rough

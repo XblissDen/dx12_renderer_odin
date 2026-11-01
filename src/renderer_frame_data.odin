@@ -34,18 +34,18 @@ CullCounters :: struct {
 MAX_DRAWS :: 4096
 // Instance-list entries per frame: each view lists each draw at most once,
 // and the views are the camera's early, late and blended lists plus every
-// shadow view (the camera's three hold at most two of each draw). The cull
-// entries fit in the same count.
-MAX_INSTANCES :: (SHADOW_VIEW_COUNT + 2) * MAX_DRAWS
+// shadow view and probe capture face (the camera's three hold at most two of
+// each draw). The cull entries fit in the same count.
+MAX_INSTANCES :: (SHADOW_VIEW_COUNT + PROBE_FACES + 2) * MAX_DRAWS
 // Levels of the depth pyramid for occlusion culling: up to 8192 texels.
 HIZ_MAX_MIPS :: 14
 // Indirect draw calls per frame; a view whose calls do not fit is skipped.
 MAX_DRAW_CALLS :: 32768
 
-// Views the cull pass tests against: the camera, then every shadow view.
-// Must match cull.hlsl.
-CULL_VIEW_COUNT :: 1 + SHADOW_VIEW_COUNT
-#assert(CULL_VIEW_COUNT == 33)
+// Views the cull pass tests against: the camera, every shadow view, then the
+// six faces of a reflection probe capture. Must match cull.hlsl.
+CULL_VIEW_COUNT :: 1 + SHADOW_VIEW_COUNT + PROBE_FACES
+#assert(CULL_VIEW_COUNT == 39)
 // The counters' space before the calls in the indirect call buffer.
 CULL_HEADER_SIZE :: 64
 // One frame slot of the indirect call upload buffer: header, then calls.
@@ -94,8 +94,8 @@ CullConstants :: struct #align(256) {
     // commands on.
     late_command_offset: u32,
 }
-#assert(offset_of(CullConstants, view_projection) == 3168)
-#assert(offset_of(CullConstants, late_command_offset) == 3264)
+#assert(offset_of(CullConstants, view_projection) == 3744)
+#assert(offset_of(CullConstants, late_command_offset) == 3840)
 
 // How a draw's material changes its pipelines (one per variant in each mesh
 // pass): cutouts discard pixels in the depth-only passes, and double-sided
@@ -147,6 +147,9 @@ FrameDraws :: struct {
     // instances) for what the depth pyramid shows it now sees as well.
     scene_batches, late_scene_batches, transparent_batches: []DrawBatch,
     shadow_batches: [SHADOW_VIEW_COUNT][]DrawBatch,
+    // The opaque draws of each probe capture face; none unless a probe is
+    // captured this frame.
+    probe_batches: [PROBE_FACES][]DrawBatch,
     // How much of this frame's instance list, cull entries and indirect
     // calls those use.
     instance_count, entry_count, command_count: int,
@@ -342,6 +345,11 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         spot_shadow_frustums[slot] = frustum_from_matrix(shadow.view_projection)
     }
 
+    // A probe captured this frame sees in every direction, so it needs every
+    // light, not only those reaching the camera's view.
+    renderer_update_probes(scene)
+    capturing := r.probes.capture_slot >= 0
+
     // Point and spot lights whose range reaches the view, straight into this
     // frame's light buffer (write-combined memory: each written once, whole).
     frame_lights := renderer_frame_lights()
@@ -403,7 +411,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
             half_axes = {{light.range, 0, 0}, {0, light.range, 0}, {0, 0, light.range}},
             valid = true,
         }
-        if r.frustum_culling_enabled && !frustum_intersects_bounds(camera_frustum, range_bounds) {
+        if r.frustum_culling_enabled && !capturing && !frustum_intersects_bounds(camera_frustum, range_bounds) {
             continue
         }
         assert(light_count < MAX_LIGHTS)
@@ -565,7 +573,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     }
     fog_ambient *= r.fog.ambient
     cluster_depth_scale, cluster_depth_bias := light_cluster_depth_params(CAMERA_NEAR_CLIP, camera_far_clip(camera))
-    r.frame_cb_mapped_data[r.frame_slot] = FrameConstants{
+    constants := FrameConstants{
         view = view,
         projection = rendered_proj,
         view_projection = view_projection,
@@ -604,6 +612,8 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         cluster_depth_scale = cluster_depth_scale,
         cluster_depth_bias = cluster_depth_bias,
         light_show_clusters = u32(r.light_show_clusters),
+        probe_count = u32(r.probes.count),
+        probe_diffuse = u32(r.probes.diffuse),
         fog_albedo = r.fog.color,
         fog_density = r.fog.density,
         fog_ambient = fog_ambient,
@@ -617,6 +627,8 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         spot_shadow_view_projection = spot_shadow_view_projection,
         point_shadow_face_view_projection = point_shadow_face_view_projection,
     }
+    r.frame_cb_mapped_data[r.frame_slot] = constants
+    if capturing do renderer_write_probe_capture_constants(constants, sky^, camera_far_clip(camera))
 
     r.previous_view_projection = view_projection
 
@@ -675,6 +687,15 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     caster_layout := renderer_batch_draws(data, casters[:], merge = true)
     for view in 0..<SHADOW_VIEW_COUNT {
         data.shadow_batches[view] = renderer_add_view_batches(data, caster_layout, u32(1 + view)) if view_active[view] else nil
+    }
+    // A probe capture draws the opaque surfaces, like the camera, in each face.
+    data.probe_batches = {}
+    if capturing {
+        faces := renderer_probe_face_view_projections(camera_far_clip(camera))
+        for face_view_projection, face in faces {
+            view_frustums[PROBE_FIRST_CULL_VIEW + face] = frustum_from_matrix(face_view_projection)
+            data.probe_batches[face] = renderer_add_view_batches(data, opaque_layout, u32(PROBE_FIRST_CULL_VIEW + face))
+        }
     }
 
     cull := &r.cull_constants_mapped[r.frame_slot]

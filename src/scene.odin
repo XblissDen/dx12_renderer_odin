@@ -98,6 +98,23 @@ spot_light_valid :: proc(light: SpotLight) -> bool {
            light.outer_angle > 0 && light.outer_angle <= SPOT_MAX_ANGLE
 }
 
+// Reflections captured from the entity's position, used inside its box: the
+// unit cube (-0.5 to 0.5) placed by the entity's world matrix, so Scale sets
+// the box's size. See renderer_probes.odin.
+ReflectionProbe :: struct {
+    // Over this distance (world units) inside the box's faces, the probe
+    // fades out into whatever lies outside it.
+    blend_distance: f32,
+    // Looks reflections up where the reflected ray leaves the box, rather
+    // than as seen from the capture point: right for rooms whose walls are
+    // near the box's faces.
+    box_projection: bool,
+}
+
+reflection_probe_valid :: proc(probe: ReflectionProbe) -> bool {
+    return probe.blend_distance >= 0 && probe.blend_distance < 1e6
+}
+
 DirectionalLight :: struct{
     direction: alg.Vector3f32,
     color: [3]f32,
@@ -182,6 +199,9 @@ Scene :: struct{
 
     spot_lights: [MAX_ENTITIES]SpotLight,
     has_spot_light: [MAX_ENTITIES]bool,
+
+    reflection_probes: [MAX_ENTITIES]ReflectionProbe,
+    has_reflection_probe: [MAX_ENTITIES]bool,
 
     cameras: [MAX_ENTITIES]Camera,
     has_camera: [MAX_ENTITIES]bool,
@@ -312,6 +332,9 @@ scene_clear_entity_slot :: proc(scene: ^Scene, index: int) {
     scene.spot_lights[index] = {}
     scene.has_spot_light[index] = false
 
+    scene.reflection_probes[index] = {}
+    scene.has_reflection_probe[index] = false
+
     scene.directional_lights[index] = {}
     scene.has_directional_light[index] = false
 
@@ -362,6 +385,12 @@ scene_add_spot_light :: proc(scene: ^Scene, entity: Entity, light: SpotLight) {
     index := int(entity)
     scene.spot_lights[index] = light
     scene.has_spot_light[index] = true
+}
+
+scene_add_reflection_probe :: proc(scene: ^Scene, entity: Entity, probe: ReflectionProbe) {
+    index := int(entity)
+    scene.reflection_probes[index] = probe
+    scene.has_reflection_probe[index] = true
 }
 
 // Point and spot lights, which share the renderer's MAX_LIGHTS.

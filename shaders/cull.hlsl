@@ -15,8 +15,10 @@
 // Anything visible is drawn in one phase or the other: the early depth only
 // holds real surfaces, so it never hides something that should show.
 
-// Must match renderer_frame_data.odin: the camera, then every shadow view.
-#define CULL_VIEW_COUNT 33
+// Must match renderer_frame_data.odin: the camera, every shadow view, then
+// the six faces of a reflection probe capture (from PROBE_FIRST_CULL_VIEW).
+#define CULL_VIEW_COUNT 39
+#define PROBE_FIRST_CULL_VIEW 33
 
 // g_commands: counters for the panel, padding to CULL_HEADER_SIZE, then
 // the calls (IndirectDraw: vertex and index buffer views, the first
@@ -30,7 +32,7 @@ struct CullEntry
 {
     uint draw;    // Index into g_bounds, and what the instance list records.
     uint command; // The draw call it would join (the early one for the camera).
-    uint view;    // 0: the camera; 1 + n: shadow view n.
+    uint view;    // 0: the camera; 1 + n: shadow view n; then capture faces.
 };
 
 // World-space box: center and half-size axes. Draws without bounds come with
@@ -141,8 +143,9 @@ bool BoundsOccluded(CullBounds bounds)
 }
 
 // Adds the entry's draw to call `command` and counts it: counter 0 the
-// camera's draws (1: its calls), 8 the shadow views' (12: their calls). A
-// call counts once, when its first instance arrives.
+// camera's draws (1: its calls), 8 the shadow views' (12: their calls).
+// Probe captures are not counted. A call counts once, when its first
+// instance arrives.
 void AddInstance(CullEntry entry, uint command)
 {
     // Instances of a call land in whatever order threads get here.
@@ -151,6 +154,7 @@ void AddInstance(CullEntry entry, uint command)
     g_commands.InterlockedAdd(address + CULL_INSTANCE_COUNT_OFFSET, 1, previous);
     g_instances[g_commands.Load(address + CULL_FIRST_INSTANCE_OFFSET) + previous] = entry.draw;
 
+    if (entry.view >= PROBE_FIRST_CULL_VIEW) return;
     uint counter = entry.view == 0 ? 0 : 8;
     uint ignored;
     g_commands.InterlockedAdd(counter, 1, ignored);

@@ -42,6 +42,9 @@ EditorField :: enum {
     Spot_Outer_Angle,
     Spot_Cast_Shadows,
 
+    Probe_Blend_Distance,
+    Probe_Box_Projection,
+
     Sun_Color,
     Sun_Intensity,
     Sun_Direction,
@@ -84,8 +87,8 @@ EditorAssetValue :: struct {
 }
 
 // An entity the editor creates or deletes: a model, a point or spot light
-// with its marker mesh, or an empty one (a group, such as a glTF node without
-// geometry).
+// with its marker mesh, a reflection probe, or an empty one (a group, such
+// as a glTF node without geometry).
 EditorEntitySnapshot :: struct {
     name: string,
     transform: Transform,
@@ -95,6 +98,7 @@ EditorEntitySnapshot :: struct {
     material_slots: MaterialSlots,
     point_light: Maybe(PointLight),
     spot_light: Maybe(SpotLight),
+    reflection_probe: Maybe(ReflectionProbe),
     // Restored as a link even while the parent is not alive yet: undoing a
     // deleted subtree restores the children before their parents.
     parent: Maybe(Entity),
@@ -204,6 +208,9 @@ editor_field_exists :: proc(
              .Spot_Cast_Shadows:
             return scene.has_spot_light[index]
 
+        case .Probe_Blend_Distance, .Probe_Box_Projection:
+            return scene.has_reflection_probe[index]
+
         case .Sun_Color, .Sun_Intensity, .Sun_Direction:
             return scene.has_directional_light[index]
 
@@ -295,6 +302,10 @@ editor_value :: proc(
             return {scene.spot_lights[index].outer_angle, 0, 0}
         case .Spot_Cast_Shadows:
             return editor_bool_value(scene.spot_lights[index].cast_shadows)
+        case .Probe_Blend_Distance:
+            return {scene.reflection_probes[index].blend_distance, 0, 0}
+        case .Probe_Box_Projection:
+            return editor_bool_value(scene.reflection_probes[index].box_projection)
 
         case .Sun_Color:
             return scene.directional_lights[index].color
@@ -404,6 +415,10 @@ editor_apply_value :: proc(
             light.outer_angle = clamp(value[0], max(light.inner_angle, math.to_radians(f32(1))), SPOT_MAX_ANGLE)
         case .Spot_Cast_Shadows:
             scene.spot_lights[index].cast_shadows = value[0] != 0
+        case .Probe_Blend_Distance:
+            scene.reflection_probes[index].blend_distance = max(value[0], 0)
+        case .Probe_Box_Projection:
+            scene.reflection_probes[index].box_projection = value[0] != 0
 
         case .Sun_Color:
             scene.directional_lights[index].color = value

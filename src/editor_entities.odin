@@ -55,6 +55,7 @@ editor_entity_snapshot :: proc(scene: ^Scene, index: int) -> EditorEntitySnapsho
     if scene.has_mesh_renderer[index] do snapshot.mesh_renderer = scene.mesh_renderers[index]
     if scene.has_point_light[index] do snapshot.point_light = scene.point_lights[index]
     if scene.has_spot_light[index] do snapshot.spot_light = scene.spot_lights[index]
+    if scene.has_reflection_probe[index] do snapshot.reflection_probe = scene.reflection_probes[index]
     // The link itself, even to a parent deleted a moment ago in the same step.
     if scene.has_parent[index] do snapshot.parent = scene.parents[index]
     return snapshot
@@ -69,6 +70,7 @@ editor_add_snapshot_components :: proc(scene: ^Scene, entity: Entity, snapshot: 
     }
     if light, ok := snapshot.point_light.?; ok do scene_add_point_light(scene, entity, light)
     if light, ok := snapshot.spot_light.?; ok do scene_add_spot_light(scene, entity, light)
+    if probe, ok := snapshot.reflection_probe.?; ok do scene_add_reflection_probe(scene, entity, probe)
     if parent, ok := snapshot.parent.?; ok do scene_set_parent(scene, int(entity), int(parent))
 }
 
@@ -365,8 +367,29 @@ editor_add_light :: proc(scene: ^Scene, marker_id, name: string, point: Maybe(Po
     }, g_editor_selected)
 }
 
-// Models, point and spot lights, and empty entities. The sun (the renderer
-// needs exactly one) and the camera stay.
+// A reflection probe three units in front of the camera, its box 8 x 4 x 8
+// units (Scale sets the box's size).
+editor_add_reflection_probe :: proc(scene: ^Scene) {
+    editor_finish_edit()
+    owned_name, name_ok := scene_store_owned_name("Reflection probe")
+    if !name_ok {
+        g_editor_file_status = "Could not allocate the probe's name."
+        return
+    }
+    transform := Transform{scale = {8, 4, 8}}
+    camera := camera_find_active(scene)
+    if camera >= 0 {
+        transform.position = scene.transforms[camera].position + camera_forward(&scene.cameras[camera]) * 3
+    }
+    editor_create_entity(scene, EditorEntitySnapshot{
+        name = owned_name,
+        transform = transform,
+        reflection_probe = ReflectionProbe{blend_distance = 1, box_projection = true},
+    }, g_editor_selected)
+}
+
+// Models, lights, reflection probes and empty entities. The sun (the
+// renderer needs exactly one) and the camera stay.
 editor_can_delete :: proc(scene: ^Scene, entity: Entity) -> bool {
     if !scene_entity_is_alive(scene, entity) {
         return false

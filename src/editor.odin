@@ -185,6 +185,9 @@ editor_draw_scene :: proc(scene: ^Scene){
             ui_same_line()
             debug_ui_text("(limit reached)")
         }
+        ui_begin_disabled(editor_find_available_slot(scene) < 0)
+        if ui_button("Add Reflection Probe") do editor_add_reflection_probe(scene)
+        ui_end_disabled()
         ui_separator()
         editor_draw_viewport_controls()
         ui_separator()
@@ -519,6 +522,29 @@ editor_draw_spot_light_controls :: proc(scene: ^Scene, index: int) {
     debug_ui_text("it shines along the marker's base (local -Y).")
 }
 
+editor_draw_reflection_probe_controls :: proc(scene: ^Scene, index: int) {
+    ui_separator()
+    debug_ui_text("Reflection probe")
+
+    editor_drag_number(scene, index, .Probe_Blend_Distance, "Blend distance", 0.05, 0.0, 100.0)
+    editor_checkbox(scene, index, .Probe_Box_Projection, "Box projection")
+
+    p := &g_renderer.probes
+    slot := renderer_probe_slot(index)
+    switch {
+    case !p.enabled:
+        debug_ui_text("Reflection probes are off in Renderer controls.")
+    case slot < 0:
+        text_buffer: [96]u8
+        debug_ui_text(fmt.bprintf(text_buffer[:], "Not used: at most %d probes are.", MAX_REFLECTION_PROBES))
+    case:
+        debug_ui_text("Captured" if p.captured[slot] else "Waiting to be captured")
+        if ui_button("Capture again") do p.captured[slot] = false
+    }
+    debug_ui_text("Scale sets the box; reflections inside it come")
+    debug_ui_text("from its center. It captures again when moved.")
+}
+
 editor_draw_directional_light_controls :: proc(scene: ^Scene, index: int) {
     ui_separator()
     debug_ui_text("Directional light")
@@ -621,6 +647,10 @@ editor_draw_inspector :: proc(scene: ^Scene) {
 
             if scene.has_spot_light[index] {
                 editor_draw_spot_light_controls(scene, index)
+            }
+
+            if scene.has_reflection_probe[index] {
+                editor_draw_reflection_probe_controls(scene, index)
             }
 
             if scene.has_directional_light[index] {

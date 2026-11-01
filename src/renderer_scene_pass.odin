@@ -62,6 +62,7 @@ renderer_render_scene_pass :: proc(draws: []Draw, batches, late_batches, transpa
     renderer_bind_cbv(.Frame_Constants, renderer_frame_cb_address())
     renderer_bind_buffer_srv(.Lights, renderer_light_buffer_address())
     renderer_bind_buffer_srv(.Cluster_Lights, r.cluster_buffer->GetGPUVirtualAddress())
+    renderer_bind_probes()
 
     // The prepass's early and late calls.
     renderer_draw_batches(draws, batches, r.hdr_pipeline_states)
