@@ -170,8 +170,7 @@ float3 LinearToSrgb(float3 value)
 {
     float3 low = value * 12.92f;
     float3 high = 1.055f * pow(value, 1.0f / 2.4f) - 0.055f;
-    // FXC evaluates a vector ternary per component.
-    return value <= 0.0031308f ? low : high;
+    return select(value <= 0.0031308f, low, high);
 }
 
 // Stephen Hill's fit of the ACES RRT + sRGB ODT. Matrices convert linear
@@ -270,7 +269,7 @@ float3 SrgbToLinear(float3 value)
 {
     float3 low = value / 12.92f;
     float3 high = pow(max((value + 0.055f) / 1.055f, 0.0f), 2.4f);
-    return value <= 0.04045f ? low : high;
+    return select(value <= 0.04045f, low, high);
 }
 
 float3 SharpenTap(int2 pixel, int2 last)

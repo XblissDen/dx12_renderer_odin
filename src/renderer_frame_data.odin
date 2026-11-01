@@ -996,7 +996,7 @@ renderer_create_cull_pipeline :: proc() {
     entries := [2]cstring{"CSCull", "CSBuildHiZ"}
     pipelines := [2]^^d3d12.IPipelineState{&r.cull_pipeline_state, &r.hiz_pipeline_state}
     for entry, i in entries {
-        cs := renderer_compile_shader("shaders/cull.hlsl", entry, "cs_5_1")
+        cs := renderer_compile_shader("shaders/cull.hlsl", entry, "cs")
         defer cs->Release()
         if renderer_skip_pipeline() do continue
         desc := d3d12.COMPUTE_PIPELINE_STATE_DESC{pRootSignature = r.cull_root_signature, CS = shader_bytecode(cs)}

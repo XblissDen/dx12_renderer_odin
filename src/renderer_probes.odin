@@ -478,7 +478,7 @@ renderer_set_square_viewport :: proc(size: u32) {
 renderer_create_probe_pipelines :: proc(mesh_desc, fullscreen: d3d12.GRAPHICS_PIPELINE_STATE_DESC) {
     r := &g_renderer
     p := &r.probes
-    capture_masked_ps := renderer_compile_shader("shaders/scene.hlsl", "PSCaptureMasked", "ps_5_1")
+    capture_masked_ps := renderer_compile_shader("shaders/scene.hlsl", "PSCaptureMasked", "ps")
     defer capture_masked_ps->Release()
     for variant in Draw_Variant {
         desc := mesh_desc

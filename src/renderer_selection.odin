@@ -54,17 +54,17 @@ renderer_create_selection_root_signature :: proc() {
 renderer_create_selection_pso :: proc() {
     r := &g_renderer
 
-    mask_vs := renderer_compile_shader("shaders/selection.hlsl", "VSMask", "vs_5_1")
+    mask_vs := renderer_compile_shader("shaders/selection.hlsl", "VSMask", "vs")
     defer mask_vs->Release()
-    mask_ps := renderer_compile_shader("shaders/selection.hlsl", "PSMask", "ps_5_1")
+    mask_ps := renderer_compile_shader("shaders/selection.hlsl", "PSMask", "ps")
     defer mask_ps->Release()
-    outline_vs := renderer_compile_shader("shaders/selection.hlsl", "VSOutline", "vs_5_1")
+    outline_vs := renderer_compile_shader("shaders/selection.hlsl", "VSOutline", "vs")
     defer outline_vs->Release()
-    outline_ps := renderer_compile_shader("shaders/selection.hlsl", "PSOutline", "ps_5_1")
+    outline_ps := renderer_compile_shader("shaders/selection.hlsl", "PSOutline", "ps")
     defer outline_ps->Release()
-    line_vs := renderer_compile_shader("shaders/selection.hlsl", "VSLine", "vs_5_1")
+    line_vs := renderer_compile_shader("shaders/selection.hlsl", "VSLine", "vs")
     defer line_vs->Release()
-    line_ps := renderer_compile_shader("shaders/selection.hlsl", "PSLine", "ps_5_1")
+    line_ps := renderer_compile_shader("shaders/selection.hlsl", "PSLine", "ps")
     defer line_ps->Release()
 
     // Only the position of Vertex.

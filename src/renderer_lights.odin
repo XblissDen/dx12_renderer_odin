@@ -111,7 +111,7 @@ renderer_build_light_clusters :: proc() {
 // The cluster-building pipeline; rebuilt by shader hot-reload.
 renderer_create_light_cluster_pipeline :: proc() {
     r := &g_renderer
-    cs := renderer_compile_shader("shaders/scene.hlsl", "CSBuildLightClusters", "cs_5_1")
+    cs := renderer_compile_shader("shaders/scene.hlsl", "CSBuildLightClusters", "cs")
     defer cs->Release()
     if renderer_skip_pipeline() do return
     desc := d3d12.COMPUTE_PIPELINE_STATE_DESC{pRootSignature = r.cluster_root_signature, CS = shader_bytecode(cs)}

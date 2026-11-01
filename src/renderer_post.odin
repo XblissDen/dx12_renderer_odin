@@ -346,7 +346,7 @@ renderer_create_exposure_pipelines :: proc() {
     entries := [2]cstring{"CSHistogram", "CSAdapt"}
     pipelines := [2]^^d3d12.IPipelineState{&r.exposure_histogram_pipeline, &r.exposure_adapt_pipeline}
     for entry, i in entries {
-        cs := renderer_compile_shader("shaders/auto_exposure.hlsl", entry, "cs_5_1")
+        cs := renderer_compile_shader("shaders/auto_exposure.hlsl", entry, "cs")
         defer cs->Release()
         if renderer_skip_pipeline() do continue
         desc := d3d12.COMPUTE_PIPELINE_STATE_DESC{pRootSignature = r.exposure_root_signature, CS = shader_bytecode(cs)}

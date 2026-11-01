@@ -11,3 +11,5 @@ vendor/imgui/build/
 vendor/imgui/lib/
 imgui.ini
 cache/
+dxcompiler.dll
+dxil.dll

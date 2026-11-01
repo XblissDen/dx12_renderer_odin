@@ -190,7 +190,7 @@ renderer_create_fog_pipelines :: proc() {
     entries := [2]cstring{"CSFogInject", "CSFogIntegrate"}
     pipelines := [2]^^d3d12.IPipelineState{&r.fog_inject_pipeline_state, &r.fog_integrate_pipeline_state}
     for entry, i in entries {
-        cs := renderer_compile_shader("shaders/scene.hlsl", entry, "cs_5_1")
+        cs := renderer_compile_shader("shaders/scene.hlsl", entry, "cs")
         defer cs->Release()
         if renderer_skip_pipeline() do continue
         desc := d3d12.COMPUTE_PIPELINE_STATE_DESC{pRootSignature = r.fog_root_signature, CS = shader_bytecode(cs)}

@@ -10,7 +10,7 @@ import "core:time"
 import win32 "core:sys/windows"
 import d3d12 "vendor:directx/d3d12"
 import dxgi "vendor:directx/dxgi"
-import d3dc "vendor:directx/d3d_compiler"
+import dxc "vendor:directx/dxc"
 import "core:math"
 import alg "core:math/linalg"
 
@@ -601,8 +601,10 @@ Renderer :: struct {
     shader_reload_ms: f32,
     // Used only inside renderer_build_pipelines: shaders by
     // "path|entry|target", whether the creation code is only being run to
-    // list them, and the first error.
+    // list them (with placeholder blobs from shader_utils), and the first
+    // error.
     shader_blobs: map[string]^d3d12.IBlob,
+    shader_utils: ^dxc.IUtils,
     shader_collecting: bool,
     shader_build_error: string,
 
@@ -649,17 +651,24 @@ dx_check:: proc(hr: win32.HRESULT, loc := #caller_location){
     }
 }
 
+// Every shader is compiled by DXC (dxcompiler.dll and dxil.dll, next to the
+// executable) as DXIL for this shader model; renderer_init checks the GPU
+// supports it.
+SHADER_MODEL :: "6_6"
+
 // Every pipeline's shaders come through here, already compiled by
-// renderer_build_pipelines. While it is only listing them, this records the
-// request and returns a placeholder the caller releases as usual.
-renderer_compile_shader :: proc(path: string, entry, target: cstring) -> ^d3d12.IBlob {
+// renderer_build_pipelines. `stage` is "vs", "ps" or "cs". While it is only
+// listing them, this records the request and returns a placeholder the
+// caller releases as usual.
+renderer_compile_shader :: proc(path: string, entry, stage: cstring) -> ^d3d12.IBlob {
     r := &g_renderer
-    key := fmt.tprintf("%s|%s|%s", path, entry, target)
+    key := fmt.tprintf("%s|%s|%s_%s", path, entry, stage, SHADER_MODEL)
     blob: ^d3d12.IBlob
     if r.shader_collecting {
         if key not_in r.shader_blobs do r.shader_blobs[strings.clone(key)] = nil
-        dx_check(d3dc.CreateBlob(4, &blob))
-        return blob
+        placeholder: ^dxc.IBlobEncoding
+        dx_check(r.shader_utils->CreateBlob(&r.shader_collecting, 1, dxc.CP_ACP, &placeholder))
+        return (^d3d12.IBlob)(placeholder)
     }
     blob = r.shader_blobs[key]
     assert(blob != nil, "shader was not compiled by renderer_build_pipelines")
@@ -674,23 +683,55 @@ renderer_compile_shader_set :: proc() -> (error: string) {
     r := &g_renderer
     Job :: struct {
         key: string,
+        // DXC's blobs are COM objects with the same interface as D3D's.
         blob, errors: ^d3d12.IBlob,
         hr: win32.HRESULT,
     }
     compile :: proc(job: ^Job) {
         parts := strings.split(job.key, "|", context.temp_allocator)
-        // The bindless texture array (scene.hlsl) is an unbounded table.
-        flags := d3dc.D3DCOMPILE{.ENABLE_UNBOUNDED_DESCRIPTOR_TABLES}
+        // DXC's objects are not shared between threads: each job has its own.
+        utils: ^dxc.IUtils
+        compiler: ^dxc.ICompiler3
+        if job.hr = dxc.CreateInstance(dxc.Utils_CLSID, dxc.IUtils_UUID, &utils); job.hr < 0 do return
+        defer utils->Release()
+        if job.hr = dxc.CreateInstance(dxc.Compiler_CLSID, dxc.ICompiler3_UUID, &compiler); job.hr < 0 do return
+        defer compiler->Release()
+
+        path := win32.utf8_to_wstring(parts[0])
+        source: ^dxc.IBlobEncoding
+        if job.hr = utils->LoadFile(path, nil, &source); job.hr < 0 do return
+        defer source->Release()
+        // The default include handler finds common.hlsl next to the file,
+        // named by the first argument.
+        include: ^dxc.IIncludeHandler
+        if job.hr = utils->CreateDefaultIncludeHandler(&include); job.hr < 0 do return
+        defer include->Release()
+
+        args := make([dynamic]win32.wstring, context.temp_allocator)
+        for arg in ([]string{"-E", parts[1], "-T", parts[2], "-HV", "2021"}) do append(&args, win32.utf8_to_wstring(arg))
         when ODIN_DEBUG {
-            flags += {.DEBUG, .SKIP_OPTIMIZATION}
+            for arg in ([]string{"-Zi", "-Qembed_debug", "-Od"}) do append(&args, win32.utf8_to_wstring(arg))
         }
-        // The standard include handler finds common.hlsl next to the file.
-        job.hr = d3dc.CompileFromFile(
-            win32.utf8_to_wstring(parts[0]), nil, d3dc.D3DCOMPILE_STANDARD_FILE_INCLUDE,
-            strings.clone_to_cstring(parts[1], context.temp_allocator),
-            strings.clone_to_cstring(parts[2], context.temp_allocator),
-            transmute(u32)flags, 0, &job.blob, &job.errors,
-        )
+        inject_at(&args, 0, path)
+        buffer := dxc.Buffer{Ptr = source->GetBufferPointer(), Size = source->GetBufferSize(), Encoding = dxc.CP_ACP}
+        result: ^dxc.IResult
+        if job.hr = compiler->Compile(&buffer, raw_data(args), u32(len(args)), include, dxc.IResult_UUID, &result); job.hr < 0 do return
+        defer result->Release()
+
+        // Warnings come with success too; an empty message is no message.
+        messages: ^dxc.IBlobUtf8
+        if result->GetOutput(.ERRORS, dxc.IBlobUtf8_UUID, &messages, nil) >= 0 && messages != nil {
+            if messages->GetStringLength() > 0 {
+                job.errors = (^d3d12.IBlob)(messages)
+            } else {
+                messages->Release()
+            }
+        }
+        result->GetStatus(&job.hr)
+        if job.hr < 0 do return
+        object: ^dxc.IBlob
+        job.hr = result->GetOutput(.OBJECT, dxc.IBlob_UUID, &object, nil)
+        job.blob = (^d3d12.IBlob)(object)
     }
 
     jobs := make([dynamic]Job, 0, len(r.shader_blobs), context.temp_allocator)
@@ -1023,6 +1064,15 @@ renderer_init :: proc() {
 
     dx_check(r.command_queue->GetTimestampFrequency(&r.timestamp_frequency))
 
+    // Every shader is compiled for SHADER_MODEL (DXC); older GPUs or drivers
+    // cannot run them.
+    shader_model := d3d12.FEATURE_DATA_SHADER_MODEL{HighestShaderModel = ._6_6}
+    if r.device->CheckFeatureSupport(.SHADER_MODEL, &shader_model, size_of(shader_model)) < 0 ||
+       shader_model.HighestShaderModel < ._6_6 {
+        panic("This GPU or its driver does not support shader model 6.6.")
+    }
+    dx_check(dxc.CreateInstance(dxc.Utils_CLSID, dxc.IUtils_UUID, &r.shader_utils))
+
     renderer_create_timestamp_resources()
 }
 
@@ -1317,7 +1367,7 @@ renderer_create_fullscreen_pso :: proc(
     format: dxgi.FORMAT,
     pso: ^^d3d12.IPipelineState,
 ) {
-    ps := renderer_compile_shader(path, entry, "ps_5_1")
+    ps := renderer_compile_shader(path, entry, "ps")
     defer ps->Release()
     desc := base
     desc.PS = shader_bytecode(ps)
@@ -1328,23 +1378,23 @@ renderer_create_fullscreen_pso :: proc(
 renderer_create_pipelines :: proc() {
     r := &g_renderer
 
-    scene_vs := renderer_compile_shader("shaders/scene.hlsl", "VSMain", "vs_5_1")
+    scene_vs := renderer_compile_shader("shaders/scene.hlsl", "VSMain", "vs")
     defer scene_vs->Release()
-    scene_ps := renderer_compile_shader("shaders/scene.hlsl", "PSMain", "ps_5_1")
+    scene_ps := renderer_compile_shader("shaders/scene.hlsl", "PSMain", "ps")
     defer scene_ps->Release()
-    transparent_ps := renderer_compile_shader("shaders/scene.hlsl", "PSTransparent", "ps_5_1")
+    transparent_ps := renderer_compile_shader("shaders/scene.hlsl", "PSTransparent", "ps")
     defer transparent_ps->Release()
-    shadow_vs := renderer_compile_shader("shaders/scene.hlsl", "VSShadow", "vs_5_1")
+    shadow_vs := renderer_compile_shader("shaders/scene.hlsl", "VSShadow", "vs")
     defer shadow_vs->Release()
-    depth_vs := renderer_compile_shader("shaders/scene.hlsl", "VSDepth", "vs_5_1")
+    depth_vs := renderer_compile_shader("shaders/scene.hlsl", "VSDepth", "vs")
     defer depth_vs->Release()
-    prepass_ps := renderer_compile_shader("shaders/scene.hlsl", "PSPrepass", "ps_5_1")
+    prepass_ps := renderer_compile_shader("shaders/scene.hlsl", "PSPrepass", "ps")
     defer prepass_ps->Release()
-    prepass_mask_ps := renderer_compile_shader("shaders/scene.hlsl", "PSPrepassMasked", "ps_5_1")
+    prepass_mask_ps := renderer_compile_shader("shaders/scene.hlsl", "PSPrepassMasked", "ps")
     defer prepass_mask_ps->Release()
-    shadow_mask_ps := renderer_compile_shader("shaders/scene.hlsl", "PSShadowMasked", "ps_5_1")
+    shadow_mask_ps := renderer_compile_shader("shaders/scene.hlsl", "PSShadowMasked", "ps")
     defer shadow_mask_ps->Release()
-    fullscreen_vs := renderer_compile_shader("shaders/post_process.hlsl", "VSMain", "vs_5_1")
+    fullscreen_vs := renderer_compile_shader("shaders/post_process.hlsl", "VSMain", "vs")
     defer fullscreen_vs->Release()
 
     // Matches Vertex.
@@ -2167,6 +2217,7 @@ renderer_destroy :: proc(){
     for slot in renderer_pipeline_slots() do slot^->Release()
     delete(r.shader_error)
     delete(r.shader_blobs)
+    r.shader_utils->Release()
 
     r.post_constant_buffer->Release()
 

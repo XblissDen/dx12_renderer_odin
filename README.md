@@ -41,6 +41,8 @@ Requirements:
 - Odin on `PATH`.
 - Visual Studio or Build Tools with **Desktop development with C++** and a
   Windows SDK.
+- A GPU and driver supporting shader model 6.6 (DirectX 12; most GPUs from
+  2018 on, with a current driver).
 
 From the project root:
 
@@ -50,7 +52,9 @@ dx12_renderer.exe
 ```
 
 - `build.bat` builds optimized (`-o:speed`) and passes extra arguments to
-  `odin build`; `build.bat -debug` enables the D3D12 debug layer.
+  `odin build`; `build.bat -debug` enables the D3D12 debug layer. It also
+  copies DXC's `dxcompiler.dll` and `dxil.dll` from Odin's vendor folder next
+  to the executable: the shaders are compiled with them at startup.
 - The debug layer's messages, and a report of GPU objects still alive at
   shutdown, go to stderr, and the Windows-subsystem build has no console. To see them, build a console version instead:
   `odin build src -debug -o:speed`.

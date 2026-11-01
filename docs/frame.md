@@ -252,9 +252,8 @@ textures, so the index can differ within a wave.
 - **Nothing is copied per draw.** There is no per-frame material table ring,
   and no CPU-only staging heap to copy from.
 - **Batching ignores textures.** Draws batch on geometry and variant alone.
-- **The array is unbounded.** FXC needs
-  `ENABLE_UNBOUNDED_DESCRIPTOR_TABLES` for that, so every shader is compiled
-  with it.
+- **The array is unbounded** (`g_textures[]`), which shader model 6 allows
+  without any compiler option.
 - **Hardware support:** feature level 12_0, which the renderer already
   requires, guarantees resource binding tier 2. That tier allows a table over
   the whole heap with slots the shader never reads left unwritten.
@@ -359,8 +358,17 @@ is needed; without a capture tool attached they cost next to nothing.
 ## Shader hot-reload
 
 Saving any file in `shaders/` while the program runs rebuilds every pipeline,
-in about a third of a second.
+in under a fifth of a second.
 
+- **Compiler**: DXC (`dxcompiler.dll`, with `dxil.dll` validating and
+  signing its output), from Odin's vendor folder; `build.bat` copies both
+  next to the executable. Every shader is compiled to DXIL for shader model
+  6.6 (`SHADER_MODEL`), with HLSL 2021's rules. Startup checks that the GPU
+  and driver support that model, and stops with a message if not. Debug builds
+  compile with embedded debug info and no optimization, so PIX can step
+  through the shaders. Before shader model 6, the shaders went through FXC,
+  whose last target is 5.1. DXC builds the whole set in about 0.18 s, against
+  0.41 s with FXC, and the images match within rounding.
 - **Detection**: the folder's `.hlsl` write times are summed and checked every
   250 ms. A reload starts once the sum has stayed the same for one check, so a
   file still being written is not compiled half-saved.

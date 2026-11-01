@@ -411,10 +411,18 @@ ShadowInput VSShadow(VSInput input)
     output.draw = LoadInstanceObject(input.instance);
     float4 world_pos = mul(float4(input.position, 1.0f), g_object.model);
     // Views: the sun's cascades, then this frame's shadow atlas views.
+    // An if, not ?: — DXC 1.6 crashes on a short-circuiting ?: between
+    // dynamically indexed matrices.
     uint view = shadow_view_index;
-    float4x4 light_view_projection = view < SHADOW_CASCADE_COUNT
-        ? cascade_view_projection[view]
-        : shadow_view_projection[view - SHADOW_CASCADE_COUNT];
+    float4x4 light_view_projection;
+    if (view < SHADOW_CASCADE_COUNT)
+    {
+        light_view_projection = cascade_view_projection[view];
+    }
+    else
+    {
+        light_view_projection = shadow_view_projection[view - SHADOW_CASCADE_COUNT];
+    }
     output.position = mul(world_pos, light_view_projection);
     output.texcoord = input.texcoord;
     return output;
@@ -805,7 +813,7 @@ void ApplyProbes(float3 world_pos, float3 R, float3 N, float material_roughness,
             // Where the reflected ray leaves the box, seen from the box's
             // center (the capture point).
             float3 ray = mul(R, (float3x3)probe.world_to_box);
-            float3 safe_ray = abs(ray) < 1e-6f ? 1e-6f : ray;
+            float3 safe_ray = select(abs(ray) < 1e-6f, 1e-6f, ray);
             float3 exits = (sign(safe_ray) * 0.5f - local) / safe_ray;
             float t = min(exits.x, min(exits.y, exits.z));
             direction = mul(local + ray * t, (float3x3)probe.box_to_world);
