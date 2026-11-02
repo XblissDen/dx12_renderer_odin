@@ -34,10 +34,11 @@ so text stays sharp.
 
 - **Renderer controls**: shader reload status, exposure, bloom, tone mapping,
   anti-aliasing, the environment, shadows, GTAO, SSR, reflection probes,
-  light clusters, fog, and the frustum and occlusion culling switches. **Show ImGui demo** opens
+  light clusters, fog, and the frustum, occlusion and meshlet culling switches. **Show ImGui demo** opens
   ImGui's own demo window.
 - **Profiler**: frame rate and frame time, the camera's and shadow views'
-  draws and calls after culling (with how many were occluded), the shadow
+  draws and calls after culling (with how many were occluded), the camera's
+  meshlets and triangles drawn out of those its large meshes hold, the shadow
   atlas (lights holding tiles, how full it is, light views drawn this frame),
   the point and spot lights in view, a warning when a frame had more draws than fit, and
   the [GPU timings](frame.md#gpu-timings) of every pass.

@@ -336,6 +336,7 @@ assets_import :: proc(request: AssetImportRequest) -> (model: MeshHandle, textur
         g_assets.mesh_ids[mesh_desc.id] = model
         delete(g_renderer.meshes)
         g_renderer.meshes = meshes
+        renderer_rebuild_meshlets()
     } else {
         texture = TextureHandle(len(g_assets.textures))
         append(&g_assets.textures, TextureAsset{
@@ -562,6 +563,7 @@ assets_import_gltf :: proc(request: AssetImportRequest) -> (model: MeshHandle, m
     copy(meshes[len(g_renderer.meshes):], gpu_meshes[:])
     delete(g_renderer.meshes)
     g_renderer.meshes = meshes
+    renderer_rebuild_meshlets()
 
     append(&g_assets.import_arenas, owner)
     delete(g_assets.catalog_text)

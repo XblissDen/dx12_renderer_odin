@@ -5,8 +5,8 @@ does, in what order, and why it is built that way. The [project
 README](../README.md) covers building and running.
 
 - [Frame structure](frame.md): the main loop, frames in flight, the order of
-  GPU passes, per-frame data, instanced batching, GPU frustum and occlusion
-  culling with indirect draws, bindless textures,
+  GPU passes, per-frame data, instanced batching, GPU frustum, occlusion and
+  meshlet culling with indirect draws, bindless textures,
   the depth prepass, the root signature, GPU timings, named events for GPU
   captures, and shader hot-reload.
 - [Lighting](lighting.md): surface shading, materials, the sun, point and spot
@@ -60,14 +60,14 @@ README](../README.md) covers building and running.
 | `src/renderer_probes.odin` | Reflection probes: slots, captures, prefiltering |
 | `src/renderer_selection.odin` | Selection outline and debug lines |
 | `src/texture_mips.odin`, `src/texture_cache.odin` | Mip chains; BC7/BC5/BC4/BC6H compression and the texture cache |
-| `src/assets.odin`, `src/gltf.odin`, `src/mesh.odin` | Asset catalog, glTF and OBJ loading |
+| `src/assets.odin`, `src/gltf.odin`, `src/mesh.odin` | Asset catalog, glTF and OBJ loading, meshlet building |
 | `src/scene.odin`, `src/scene_file.odin` | Entities, components and parents; saving and loading scenes |
 | `src/camera.odin`, `src/frustum.odin` | Fly camera; frustum culling |
 | `src/editor*.odin`, `src/debug_ui.odin` | Panels, picking, viewport icons and lines, gizmos, undo history |
 | `shaders/scene.hlsl` | Mesh shading, prepass, shadows, GTAO, SSR, light clusters, fog |
 | `shaders/post_process.hlsl` | Full-screen triangle, bloom, TAA, tone mapping, FXAA, sharpening |
 | `shaders/auto_exposure.hlsl` | Luminance histogram and exposure adaptation |
-| `shaders/cull.hlsl` | GPU frustum and occlusion culling, the depth pyramid |
+| `shaders/cull.hlsl` | GPU frustum, occlusion and meshlet culling, the depth pyramid |
 | `shaders/sky.hlsl`, `irradiance.hlsl`, `environment_prefilter.hlsl` | Sky, IBL baking, reflection probe filtering |
 | `shaders/common.hlsl` | Code the shaders share: PI and the panorama mapping |
 | `shaders/selection.hlsl` | Selection outline and debug lines |

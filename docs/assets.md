@@ -34,6 +34,10 @@ images beside it, or a single `.glb`), and PNG/JPEG textures. Imported files
 are copied into `models/imported/` or `textures/imported/` and registered in the
 catalog.
 
+Every loaded or imported mesh, of either format, has its large submeshes
+(512 triangles or more) split into meshlets, which reorders their indices;
+see [Meshlet culling](frame.md#meshlet-culling).
+
 ### OBJ
 
 OBJ files are read as right-handed (+Y up), as Blender and most tools write

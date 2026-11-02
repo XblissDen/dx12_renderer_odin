@@ -193,6 +193,7 @@ debug_ui_update :: proc() {
         ui_separator()
         ui_checkbox("Frustum culling", &r.frustum_culling_enabled)
         ui_checkbox("Occlusion culling", &r.occlusion_culling_enabled)
+        ui_checkbox("Meshlet culling", &r.meshlet_culling_enabled)
         ui_checkbox("Show ImGui demo", &g_debug_ui_demo)
     }
     ui_end_panel()
@@ -252,6 +253,14 @@ debug_ui_draw_profiler :: proc() {
             stats.scene_total - int(stats.gpu.scene_visible),
             stats.gpu.scene_occluded,
         ))
+        if stats.scene_meshlets > 0 {
+            debug_ui_text(fmt.bprintf(
+                text_buffer[:],
+                "Meshlets: %d of %d drawn, %d of %d triangles",
+                stats.gpu.scene_meshlets, stats.scene_meshlets,
+                stats.gpu.scene_meshlet_triangles, stats.scene_meshlet_triangles,
+            ))
+        }
         debug_ui_text(fmt.bprintf(
             text_buffer[:],
             "Shadow draws: %d in %d calls (%d casters)",

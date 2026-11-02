@@ -25,6 +25,7 @@ main :: proc(){
     renderer_create_fog_root_signature()
     if error := renderer_build_pipelines(); error != "" do panic(error)
     renderer_load_textures()
+    renderer_rebuild_meshlets()
     renderer_create_fog_volumes()
     renderer_create_shadow_map()
     renderer_create_probes()

@@ -44,7 +44,7 @@ frame never overwrites them while an earlier one still reads them.
 
 | Pass | What it does | Details |
 | --- | --- | --- |
-| GPU culling | Compute pass testing draws against every view's frustum, filling in the shadow views' calls and the camera's early ones | [below](#gpu-culling) |
+| GPU culling | Compute pass testing draws against every view's frustum, and the camera's large meshes meshlet by meshlet, filling in the shadow views' calls and the camera's early ones | [below](#gpu-culling) |
 | Shadows | Sun cascades, then the shadow atlas tiles of lights that changed (at most 28 views) | [Lighting](lighting.md#shadows) |
 | Probe capture | On frames that capture a reflection probe: its six faces, their mips, and the prefiltered levels | [Lighting](lighting.md#reflection-probes) |
 | Depth prepass | Depth, motion vectors, and the surface buffer (normal, roughness): the camera's early calls, then the depth pyramid and the late cull, then its late calls | [below](#depth-prepass) |
@@ -239,6 +239,64 @@ the pyramid and the late cull, and the depth prepass row includes them too.
 With a wall in front of the 40-cube scene, 34 of its 47 draws are culled as
 hidden.
 
+### Meshlet culling
+
+A draw is all or nothing: a building half behind a wall, or a floor running
+behind the camera, draws every triangle. So large meshes are also split into
+**meshlets**, small clusters of nearby triangles, and the camera culls those
+one by one.
+
+**Building.** When meshes are loaded or imported, every submesh of at least
+512 triangles is split (`mesh_build_meshlets` in `src/mesh.odin`). A meshlet
+grows from a starting triangle by adding the neighbour that brings the fewest
+new vertices, ties going to the one nearest its center, up to 64 vertices and
+124 triangles. When it has no neighbour left, it continues with the next
+unused triangle. The submesh's index range is reordered so each meshlet's
+indices are contiguous. Each meshlet keeps:
+
+- a **bounding sphere**, around the center of its box;
+- a **normal cone**: an axis and an angle that all its triangles' normals lie
+  within. It is left off for meshlets whose normals spread too far, which
+  then never pass this test.
+
+Sponza becomes 3,563 meshlets. `renderer_rebuild_meshlets` uploads all of
+them to one GPU buffer, and gives each mesh's index buffer a raw SRV in the
+SRV heap, so the cull pass can read any mesh's indices (`g_mesh_indices[]`,
+like the bindless textures).
+
+**Culling.** A camera opaque draw whose submesh has meshlets gets one cull
+entry per meshlet instead of one for the draw, and a call of its own (it
+never batches). `CSCullMeshlets` runs one 32-thread group per entry. A
+meshlet is drawn when:
+
+1. its sphere, under the draw's transform, is in the frustum;
+2. its cone does not face entirely away from the camera (it would be all back
+   faces);
+3. it passes the same two-phase occlusion test as draws, with its own flag
+   for last frame's result.
+
+A visible meshlet adds its index count to its call, and the count before the
+add is where its indices go. The group copies them from the mesh's index
+buffer into a **compacted index buffer** (32 MB, `meshlet_index_buffer`), into
+the call's region. The call then draws one instance of the compacted indices.
+The early and late calls share one region; the late meshlets go after the
+early ones.
+
+Only the camera's opaque and cutout draws use meshlets. Shadow views, probe
+faces and blended surfaces cull whole draws. Draws whose meshlets do not fit
+the limits (262,144 meshlet entries, 8M compacted indices, a million
+visibility flags) are culled whole too.
+
+**Results.** In one Sponza, about 1,580 of its 3,563 meshlets are drawn (112K
+of 262K triangles) and the frame costs the same either way. With six copies
+of Sponza (1.57M triangles), about 3,100 of 21,400 meshlets are drawn (180K
+triangles): the prepass and scene passes are about 0.2 ms faster, against
+about 0.08 ms more in the two cull passes. The gain grows with how much of
+each mesh is out of view or hidden.
+
+**Meshlet culling** in Renderer controls turns it off to compare, and the
+Profiler panel shows how many meshlets and triangles the camera drew.
+
 ### Bindless textures
 
 Shaders see the entire SRV heap as one array, `g_textures[]`, through one
@@ -320,7 +378,9 @@ Static samplers: linear wrap (s0), shadow comparison with a white border (s1),
 clamped at the poles (s3), and clamp-to-edge for screen-space lookups (s4).
 
 Compute passes (GPU culling, auto exposure, light clusters, fog) have their
-own small root signatures, and so do the selection outline and debug lines,
+own small root signatures (GPU culling's also holds the meshlets, the mesh
+index buffers as a table over the SRV heap, the compacted index buffer and the
+meshlet flags), and so do the selection outline and debug lines,
 which share one. The indirect draws' command signature is built against the
 main root signature, because each call sets the `Draw constants` root
 constant.

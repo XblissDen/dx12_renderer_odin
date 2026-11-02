@@ -738,6 +738,7 @@ gltf_merge_by_slot :: proc(primitives: []Gltf_Primitive_Out, slot_count: int, al
 
     mesh := MeshData{vertices = vertices, indices = indices, submeshes = submeshes[:]}
     mesh_compute_submesh_bounds(mesh)
+    mesh_build_meshlets(&mesh, allocator)
     return mesh
 }
 

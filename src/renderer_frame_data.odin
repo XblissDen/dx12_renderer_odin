@@ -18,16 +18,21 @@ CullingStats :: struct {
     // More submesh draws than MAX_DRAWS, or calls than MAX_DRAW_CALLS, this
     // frame; the rest were skipped.
     draws_dropped: bool,
+    // The camera's opaque meshlets this frame (in its frustum or not), and
+    // their triangles.
+    scene_meshlets, scene_meshlet_triangles: int,
 }
 
 // The cull pass's counters, at the start of the indirect call buffer: draws
 // the camera sees and the calls they went into (early and late together;
 // prepass and lit pass each make these), the same over all shadow views,
-// then the camera's draws in its frustum but hidden behind others.
+// then the camera's draws in its frustum but hidden behind others, and the
+// camera's meshlets drawn and their triangles.
 CullCounters :: struct {
     scene_visible, scene_calls: u32,
     shadow_visible, shadow_calls: u32,
     scene_occluded: u32,
+    scene_meshlets, scene_meshlet_triangles: u32,
 }
 
 // Draws per frame: one per (entity, submesh). Sizes the object buffer.
@@ -41,6 +46,15 @@ MAX_INSTANCES :: (SHADOW_VIEW_COUNT + PROBE_FACES + 2) * MAX_DRAWS
 HIZ_MAX_MIPS :: 14
 // Indirect draw calls per frame; a view whose calls do not fit is skipped.
 MAX_DRAW_CALLS :: 32768
+// Meshlet culling (the camera's opaque draws; other views cull whole draws): cull
+// entries for meshlets, the compacted index buffer the visible meshlets'
+// triangles are copied into (32 MB), and the visibility flags the camera's
+// meshlets keep across frames. Draws that do not fit are culled whole.
+MAX_MESHLET_ENTRIES :: 1 << 18
+MESHLET_INDEX_CAPACITY :: 1 << 23
+MAX_MESHLET_FLAGS :: 1 << 20
+MAX_CULL_ENTRIES :: MAX_INSTANCES + MAX_MESHLET_ENTRIES
+#assert(MAX_INSTANCES == 163840) // cull.hlsl's MESHLET_ENTRY_BASE.
 
 // Views the cull pass tests against: the camera, every shadow view, then the
 // six faces of a reflection probe capture. Must match cull.hlsl.
@@ -66,16 +80,42 @@ IndirectDraw :: struct {
 #assert(offset_of(IndirectDraw, args) + offset_of(d3d12.DRAW_INDEXED_ARGUMENTS, InstanceCount) == 40)
 
 // A draw that a view may draw: the cull pass tests its bounds against the
-// view and, if visible, adds it to the call.
+// view and, if visible, adds it to the call. In the meshlet entries (after
+// MAX_INSTANCES of them), one meshlet of a draw instead: if visible, its
+// triangles join the call, and `flag` is its slot in the camera's meshlet
+// visibility flags.
 CullEntry :: struct {
     draw, command, view: u32,
+    meshlet, flag: u32,
 }
 
-// A draw's world-space box, for the cull pass (WorldBounds without `valid`).
+// A draw's world-space box, for the cull pass (WorldBounds without `valid`),
+// and for its meshlets, the draw's world matrix: its rows (mesh space to
+// world), its largest axis scale (for the spheres), and whether normal cones
+// apply (a uniform scale and back faces culled).
 CullBounds :: struct {
     center: [3]f32,
     half_axes: [3][3]f32,
+    model_rows: [3][4]f32,
+    max_scale: f32,
+    cone_ok: u32,
+    _pad: [2]f32,
 }
+#assert(size_of(CullBounds) == 112)
+
+// One meshlet for the cull pass (renderer_rebuild_meshlets): its mesh-space
+// sphere and normal cone (Meshlet), its triangles in the mesh's index
+// buffer, and that buffer's SRV slot.
+GpuMeshlet :: struct {
+    center: [3]f32,
+    radius: f32,
+    cone_axis: [3]f32,
+    cone_cutoff: f32,
+    first_index, index_count: u32,
+    index_buffer: u32,
+    _pad: u32,
+}
+#assert(size_of(GpuMeshlet) == 48)
 
 // Per frame slot, read by the cull pass; laid out like cull.hlsl's cbuffer.
 CullConstants :: struct #align(256) {
@@ -93,9 +133,15 @@ CullConstants :: struct #align(256) {
     // The camera's late calls are copies of its early ones, this many
     // commands on.
     late_command_offset: u32,
+    // The meshlet entries, the camera's first, from entry MAX_INSTANCES on.
+    meshlet_entry_count, camera_meshlet_entry_count: u32,
+    _pad: u32,
+    // Where the camera looks from, for meshlets' normal cones (w unused).
+    camera_position: [4]f32,
 }
 #assert(offset_of(CullConstants, view_projection) == 3744)
 #assert(offset_of(CullConstants, late_command_offset) == 3840)
+#assert(offset_of(CullConstants, camera_position) == 3856)
 
 // How a draw's material changes its pipelines (one per variant in each mesh
 // pass): cutouts discard pixels in the depth-only passes, and double-sided
@@ -117,6 +163,10 @@ Draw :: struct {
     // shadow atlas's change test.
     alpha_texture: TextureHandle,
     alpha_cutoff: f32,
+    // Its submesh's meshlets in the meshlet buffer (none: culled whole), and
+    // its first slot in the camera's meshlet visibility flags.
+    first_meshlet, meshlet_count: u32,
+    meshlet_flag: u32,
 }
 
 // One draw call: indirect call `command`, drawing instances of `draw`'s
@@ -126,6 +176,8 @@ Draw :: struct {
 DrawBatch :: struct {
     draw: u32,
     command: u32,
+    // A meshlet call's region in the compacted index buffer, or -1.
+    meshlet_region: i32,
 }
 
 // A kind of view's candidate draws grouped into calls: call i takes
@@ -155,8 +207,11 @@ FrameDraws :: struct {
     // captured this frame.
     probe_batches: [PROBE_FACES][]DrawBatch,
     // How much of this frame's instance list, cull entries and indirect
-    // calls those use.
+    // calls those use, and of the compacted index buffer and meshlet entries.
     instance_count, entry_count, command_count: int,
+    meshlet_index_count, meshlet_entry_count: int,
+    // The camera's meshlet entries come first; the late cull runs over these.
+    camera_meshlet_entry_count: int,
     // The camera's entries come first; the late cull runs over just these.
     camera_entry_count: int,
 }
@@ -164,24 +219,26 @@ FrameDraws :: struct {
 // Groups candidate draws into calls. With `merge`, draws of the same submesh
 // range and variant become one call, whatever their materials (textures are
 // bindless); the calls are sorted by variant, so pipelines change rarely.
-// Without it, every draw is its own call in the given order (blended draws,
-// sorted back to front).
+// Draws with meshlets stay calls of their own, since each draws only its
+// visible meshlets. Without `merge`, every draw is its own call in the given
+// order (blended draws, sorted back to front).
 renderer_batch_draws :: proc(data: ^FrameDraws, indices: []u32, merge: bool) -> DrawLayout {
     Batch_Key :: struct {
         variant: Draw_Variant,
         mesh: MeshHandle,
         first_index, index_count: u32,
         draw: u32,
+        meshlets: bool,
     }
     same_batch :: proc(a, b: Batch_Key) -> bool {
-        return a.variant == b.variant && a.mesh == b.mesh &&
+        return !a.meshlets && !b.meshlets && a.variant == b.variant && a.mesh == b.mesh &&
                a.first_index == b.first_index && a.index_count == b.index_count
     }
 
     keys := make([]Batch_Key, len(indices), context.temp_allocator)
     for draw_index, i in indices {
         draw := &data.draws[draw_index]
-        keys[i] = {draw.variant, draw.mesh, draw.first_index, draw.index_count, draw_index}
+        keys[i] = {draw.variant, draw.mesh, draw.first_index, draw.index_count, draw_index, draw.meshlet_count > 0}
     }
     if merge {
         slice.sort_by(keys, proc(a, b: Batch_Key) -> bool {
@@ -209,7 +266,15 @@ renderer_batch_draws :: proc(data: ^FrameDraws, indices: []u32, merge: bool) -> 
 // all its draws, and a cull entry per draw (unless `with_entries` is off: the
 // camera's late calls, which the early calls' entries fill). Returns nothing,
 // and marks draws as dropped, if the calls do not fit this frame.
-renderer_add_view_batches :: proc(data: ^FrameDraws, layout: DrawLayout, view: u32, with_entries := true) -> []DrawBatch {
+//
+// With `meshlets` (the camera's opaque draws), a draw with meshlets gets a
+// call over its own region of the compacted index buffer (as large as its
+// index range), which the cull pass fills with its visible meshlets'
+// triangles, and a cull entry per meshlet. Draws that would overflow the
+// region or entry budgets are culled whole. The late calls (`early`: the
+// calls they copy) share their early call's region: the cull pass puts the
+// late meshlets after the early ones.
+renderer_add_view_batches :: proc(data: ^FrameDraws, layout: DrawLayout, view: u32, with_entries := true, meshlets := false, early: []DrawBatch = nil) -> []DrawBatch {
     r := &g_renderer
     call_count := len(layout.starts) - 1
     if call_count <= 0 do return nil
@@ -218,25 +283,54 @@ renderer_add_view_batches :: proc(data: ^FrameDraws, layout: DrawLayout, view: u
         return nil
     }
     commands := renderer_frame_indirect_draws()
-    entries := r.cull_entry_mapped[int(r.frame_slot) * MAX_INSTANCES:]
+    entries := r.cull_entry_mapped[int(r.frame_slot) * MAX_CULL_ENTRIES:]
     batches := make([]DrawBatch, call_count, context.temp_allocator)
     for call in 0..<call_count {
         first, end := layout.starts[call], layout.starts[call + 1]
         draw := &data.draws[layout.draws[first]]
         command := u32(data.command_count)
         mesh := &r.meshes[draw.mesh]
-        commands[command] = IndirectDraw{
-            vertex_buffer = mesh.vertex_buffer_view,
-            index_buffer = mesh.index_buffer_view,
-            first_instance = u32(data.instance_count) + first,
-            args = {IndexCountPerInstance = draw.index_count, StartIndexLocation = draw.first_index},
+        region := i32(-1)
+        if early != nil {
+            region = early[call].meshlet_region
+        } else if meshlets && draw.meshlet_count > 0 &&
+                  data.meshlet_index_count + int(draw.index_count) <= MESHLET_INDEX_CAPACITY &&
+                  data.meshlet_entry_count + int(draw.meshlet_count) <= MAX_MESHLET_ENTRIES {
+            region = i32(data.meshlet_index_count)
+            data.meshlet_index_count += int(draw.index_count)
         }
-        if with_entries do for draw_index in layout.draws[first:end] {
-            assert(data.entry_count < MAX_INSTANCES)
-            entries[data.entry_count] = {draw_index, command, view}
-            data.entry_count += 1
+        if region >= 0 {
+            // One draw; the cull pass adds each visible meshlet's indices
+            // (and sets a late call's start, after the early ones).
+            commands[command] = IndirectDraw{
+                vertex_buffer = mesh.vertex_buffer_view,
+                index_buffer = r.meshlet_index_view,
+                first_instance = u32(data.instance_count) + first,
+                args = {InstanceCount = 1, StartIndexLocation = u32(region)},
+            }
+            draw_index := layout.draws[first]
+            if with_entries do for m in 0..<draw.meshlet_count {
+                entries[MAX_INSTANCES + data.meshlet_entry_count] = {draw_index, command, view, draw.first_meshlet + m, draw.meshlet_flag + m}
+                data.meshlet_entry_count += 1
+            }
+            if view == 0 && with_entries {
+                r.culling_stats.scene_meshlets += int(draw.meshlet_count)
+                r.culling_stats.scene_meshlet_triangles += int(draw.index_count / 3)
+            }
+        } else {
+            commands[command] = IndirectDraw{
+                vertex_buffer = mesh.vertex_buffer_view,
+                index_buffer = mesh.index_buffer_view,
+                first_instance = u32(data.instance_count) + first,
+                args = {IndexCountPerInstance = draw.index_count, StartIndexLocation = draw.first_index},
+            }
+            if with_entries do for draw_index in layout.draws[first:end] {
+                assert(data.entry_count < MAX_CULL_ENTRIES)
+                entries[data.entry_count] = {draw_index, command, view, 0, 0}
+                data.entry_count += 1
+            }
         }
-        batches[call] = {layout.draws[first], command}
+        batches[call] = {layout.draws[first], command, region}
         data.command_count += 1
     }
     assert(data.instance_count + len(layout.draws) <= MAX_INSTANCES)
@@ -253,6 +347,12 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     data.instance_count = 0
     data.entry_count = 0
     data.command_count = 0
+    data.meshlet_index_count = 0
+    data.meshlet_entry_count = 0
+    // Each draw with meshlets takes the next slots in the camera's meshlet
+    // visibility flags: the same draws in the same order each frame keep
+    // their flags.
+    meshlet_flags := 0
 
     post := &r.post_cb_mapped_data[r.frame_slot]
     sky := &r.sky_cb_mapped_data[r.frame_slot]
@@ -378,6 +478,15 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         r.previous_models[i] = model
         r.previous_model_frame[i] = r.frame_counter
         normal_matrix := alg.matrix4_inverse_f32(model)
+        // For meshlets: their spheres scale by the largest axis, and their
+        // normal cones only hold under a uniform scale.
+        axis_scales := [3]f32{
+            alg.length(alg.Vector3f32{model[0, 0], model[1, 0], model[2, 0]}),
+            alg.length(alg.Vector3f32{model[0, 1], model[1, 1], model[2, 1]}),
+            alg.length(alg.Vector3f32{model[0, 2], model[1, 2], model[2, 2]}),
+        }
+        max_scale := max(axis_scales[0], axis_scales[1], axis_scales[2])
+        uniform_scale := min(axis_scales[0], axis_scales[1], axis_scales[2]) > max_scale * 0.999
 
         mesh := scene.mesh_renderers[i].mesh
         for submesh in g_assets.meshes[mesh].data.submeshes {
@@ -426,6 +535,12 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
                 alpha_texture = material.texture if cutout else 0,
                 alpha_cutoff = alpha_cutoff if cutout else 0,
             }
+            if r.meshlet_culling_enabled && submesh.meshlet_count > 0 && meshlet_flags + int(submesh.meshlet_count) <= MAX_MESHLET_FLAGS {
+                draw.first_meshlet = r.meshes[mesh].first_meshlet + submesh.first_meshlet
+                draw.meshlet_count = submesh.meshlet_count
+                draw.meshlet_flag = u32(meshlet_flags)
+                meshlet_flags += int(submesh.meshlet_count)
+            }
 
             if draw.casts_shadow {
                 data.caster_bounds[data.caster_count] = draw.bounds
@@ -435,6 +550,13 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
             cull_bounds[data.draw_count] = CullBounds{
                 center = draw.bounds.center,
                 half_axes = draw.bounds.half_axes if draw.bounds.valid else {{1e30, 0, 0}, {0, 1e30, 0}, {0, 0, 1e30}},
+                model_rows = {
+                    {model[0, 0], model[0, 1], model[0, 2], model[0, 3]},
+                    {model[1, 0], model[1, 1], model[1, 2], model[1, 3]},
+                    {model[2, 0], model[2, 1], model[2, 2], model[2, 3]},
+                },
+                max_scale = max_scale,
+                cone_ok = u32(uniform_scale && !material.double_sided),
             }
 
             objects[data.draw_count] = ObjectData{
@@ -644,12 +766,13 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     // The camera's calls come first, so they always fit: early, late, then
     // blended. The cull pass tells the entries apart by these counts.
     opaque_layout := renderer_batch_draws(data, opaque[:], merge = true)
-    data.scene_batches = renderer_add_view_batches(data, opaque_layout, 0)
+    data.scene_batches = renderer_add_view_batches(data, opaque_layout, 0, meshlets = true)
     opaque_entry_count := data.entry_count
     late_command_offset := data.command_count
-    data.late_scene_batches = renderer_add_view_batches(data, opaque_layout, 0, with_entries = false)
+    data.late_scene_batches = renderer_add_view_batches(data, opaque_layout, 0, with_entries = false, early = data.scene_batches)
     data.transparent_batches = renderer_add_view_batches(data, renderer_batch_draws(data, transparent_order, merge = false), 0)
     data.camera_entry_count = data.entry_count
+    data.camera_meshlet_entry_count = data.meshlet_entry_count
 
     // Only the cascades and this frame's atlas views get calls.
     view_frustums: [CULL_VIEW_COUNT]Frustum
@@ -688,6 +811,9 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     cull.opaque_entry_count = u32(opaque_entry_count)
     cull.camera_entry_count = u32(data.camera_entry_count)
     cull.late_command_offset = u32(late_command_offset)
+    cull.meshlet_entry_count = u32(data.meshlet_entry_count)
+    cull.camera_meshlet_entry_count = u32(data.camera_meshlet_entry_count)
+    cull.camera_position = {camera_position.x, camera_position.y, camera_position.z, 1}
     // The counters start at zero; the calls follow them.
     (^CullCounters)(renderer_frame_indirect_header())^ = {}
 
@@ -720,13 +846,17 @@ renderer_bind_cull :: proc(late: bool) {
     r.command_list->SetComputeRootConstantBufferView(u32(Cull_Root_Slot.Constants),
         r.cull_constant_buffer->GetGPUVirtualAddress() + u64(r.frame_slot) * size_of(CullConstants))
     r.command_list->SetComputeRootShaderResourceView(u32(Cull_Root_Slot.Entries),
-        r.cull_entry_buffer->GetGPUVirtualAddress() + u64(int(r.frame_slot) * MAX_INSTANCES * size_of(CullEntry)))
+        r.cull_entry_buffer->GetGPUVirtualAddress() + u64(int(r.frame_slot) * MAX_CULL_ENTRIES * size_of(CullEntry)))
     r.command_list->SetComputeRootShaderResourceView(u32(Cull_Root_Slot.Bounds),
         r.cull_bounds_buffer->GetGPUVirtualAddress() + u64(int(r.frame_slot) * MAX_DRAWS * size_of(CullBounds)))
     r.command_list->SetComputeRootDescriptorTable(u32(Cull_Root_Slot.Hiz), renderer_srv_gpu(r.hiz_srv_start))
     r.command_list->SetComputeRootUnorderedAccessView(u32(Cull_Root_Slot.Commands), r.indirect_buffer->GetGPUVirtualAddress())
     r.command_list->SetComputeRootUnorderedAccessView(u32(Cull_Root_Slot.Instances), r.instance_buffer->GetGPUVirtualAddress())
     r.command_list->SetComputeRootUnorderedAccessView(u32(Cull_Root_Slot.Visibility), r.visibility_buffer->GetGPUVirtualAddress())
+    r.command_list->SetComputeRootShaderResourceView(u32(Cull_Root_Slot.Meshlets), r.meshlet_buffer->GetGPUVirtualAddress())
+    r.command_list->SetComputeRootDescriptorTable(u32(Cull_Root_Slot.Mesh_Indices), renderer_srv_gpu(0))
+    r.command_list->SetComputeRootUnorderedAccessView(u32(Cull_Root_Slot.Meshlet_Indices), r.meshlet_index_buffer->GetGPUVirtualAddress())
+    r.command_list->SetComputeRootUnorderedAccessView(u32(Cull_Root_Slot.Meshlet_Visibility), r.meshlet_flag_buffer->GetGPUVirtualAddress())
 }
 
 // The early cull (cull.hlsl): copies this frame's indirect calls to the GPU,
@@ -738,10 +868,12 @@ renderer_cull_draws :: proc(data: ^FrameDraws) {
     defer renderer_end_gpu_pass(.Culling)
 
     // The buffers decay to the common state after each frame's commands.
-    barriers := [3]d3d12.RESOURCE_BARRIER{
+    barriers := [5]d3d12.RESOURCE_BARRIER{
         resource_transition(r.indirect_buffer, d3d12.RESOURCE_STATE_COMMON, {.COPY_DEST}),
         resource_transition(r.instance_buffer, d3d12.RESOURCE_STATE_COMMON, {.UNORDERED_ACCESS}),
         resource_transition(r.visibility_buffer, d3d12.RESOURCE_STATE_COMMON, {.UNORDERED_ACCESS}),
+        resource_transition(r.meshlet_index_buffer, d3d12.RESOURCE_STATE_COMMON, {.UNORDERED_ACCESS}),
+        resource_transition(r.meshlet_flag_buffer, d3d12.RESOURCE_STATE_COMMON, {.UNORDERED_ACCESS}),
     }
     r.command_list->ResourceBarrier(len(barriers), &barriers[0])
     r.command_list->CopyBufferRegion(
@@ -751,15 +883,26 @@ renderer_cull_draws :: proc(data: ^FrameDraws) {
     barriers[0] = resource_transition(r.indirect_buffer, {.COPY_DEST}, {.UNORDERED_ACCESS})
     r.command_list->ResourceBarrier(1, &barriers[0])
 
-    if data.entry_count > 0 {
-        renderer_bind_cull(late = false)
-        r.command_list->Dispatch(u32(data.entry_count + 63) / 64, 1, 1)
-    }
+    renderer_bind_cull(late = false)
+    if data.entry_count > 0 do r.command_list->Dispatch(u32(data.entry_count + 63) / 64, 1, 1)
+    renderer_dispatch_meshlet_cull(data.meshlet_entry_count)
 
     barriers[0] = resource_transition(r.indirect_buffer, {.UNORDERED_ACCESS}, {.INDIRECT_ARGUMENT})
     barriers[1] = resource_transition(r.instance_buffer, {.UNORDERED_ACCESS}, {.NON_PIXEL_SHADER_RESOURCE})
-    r.command_list->ResourceBarrier(2, &barriers[0])
+    barriers[2] = resource_transition(r.meshlet_index_buffer, {.UNORDERED_ACCESS}, {.INDEX_BUFFER})
+    r.command_list->ResourceBarrier(3, &barriers[0])
 }
+
+// One 32-thread group per meshlet entry (CSCullMeshlets), on a 2D grid since
+// a dispatch dimension holds at most 65535 groups. Leaves the meshlet
+// pipeline set.
+renderer_dispatch_meshlet_cull :: proc(count: int) {
+    if count == 0 do return
+    r := &g_renderer
+    r.command_list->SetPipelineState(r.cull_meshlet_pipeline_state)
+    r.command_list->Dispatch(u32(min(count, MESHLET_GROUPS_PER_ROW)), u32((count + MESHLET_GROUPS_PER_ROW - 1) / MESHLET_GROUPS_PER_ROW), 1)
+}
+MESHLET_GROUPS_PER_ROW :: 65535
 
 // Between the prepass's early and late draws (the depth buffer readable by
 // compute): builds the depth pyramid from the early depth, then the late
@@ -778,23 +921,28 @@ renderer_cull_late :: proc(data: ^FrameDraws) {
         renderer_end_event()
     }
 
-    barriers := [2]d3d12.RESOURCE_BARRIER{
+    barriers := [3]d3d12.RESOURCE_BARRIER{
         resource_transition(r.indirect_buffer, {.INDIRECT_ARGUMENT}, {.UNORDERED_ACCESS}),
         resource_transition(r.instance_buffer, {.NON_PIXEL_SHADER_RESOURCE}, {.UNORDERED_ACCESS}),
+        resource_transition(r.meshlet_index_buffer, {.INDEX_BUFFER}, {.UNORDERED_ACCESS}),
     }
     r.command_list->ResourceBarrier(len(barriers), &barriers[0])
-    // The early cull read the visibility flags that this one rewrites.
-    visibility_done := d3d12.RESOURCE_BARRIER{Type = .UAV}
-    visibility_done.UAV = {pResource = r.visibility_buffer}
-    r.command_list->ResourceBarrier(1, &visibility_done)
+    // The early cull read the visibility flags (draws' and meshlets') that
+    // this one rewrites.
+    visibility_done := [2]d3d12.RESOURCE_BARRIER{{Type = .UAV}, {Type = .UAV}}
+    visibility_done[0].UAV = {pResource = r.visibility_buffer}
+    visibility_done[1].UAV = {pResource = r.meshlet_flag_buffer}
+    r.command_list->ResourceBarrier(len(visibility_done), &visibility_done[0])
 
     if data.camera_entry_count > 0 {
         r.command_list->SetPipelineState(r.cull_pipeline_state)
         r.command_list->Dispatch(u32(data.camera_entry_count + 63) / 64, 1, 1)
     }
+    renderer_dispatch_meshlet_cull(data.camera_meshlet_entry_count)
 
     barriers[0] = resource_transition(r.indirect_buffer, {.UNORDERED_ACCESS}, {.INDIRECT_ARGUMENT, .COPY_SOURCE})
     barriers[1] = resource_transition(r.instance_buffer, {.UNORDERED_ACCESS}, {.NON_PIXEL_SHADER_RESOURCE})
+    barriers[2] = resource_transition(r.meshlet_index_buffer, {.UNORDERED_ACCESS}, {.INDEX_BUFFER})
     r.command_list->ResourceBarrier(len(barriers), &barriers[0])
     r.command_list->CopyBufferRegion(r.cull_readback, u64(r.frame_slot) * size_of(CullCounters), r.indirect_buffer, 0, size_of(CullCounters))
 }
@@ -912,6 +1060,10 @@ Cull_Root_Slot :: enum u32 {
     Instances,      // u1: root UAV, the instance list
     Hiz_Target,     // u2: the pyramid level being built
     Visibility,     // u3: root UAV, what the camera saw last frame
+    Meshlets,       // t4: root SRV, every mesh's meshlets (GpuMeshlet)
+    Mesh_Indices,   // t0 in space 1: the SRV heap, for meshes' index buffers
+    Meshlet_Indices, // u4: root UAV, the compacted index buffer
+    Meshlet_Visibility, // u5: root UAV, what the camera's meshlets showed last frame
 }
 
 // The cull pass's buffers and root signature, and the command signature the
@@ -922,7 +1074,7 @@ renderer_create_culling :: proc() {
     mapped: rawptr
     r.cull_constant_buffer, mapped = renderer_create_mapped_upload_buffer(u64(FRAME_COUNT * size_of(CullConstants)))
     r.cull_constants_mapped = ([^]CullConstants)(mapped)
-    r.cull_entry_buffer, mapped = renderer_create_mapped_upload_buffer(u64(FRAME_COUNT * MAX_INSTANCES * size_of(CullEntry)))
+    r.cull_entry_buffer, mapped = renderer_create_mapped_upload_buffer(u64(FRAME_COUNT * MAX_CULL_ENTRIES * size_of(CullEntry)))
     r.cull_entry_mapped = ([^]CullEntry)(mapped)
     r.cull_bounds_buffer, mapped = renderer_create_mapped_upload_buffer(u64(FRAME_COUNT * MAX_DRAWS * size_of(CullBounds)))
     r.cull_bounds_mapped = ([^]CullBounds)(mapped)
@@ -935,11 +1087,22 @@ renderer_create_culling :: proc() {
     // Kept across frames; starts zeroed, so the first frame draws everything late.
     r.visibility_buffer = create_buffer(MAX_DRAWS * size_of(u32), .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON)
     r.cull_readback = create_buffer(FRAME_COUNT * size_of(CullCounters), .READBACK, {}, {.COPY_DEST})
+    // Meshlets: the compacted indices of the visible ones (drawn as an index
+    // buffer), and the camera's meshlet visibility, kept across frames.
+    r.meshlet_index_buffer = create_buffer(MESHLET_INDEX_CAPACITY * size_of(u32), .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON)
+    r.meshlet_index_view = {
+        BufferLocation = r.meshlet_index_buffer->GetGPUVirtualAddress(),
+        SizeInBytes = MESHLET_INDEX_CAPACITY * size_of(u32),
+        Format = .R32_UINT,
+    }
+    r.meshlet_flag_buffer = create_buffer(MAX_MESHLET_FLAGS * size_of(u32), .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON)
 
     ranges := #partial [Cull_Root_Slot]d3d12.DESCRIPTOR_RANGE{
         .Hiz = {RangeType = .SRV, NumDescriptors = 1, BaseShaderRegister = 2},
         .Hiz_Source = {RangeType = .SRV, NumDescriptors = 1, BaseShaderRegister = 3},
         .Hiz_Target = {RangeType = .UAV, NumDescriptors = 1, BaseShaderRegister = 2},
+        // The whole SRV heap as raw buffers, for the meshes' index buffers.
+        .Mesh_Indices = {RangeType = .SRV, NumDescriptors = SRV_HEAP_CAPACITY, BaseShaderRegister = 0, RegisterSpace = 1},
     }
     params: [Cull_Root_Slot]d3d12.ROOT_PARAMETER
     params[.Constants] = {ParameterType = .CBV, Descriptor = {ShaderRegister = 0}}
@@ -949,7 +1112,10 @@ renderer_create_culling :: proc() {
     params[.Commands] = {ParameterType = .UAV, Descriptor = {ShaderRegister = 0}}
     params[.Instances] = {ParameterType = .UAV, Descriptor = {ShaderRegister = 1}}
     params[.Visibility] = {ParameterType = .UAV, Descriptor = {ShaderRegister = 3}}
-    for slot in ([]Cull_Root_Slot{.Hiz, .Hiz_Source, .Hiz_Target}) {
+    params[.Meshlets] = {ParameterType = .SRV, Descriptor = {ShaderRegister = 4}}
+    params[.Meshlet_Indices] = {ParameterType = .UAV, Descriptor = {ShaderRegister = 4}}
+    params[.Meshlet_Visibility] = {ParameterType = .UAV, Descriptor = {ShaderRegister = 5}}
+    for slot in ([]Cull_Root_Slot{.Hiz, .Hiz_Source, .Hiz_Target, .Mesh_Indices}) {
         params[slot] = {ParameterType = .DESCRIPTOR_TABLE, DescriptorTable = {NumDescriptorRanges = 1, pDescriptorRanges = &ranges[slot]}}
     }
     rs_desc := d3d12.ROOT_SIGNATURE_DESC{NumParameters = len(params), pParameters = &params[Cull_Root_Slot(0)]}
@@ -986,6 +1152,9 @@ renderer_release_culling :: proc() {
     r.instance_buffer->Release()
     r.visibility_buffer->Release()
     r.cull_readback->Release()
+    r.meshlet_index_buffer->Release()
+    r.meshlet_flag_buffer->Release()
+    if r.meshlet_buffer != nil do r.meshlet_buffer->Release()
     r.cull_root_signature->Release()
     r.draw_command_signature->Release()
 }
@@ -993,8 +1162,8 @@ renderer_release_culling :: proc() {
 // The cull and depth pyramid pipelines; rebuilt by shader hot-reload.
 renderer_create_cull_pipeline :: proc() {
     r := &g_renderer
-    entries := [2]cstring{"CSCull", "CSBuildHiZ"}
-    pipelines := [2]^^d3d12.IPipelineState{&r.cull_pipeline_state, &r.hiz_pipeline_state}
+    entries := [3]cstring{"CSCull", "CSCullMeshlets", "CSBuildHiZ"}
+    pipelines := [3]^^d3d12.IPipelineState{&r.cull_pipeline_state, &r.cull_meshlet_pipeline_state, &r.hiz_pipeline_state}
     for entry, i in entries {
         cs := renderer_compile_shader("shaders/cull.hlsl", entry, "cs")
         defer cs->Release()

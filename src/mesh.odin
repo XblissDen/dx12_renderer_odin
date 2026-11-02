@@ -6,6 +6,7 @@ import "core:strconv"
 import "core:strings"
 import "core:math/linalg"
 import "core:math"
+import "core:slice"
 
 MeshData :: struct {
     vertices: []Vertex,
@@ -13,6 +14,30 @@ MeshData :: struct {
     // Index ranges drawn with one material slot each; together they cover
     // all indices. An OBJ has a single submesh.
     submeshes: []Submesh,
+    // Every large submesh's meshlets (mesh_build_meshlets), in submesh order.
+    meshlets: []Meshlet,
+}
+
+// Submeshes with fewer triangles are culled whole: splitting them would cost
+// more cull work than it saves.
+MESHLET_MIN_SUBMESH_TRIANGLES :: 512
+MESHLET_MAX_VERTICES :: 64
+MESHLET_MAX_TRIANGLES :: 124
+
+// A small patch of a submesh's triangles, culled on its own
+// (renderer_frame_data.odin, cull.hlsl). Its triangles are contiguous in the
+// mesh's index buffer.
+Meshlet :: struct {
+    first_index, index_count: u32,
+    // Mesh-space bounding sphere.
+    center: [3]f32,
+    radius: f32,
+    // Normal cone: every triangle's face normal is within the cone's angle of
+    // `cone_axis`, and `cone_cutoff` is the angle's sine. A viewer then sees
+    // only back faces when dot(center - eye, axis) >= cutoff * |center - eye|
+    // + radius. 1 (never) for meshlets whose normals spread too far.
+    cone_axis: [3]f32,
+    cone_cutoff: f32,
 }
 
 MeshBounds :: struct {
@@ -25,6 +50,8 @@ Submesh :: struct {
     material_slot: u32,
     // Local-space bounds of just this range, for per-draw culling.
     bounds: MeshBounds,
+    // Its meshlets in MeshData.meshlets; none for small submeshes.
+    first_meshlet, meshlet_count: u32,
 }
 
 // One submesh covering the whole mesh, for single-material sources.
@@ -32,6 +59,151 @@ mesh_single_submesh :: proc(mesh: ^MeshData, allocator := context.allocator) {
     mesh.submeshes = make([]Submesh, 1, allocator)
     mesh.submeshes[0] = {index_count = u32(len(mesh.indices))}
     mesh_compute_submesh_bounds(mesh^)
+    mesh_build_meshlets(mesh, allocator)
+}
+
+// Splits each large submesh into meshlets and reorders its index range so
+// each meshlet's triangles are contiguous; the draws over the whole range are
+// unchanged. A meshlet grows from a seed triangle by repeatedly taking the
+// neighbouring triangle (sharing a vertex) that adds the fewest new vertices,
+// nearest the meshlet's centre on ties, until either limit is reached. That
+// keeps meshlets compact, so their bounds and normal cones are tight.
+mesh_build_meshlets :: proc(mesh: ^MeshData, allocator := context.allocator) {
+    meshlets := make([dynamic]Meshlet, allocator)
+    vertex_count := len(mesh.vertices)
+    // Per vertex: the triangles using it (offsets into one list), and the
+    // meshlet it last joined.
+    tri_offsets := make([]u32, vertex_count + 1, context.temp_allocator)
+    vertex_mark := make([]i32, vertex_count, context.temp_allocator)
+    fill := make([]u32, vertex_count, context.temp_allocator)
+    for submesh_index in 0..<len(mesh.submeshes) {
+        submesh := &mesh.submeshes[submesh_index]
+        submesh.first_meshlet, submesh.meshlet_count = u32(len(meshlets)), 0
+        triangle_count := int(submesh.index_count / 3)
+        if triangle_count < MESHLET_MIN_SUBMESH_TRIANGLES do continue
+        range := mesh.indices[submesh.first_index:][:triangle_count * 3]
+
+        slice.zero(tri_offsets)
+        for index in range do tri_offsets[index + 1] += 1
+        for v in 0..<vertex_count do tri_offsets[v + 1] += tri_offsets[v]
+        slice.zero(fill)
+        tri_list := make([]u32, len(range), context.temp_allocator)
+        for index, i in range {
+            tri_list[tri_offsets[index] + fill[index]] = u32(i / 3)
+            fill[index] += 1
+        }
+        for &mark in vertex_mark do mark = -1
+
+        used := make([]bool, triangle_count, context.temp_allocator)
+        reordered := make([dynamic]u32, 0, len(range), context.temp_allocator)
+        candidates := make([dynamic]u32, context.temp_allocator)
+        next_seed := 0
+        for {
+            for next_seed < triangle_count && used[next_seed] do next_seed += 1
+            if next_seed == triangle_count do break
+            meshlet_id := i32(len(meshlets))
+            first := len(reordered)
+            vertices_in := 0
+            centroid_sum: [3]f32
+            clear(&candidates)
+            append(&candidates, u32(next_seed))
+            for len(reordered) - first < MESHLET_MAX_TRIANGLES * 3 {
+                // Out of neighbours (a separate piece of the surface): go on
+                // with the next unused triangle in index order, usually close
+                // by, rather than leave the meshlet small.
+                if len(candidates) == 0 {
+                    for next_seed < triangle_count && used[next_seed] do next_seed += 1
+                    if next_seed == triangle_count do break
+                    append(&candidates, u32(next_seed))
+                }
+                // The candidate adding the fewest vertices, then nearest.
+                best, best_new, best_distance := -1, 4, max(f32)
+                centroid := centroid_sum / f32(max(vertices_in, 1))
+                for c := 0; c < len(candidates); {
+                    t := candidates[c]
+                    if used[t] {
+                        unordered_remove(&candidates, c)
+                        continue
+                    }
+                    new_vertices := 0
+                    center: [3]f32
+                    for k in 0..<3 {
+                        v := range[t * 3 + u32(k)]
+                        if vertex_mark[v] != meshlet_id do new_vertices += 1
+                        center += mesh.vertices[v].position / 3
+                    }
+                    d := center - centroid
+                    distance := d.x * d.x + d.y * d.y + d.z * d.z
+                    if new_vertices < best_new || (new_vertices == best_new && distance < best_distance) {
+                        best, best_new, best_distance = c, new_vertices, distance
+                    }
+                    c += 1
+                }
+                // Every candidate was already taken: refill (above) and look again.
+                if best < 0 && len(candidates) == 0 do continue
+                if best < 0 || vertices_in + best_new > MESHLET_MAX_VERTICES do break
+                t := candidates[best]
+                unordered_remove(&candidates, best)
+                used[t] = true
+                for k in 0..<3 {
+                    v := range[t * 3 + u32(k)]
+                    append(&reordered, v)
+                    if vertex_mark[v] == meshlet_id do continue
+                    vertex_mark[v] = meshlet_id
+                    vertices_in += 1
+                    centroid_sum += mesh.vertices[v].position
+                    for neighbour in tri_list[tri_offsets[v]:tri_offsets[v + 1]] {
+                        if !used[neighbour] do append(&candidates, neighbour)
+                    }
+                }
+            }
+            meshlet := mesh_meshlet_bounds(mesh.vertices, reordered[first:])
+            meshlet.first_index = submesh.first_index + u32(first)
+            meshlet.index_count = u32(len(reordered) - first)
+            append(&meshlets, meshlet)
+            submesh.meshlet_count += 1
+        }
+        copy(range, reordered[:])
+    }
+    mesh.meshlets = meshlets[:]
+}
+
+// A meshlet's bounding sphere (around its box's centre) and normal cone.
+// Face normals take their side from the vertex normals, so they point out of
+// the surface whatever the winding.
+mesh_meshlet_bounds :: proc(vertices: []Vertex, indices: []u32) -> (meshlet: Meshlet) {
+    low, high := linalg.Vector3f32(max(f32)), linalg.Vector3f32(-max(f32))
+    for index in indices {
+        p := linalg.Vector3f32(vertices[index].position)
+        low, high = linalg.min(low, p), linalg.max(high, p)
+    }
+    center := (low + high) * 0.5
+    for index in indices {
+        meshlet.radius = max(meshlet.radius, linalg.length(linalg.Vector3f32(vertices[index].position) - center))
+    }
+    meshlet.center = center
+
+    normals := make([]linalg.Vector3f32, len(indices) / 3, context.temp_allocator)
+    axis: linalg.Vector3f32
+    for t in 0..<len(normals) {
+        a, b, c := vertices[indices[t * 3]], vertices[indices[t * 3 + 1]], vertices[indices[t * 3 + 2]]
+        n := linalg.cross(linalg.Vector3f32(b.position - a.position), linalg.Vector3f32(c.position - a.position))
+        if linalg.length(n) < 1e-12 do continue
+        n = linalg.normalize(n)
+        if linalg.dot(n, linalg.Vector3f32(a.normal + b.normal + c.normal)) < 0 do n = -n
+        normals[t] = n
+        axis += n
+    }
+    meshlet.cone_cutoff = 1
+    if linalg.length(axis) < 1e-6 do return
+    axis = linalg.normalize(axis)
+    min_dot := f32(1)
+    for n in normals do if n != {} do min_dot = min(min_dot, linalg.dot(n, axis))
+    // Within about 84 degrees of the axis, or the cone never culls anything.
+    if min_dot <= 0.1 do return
+    meshlet.cone_axis = axis
+    meshlet.cone_cutoff = math.sqrt(1 - min_dot * min_dot)
+    return
 }
 
 mesh_compute_submesh_bounds :: proc(mesh: MeshData) {
@@ -53,6 +225,7 @@ mesh_destroy :: proc(mesh: MeshData) {
     delete(mesh.vertices)
     delete(mesh.indices)
     delete(mesh.submeshes)
+    delete(mesh.meshlets)
 }
 
 mesh_compute_bounds :: proc(mesh: MeshData) -> MeshBounds{

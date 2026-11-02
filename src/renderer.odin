@@ -97,6 +97,11 @@ GpuMesh :: struct {
     index_buffer: ^d3d12.IResource,
     index_buffer_view: d3d12.INDEX_BUFFER_VIEW,
     index_count: u32,
+    // Its first meshlet in the renderer's meshlet buffer, and the index
+    // buffer's raw SRV (heap slot), which the cull pass copies meshlets'
+    // triangles from; 0 until renderer_rebuild_meshlets.
+    first_meshlet: u32,
+    index_srv_index: u32,
 }
 
 GpuTexture :: struct {resource: ^d3d12.IResource, srv_index: u32}
@@ -350,8 +355,15 @@ Renderer :: struct {
     hiz_width, hiz_height, hiz_mip_count: u32,
     hiz_srv_start, hiz_uav_start: u32,
     occlusion_culling_enabled: bool,
+    // Meshlet culling (mesh.odin, renderer_frame_data.odin): every mesh's
+    // meshlets, the compacted index buffer the cull pass fills with the
+    // visible ones' triangles (and its view), and the camera's meshlet
+    // visibility, kept across frames.
+    meshlet_buffer, meshlet_index_buffer, meshlet_flag_buffer: ^d3d12.IResource,
+    meshlet_index_view: d3d12.INDEX_BUFFER_VIEW,
+    meshlet_culling_enabled: bool,
     cull_root_signature: ^d3d12.IRootSignature,
-    cull_pipeline_state, hiz_pipeline_state: ^d3d12.IPipelineState,
+    cull_pipeline_state, cull_meshlet_pipeline_state, hiz_pipeline_state: ^d3d12.IPipelineState,
     // ExecuteIndirect's layout of IndirectDraw.
     draw_command_signature: ^d3d12.ICommandSignature,
 
@@ -831,7 +843,7 @@ renderer_pipeline_slots :: proc() -> []^^d3d12.IPipelineState {
         &r.taa_resolve_pipeline_state, &r.sky_pipeline_state,
         &r.irradiance_pipeline_state, &r.prefilter_pipeline_state,
         &r.gtao_pipeline_state, &r.ao_blur_pipeline_state, &r.ssr_pipeline_state,
-        &r.cluster_pipeline_state, &r.cull_pipeline_state, &r.hiz_pipeline_state,
+        &r.cluster_pipeline_state, &r.cull_pipeline_state, &r.cull_meshlet_pipeline_state, &r.hiz_pipeline_state,
         &r.fog_inject_pipeline_state, &r.fog_integrate_pipeline_state, &r.fog_apply_pipeline_state,
         &r.selection_pipeline_state, &r.selection_outline_pipeline_state,
         &r.debug_line_pipeline_states[0], &r.debug_line_pipeline_states[1],
@@ -962,6 +974,7 @@ renderer_init :: proc() {
 
     r.frustum_culling_enabled = true
     r.occlusion_culling_enabled = true
+    r.meshlet_culling_enabled = true
 
     when ODIN_DEBUG {
         debug: ^d3d12.IDebug
@@ -1908,6 +1921,57 @@ renderer_load_textures :: proc(){
             texture_data_destroy(&texture)
         }
     }
+}
+
+// Gathers every loaded mesh's meshlets into the meshlet buffer the cull pass
+// reads, after the startup uploads and each import (removed meshes keep
+// their old entries, which no draw refers to). A mesh's index buffer gets a
+// raw SRV the first time, which the meshlets refer to.
+renderer_rebuild_meshlets :: proc() {
+    r := &g_renderer
+    renderer_wait_for_gpu()
+    meshlets := make([dynamic]GpuMeshlet, context.temp_allocator)
+    for &gpu, handle in r.meshes {
+        if handle == 0 || gpu.index_buffer == nil do continue
+        if gpu.index_srv_index == 0 {
+            gpu.index_srv_index = renderer_alloc_srv()
+            srv := d3d12.SHADER_RESOURCE_VIEW_DESC{
+                Format = .R32_TYPELESS,
+                ViewDimension = .BUFFER,
+                Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
+            }
+            srv.Buffer = {NumElements = gpu.index_count, Flags = {.RAW}}
+            r.device->CreateShaderResourceView(gpu.index_buffer, &srv, renderer_srv_cpu(gpu.index_srv_index))
+        }
+        gpu.first_meshlet = u32(len(meshlets))
+        for meshlet in g_assets.meshes[handle].data.meshlets {
+            append(&meshlets, GpuMeshlet{
+                center = meshlet.center,
+                radius = meshlet.radius,
+                cone_axis = meshlet.cone_axis,
+                cone_cutoff = meshlet.cone_cutoff,
+                first_index = meshlet.first_index,
+                index_count = meshlet.index_count,
+                index_buffer = gpu.index_srv_index,
+            })
+        }
+    }
+    // The cull pass always binds the buffer.
+    if len(meshlets) == 0 do append(&meshlets, GpuMeshlet{})
+
+    size := u64(len(meshlets) * size_of(GpuMeshlet))
+    staging, mapped := renderer_create_mapped_upload_buffer(size)
+    defer staging->Release()
+    runtime.mem_copy(mapped, raw_data(meshlets), int(size))
+    if r.meshlet_buffer != nil do r.meshlet_buffer->Release()
+    r.meshlet_buffer = create_buffer(size, .DEFAULT, {}, d3d12.RESOURCE_STATE_COMMON)
+    dx_check(r.command_allocators[0]->Reset())
+    dx_check(r.command_list->Reset(r.command_allocators[0], nil))
+    r.command_list->CopyBufferRegion(r.meshlet_buffer, 0, staging, 0, size)
+    dx_check(r.command_list->Close())
+    lists := []^d3d12.ICommandList{r.command_list}
+    r.command_queue->ExecuteCommandLists(u32(len(lists)), raw_data(lists))
+    renderer_wait_for_gpu()
 }
 
 // Frees a removed asset's GPU data; the GPU must be idle.
