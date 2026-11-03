@@ -314,7 +314,12 @@ how probes capture and shade.
 - **Placing**: move the probe to where reflections should be seen from
   (usually the middle of a room), and scale it so the box matches the room:
   Scale is the box's size in each axis. Surfaces outside every box keep the
-  environment's reflections.
+  environment's reflections, so a box that misses a model's far walls leaves
+  them reflecting the sky.
+- **Fit box to selected models**: select the models, then Ctrl+click the
+  probe last (the Inspector shows the last one clicked). The button sets the
+  probe's box around their meshes and their descendants' (in its parent's
+  space, unrotated, 0.1 units larger on each side) as one undo step.
 - **Blend distance**: how far inside its faces the probe fades in, so
   neighbouring or nested boxes blend instead of meeting at a seam.
 - **Box projection** (on by default): reflections line up with the room's
@@ -336,7 +341,8 @@ shade.
 
 - **Placing**: scale the box to cover the space whose diffuse light it should
   hold, such as a room or a building. Cells fill the box evenly, so scaling
-  it spreads them further apart.
+  it spreads them further apart. **Fit box to selected models** works as for
+  [reflection probes](#reflection-probes).
 - **Cells along X, Y and Z** (1 to 32 each): more cells follow the light more
   closely, but each takes a frame to capture. About one cell per meter suits
   rooms. Changing them starts the volume over.

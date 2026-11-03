@@ -65,6 +65,63 @@ editor_selection_sphere :: proc(scene: ^Scene) -> (center: alg.Vector3f32, radiu
     return center, max(radius, 0.05), true
 }
 
+// The box, in the space of `box`'s parent, around every mesh of the other
+// selected entities and their descendants: each mesh's local bounds through
+// its world matrix and back into that space. Not ok when none has a mesh.
+editor_fit_box_bounds :: proc(scene: ^Scene, box: int) -> (minimum, maximum: alg.Vector3f32, ok: bool) {
+    to_space := alg.matrix4_inverse_f32(scene_parent_matrix(scene, box))
+    minimum = alg.Vector3f32(max(f32))
+    maximum = alg.Vector3f32(-max(f32))
+    for index in editor_selected_subtrees(scene) {
+        if index == box do continue
+        bounds, world := editor_entity_bounds(scene, Entity(index)) or_continue
+        for corner in 0..<8 {
+            local := alg.Vector3f32{
+                bounds.maximum.x if corner & 1 != 0 else bounds.minimum.x,
+                bounds.maximum.y if corner & 2 != 0 else bounds.minimum.y,
+                bounds.maximum.z if corner & 4 != 0 else bounds.minimum.z,
+            }
+            point := alg.mul(to_space * world, alg.Vector4f32{local.x, local.y, local.z, 1}).xyz
+            minimum = alg.min(minimum, point)
+            maximum = alg.max(maximum, point)
+        }
+        ok = true
+    }
+    return
+}
+
+// Fits a reflection probe's or irradiance volume's box around the other
+// selected models, unrotated and a little larger than them, as one undo step.
+// Returns whether there was anything to fit to.
+editor_fit_box_to_selection :: proc(scene: ^Scene, box: int) -> bool {
+    editor_finish_edit()
+    minimum, maximum := editor_fit_box_bounds(scene, box) or_return
+    margin :: f32(0.1)
+    fields := [3]EditorField{.Position, .Rotation, .Scale}
+    before: [3][3]f32
+    for field, i in fields do before[i] = editor_value(scene, box, field)
+    editor_apply_value(scene, Entity(box), .Position, (minimum + maximum) * 0.5)
+    editor_apply_value(scene, Entity(box), .Rotation, {0, 0, 0})
+    editor_apply_value(scene, Entity(box), .Scale, maximum - minimum + 2 * margin)
+    edits: [3]EditorFieldEdit
+    for field, i in fields do edits[i] = {Entity(box), field, before[i], editor_value(scene, box, field)}
+    editor_push_field_edits(edits[:], Entity(box))
+    return true
+}
+
+// The Inspector's fit button for a probe or volume `index` (the primary
+// selection), disabled until other models are selected too.
+editor_draw_fit_box_button :: proc(scene: ^Scene, index: int) {
+    _, _, can_fit := editor_fit_box_bounds(scene, index)
+    ui_begin_disabled(!can_fit)
+    if ui_button("Fit box to selected models") do editor_fit_box_to_selection(scene, index)
+    ui_end_disabled()
+    if !can_fit {
+        debug_ui_text("To fit it, select the models, then")
+        debug_ui_text("Ctrl+click this entity last.")
+    }
+}
+
 editor_focus_selected :: proc(scene: ^Scene) {
     center, radius, ok := editor_selection_sphere(scene)
     camera_index := camera_find_active(scene)

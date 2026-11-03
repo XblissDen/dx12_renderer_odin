@@ -589,6 +589,7 @@ editor_draw_reflection_probe_controls :: proc(scene: ^Scene, index: int) {
 
     editor_drag_number(scene, index, .Probe_Blend_Distance, "Blend distance", 0.05, 0.0, 100.0)
     editor_checkbox(scene, index, .Probe_Box_Projection, "Box projection")
+    editor_draw_fit_box_button(scene, index)
 
     p := &g_renderer.probes
     slot := renderer_probe_slot(index)
@@ -620,6 +621,7 @@ editor_draw_irradiance_volume_controls :: proc(scene: ^Scene, index: int) {
         editor_track_edit(scene, index, .Volume_Cells, before, changed)
     }
     editor_drag_number(scene, index, .Volume_Blend_Distance, "Blend distance", 0.05, 0.0, 100.0)
+    editor_draw_fit_box_button(scene, index)
 
     v := &g_renderer.volumes
     text_buffer: [128]u8
