@@ -11,12 +11,14 @@ EditorViewport :: struct {
     icons: bool,
     // Every light's range and orbit, not only the selected lights'.
     all_light_ranges: bool,
-    // Every reflection probe's box, not only the selected probes'.
+    // Every reflection probe's and irradiance volume's box, not only the
+    // selected ones'.
     all_probe_boxes: bool,
     mesh_bounds: bool,
 }
 
 PROBE_DISPLAY_COLOR :: [3]u8{150, 215, 255}
+VOLUME_DISPLAY_COLOR :: [3]u8{255, 200, 120}
 g_editor_viewport := EditorViewport{icons = true}
 
 ICON_RADIUS_PIXELS :: f32(10)
@@ -146,6 +148,14 @@ editor_draw_icons :: proc(scene: ^Scene) {
             color := gizmo_color(c.r, c.g, c.b)
             ui_draw_circle(center.x, center.y, radius * 0.7, color, 1.5)
             ui_draw_circle(center.x - radius * 0.25, center.y - radius * 0.25, radius * 0.2, color, 0)
+        } else if scene.has_irradiance_volume[index] {
+            // A 3 x 3 grid of dots, like its cells.
+            c := VOLUME_DISPLAY_COLOR
+            color := gizmo_color(c.r, c.g, c.b)
+            ui_draw_circle(center.x, center.y, radius * 0.8, color, 1.5)
+            for y in -1..=1 do for x in -1..=1 {
+                ui_draw_circle(center.x + f32(x) * radius * 0.4, center.y + f32(y) * radius * 0.4, radius * 0.1, color, 0)
+            }
         } else {
             color := gizmo_color(225, 225, 230)
             corners := [4][2]f32{{0, -1}, {1, 0}, {0, 1}, {-1, 0}}
@@ -274,6 +284,32 @@ editor_debug_lines :: proc(scene: ^Scene) -> []DebugLineVertex {
             unit_box := MeshBounds{minimum = {-0.5, -0.5, -0.5}, maximum = {0.5, 0.5, 0.5}}
             editor_lines_box(&lines, unit_box, scene_world_matrix(scene, i), gizmo_color(c.r, c.g, c.b, alpha))
         }
+        if scene.has_irradiance_volume[i] && (selected || g_editor_viewport.all_probe_boxes) {
+            c := VOLUME_DISPLAY_COLOR
+            world := scene_world_matrix(scene, i)
+            unit_box := MeshBounds{minimum = {-0.5, -0.5, -0.5}, maximum = {0.5, 0.5, 0.5}}
+            editor_lines_box(&lines, unit_box, world, gizmo_color(c.r, c.g, c.b, alpha))
+            // The selected volume's cell centers, as small crosses.
+            cells := scene.irradiance_volumes[i].cells
+            if selected && renderer_volume_cell_count(cells) <= 4096 {
+                axes := [3]alg.Vector3f32{
+                    {world[0, 0], world[1, 0], world[2, 0]},
+                    {world[0, 1], world[1, 1], world[2, 1]},
+                    {world[0, 2], world[1, 2], world[2, 2]},
+                }
+                arm := 0.15 * min(alg.length(axes[0]) / f32(cells.x), alg.length(axes[1]) / f32(cells.y), alg.length(axes[2]) / f32(cells.z))
+                dot_color := gizmo_color(c.r, c.g, c.b, 160)
+                for z in 0..<cells.z do for y in 0..<cells.y do for x in 0..<cells.x {
+                    local := (alg.Vector3f32{f32(x), f32(y), f32(z)} + 0.5) / alg.Vector3f32{f32(cells.x), f32(cells.y), f32(cells.z)} - 0.5
+                    point := (world * alg.Vector4f32{local.x, local.y, local.z, 1}).xyz
+                    for axis in 0..<3 {
+                        direction := alg.Vector3f32{}
+                        direction[axis] = arm
+                        editor_line(&lines, point - direction, point + direction, dot_color)
+                    }
+                }
+            }
+        }
         if !selected && !g_editor_viewport.all_light_ranges do continue
 
         if scene.has_point_light[i] {
@@ -310,6 +346,6 @@ editor_debug_lines :: proc(scene: ^Scene) -> []DebugLineVertex {
 editor_draw_viewport_controls :: proc() {
     ui_checkbox("Icons for entities without a mesh", &g_editor_viewport.icons)
     ui_checkbox("Ranges of all lights", &g_editor_viewport.all_light_ranges)
-    ui_checkbox("Boxes of all reflection probes", &g_editor_viewport.all_probe_boxes)
+    ui_checkbox("Boxes of all probes and volumes", &g_editor_viewport.all_probe_boxes)
     ui_checkbox("Mesh bounds", &g_editor_viewport.mesh_bounds)
 }

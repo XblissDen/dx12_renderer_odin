@@ -11,6 +11,14 @@ package main
 // One probe is captured per frame, when it is new or has moved, and all of
 // them again on request or when the environment changes. Captures reuse the
 // frame's GPU culling with six more views and its shadow maps.
+//
+// Irradiance volumes use the same capture for diffuse light: a volume entity
+// holds a grid of cells filling its box, and on frames with no probe to
+// capture, one cell is captured from its center. A compute pass reduces the
+// capture to L1 spherical harmonics (the light's average plus one linear
+// term per axis, for each color), which the lit pass interpolates between
+// cells and evaluates along the surface normal. Captures shade with the
+// volumes captured so far, so each further pass over the cells adds a bounce.
 
 import "core:math"
 import alg "core:math/linalg"
@@ -98,6 +106,120 @@ Probes :: struct {
     downsample_pipeline_state, prefilter_pipeline_state: ^d3d12.IPipelineState,
 }
 
+MAX_IRRADIANCE_VOLUMES :: 4
+IRRADIANCE_VOLUME_MAX_CELLS :: 32
+// The atlas holds every volume's cells, each slot a block of up to 32^3
+// cells along z. A block has four planes along x: the red, green and blue
+// coefficients (times the cell's validity), then the validity alone, so
+// that filtering both and dividing weights the valid cells only.
+VOLUME_PLANES :: 4
+VOLUME_ATLAS_WIDTH :: VOLUME_PLANES * IRRADIANCE_VOLUME_MAX_CELLS
+VOLUME_ATLAS_HEIGHT :: IRRADIANCE_VOLUME_MAX_CELLS
+VOLUME_ATLAS_DEPTH :: MAX_IRRADIANCE_VOLUMES * IRRADIANCE_VOLUME_MAX_CELLS
+VOLUME_FORMAT :: dxgi.FORMAT.R16G16B16A16_FLOAT
+// The capture level the projection reads: 32 x 32 texels per face.
+VOLUME_SH_LEVEL :: 3
+// Passes over every cell: the first gives one bounce of light, each further
+// one another.
+DEFAULT_VOLUME_BOUNCES :: 2
+MAX_VOLUME_BOUNCES :: 8
+// Where a cell is captured from, in cells from its center: the center first,
+// and while the capture comes out invalid (inside a wall or a model), the
+// next of these, as DDGI moves its probes out of geometry.
+VOLUME_CELL_OFFSETS := [?][3]f32{
+    {0, 0, 0},
+    {0.45, 0, 0}, {-0.45, 0, 0}, {0, 0.45, 0}, {0, -0.45, 0}, {0, 0, 0.45}, {0, 0, -0.45},
+    {0.35, 0.35, 0.35}, {-0.35, 0.35, 0.35}, {0.35, -0.35, 0.35}, {-0.35, -0.35, 0.35},
+    {0.35, 0.35, -0.35}, {-0.35, 0.35, -0.35}, {0.35, -0.35, -0.35}, {-0.35, -0.35, -0.35},
+}
+// Below this validity a capture counts as invalid and moves on.
+VOLUME_RETRY_VALIDITY :: 0.5
+
+// A cell captured in some frame, whose validity is read back when that
+// frame's slot comes round again.
+VolumeCapture :: struct {
+    active: bool,
+    slot, cell: int,
+    offset: u8,
+    generation: u32,
+}
+
+// Per volume in use, read by the lit pass; laid out like scene.hlsl's.
+GpuIrradianceVolume :: struct {
+    // From world space into the box's unit cube and back, transposed.
+    world_to_box: alg.Matrix4f32,
+    box_to_world: alg.Matrix4f32,
+    // The world length of the box's edges.
+    size: [3]f32,
+    blend_distance: f32,
+    cells: [3]u32,
+    // Its block's first slice in the atlas.
+    first_z: u32,
+    // How far along the normal the lookup moves, away from the surface the
+    // nearest cells may be behind.
+    normal_bias: f32,
+    _pad: [7]f32,
+}
+#assert(size_of(GpuIrradianceVolume) == 192)
+
+IrradianceVolumes :: struct {
+    enabled: bool,
+    // Passes over the cells (DEFAULT_VOLUME_BOUNCES).
+    bounces: i32,
+    // Debug view: the lit pass shows only the diffuse ambient light.
+    show: bool,
+
+    // Each slot's entity (-1: free), what its cells were captured for (a
+    // change of cells clears the block; a move captures again over the old
+    // values), and how many cells it has captured, over every pass.
+    slot_entity: [MAX_IRRADIANCE_VOLUMES]int,
+    captured_world: [MAX_IRRADIANCE_VOLUMES]alg.Matrix4f32,
+    captured_cells: [MAX_IRRADIANCE_VOLUMES][3]i32,
+    progress: [MAX_IRRADIANCE_VOLUMES]int,
+    clear_pending: [MAX_IRRADIANCE_VOLUMES]bool,
+    // Per cell, the VOLUME_CELL_OFFSETS entry it is captured from; the cells
+    // waiting to be captured again from their next one (before the pass goes
+    // on); and each slot's resets, so that results of captures made before
+    // one are ignored.
+    cell_offset: [MAX_IRRADIANCE_VOLUMES][dynamic]u8,
+    retry: [MAX_IRRADIANCE_VOLUMES][dynamic]int,
+    generation: [MAX_IRRADIANCE_VOLUMES]u32,
+    // This frame: the volumes in the GPU buffer and in the scene, and the
+    // cell being captured (slot -1: none) with its offset.
+    count, scene_count: int,
+    capture_slot: int,
+    capture_cell: [3]i32,
+    capture_offset: [3]f32,
+    // Per frame slot: the cell captured then. The projection also writes the
+    // cell's validity to `result`, copied to `readback`.
+    captures: [FRAME_COUNT]VolumeCapture,
+    result, readback: ^d3d12.IResource,
+
+    atlas: ^d3d12.IResource,
+    srv_index, uav_index: u32,
+    // Per frame slot: the GpuIrradianceVolume list.
+    buffer: ^d3d12.IResource,
+    mapped: [^]GpuIrradianceVolume,
+
+    // The projection and clear passes (shaders/irradiance_volume.hlsl), and
+    // the capture pipelines: like the probes', but drawing back faces too, so
+    // a cell can tell it is inside a wall.
+    root_signature: ^d3d12.IRootSignature,
+    project_pipeline_state, clear_pipeline_state: ^d3d12.IPipelineState,
+    capture_pipeline_states: [Draw_Variant]^d3d12.IPipelineState,
+}
+
+// The root constants of the projection and clear passes (b0).
+VolumePassConstants :: struct {
+    cell: [3]u32,
+    first_z: u32,
+    // Where the cell was captured from, in cells from its center.
+    offset: [3]f32,
+    _pad: f32,
+}
+
+Volume_Root_Slot :: enum u32 {Constants, Capture, Atlas, Result}
+
 renderer_create_probes :: proc() {
     r := &g_renderer
     p := &r.probes
@@ -176,6 +298,43 @@ renderer_create_probes :: proc() {
     p.sky_constant_buffer, mapped = renderer_create_mapped_upload_buffer(u64(FRAME_COUNT * PROBE_FACES * size_of(SkyConstants)))
     p.sky_constants = ([^]SkyConstants)(mapped)
 
+    // The volumes' atlas, at rest a pixel-shader resource; the projection
+    // and clear passes write it as a UAV.
+    v := &r.volumes
+    for &entity in v.slot_entity do entity = -1
+    v.capture_slot = -1
+    atlas_desc := d3d12.RESOURCE_DESC{
+        Dimension = .TEXTURE3D,
+        Width = VOLUME_ATLAS_WIDTH,
+        Height = VOLUME_ATLAS_HEIGHT,
+        DepthOrArraySize = VOLUME_ATLAS_DEPTH,
+        MipLevels = 1,
+        Format = VOLUME_FORMAT,
+        SampleDesc = {Count = 1},
+        Flags = {.ALLOW_UNORDERED_ACCESS},
+    }
+    dx_check(r.device->CreateCommittedResource(
+        &heap_props, {}, &atlas_desc, {.PIXEL_SHADER_RESOURCE}, nil, d3d12.IResource_UUID, (^rawptr)(&v.atlas),
+    ))
+    v.srv_index = renderer_alloc_srv()
+    v.uav_index = renderer_alloc_srv()
+    atlas_srv := d3d12.SHADER_RESOURCE_VIEW_DESC{
+        Format = VOLUME_FORMAT,
+        ViewDimension = .TEXTURE3D,
+        Shader4ComponentMapping = d3d12.DEFAULT_SHADER_4_COMPONENT_MAPPING,
+    }
+    atlas_srv.Texture3D = {MipLevels = 1}
+    r.device->CreateShaderResourceView(v.atlas, &atlas_srv, renderer_srv_cpu(v.srv_index))
+    atlas_uav := d3d12.UNORDERED_ACCESS_VIEW_DESC{Format = VOLUME_FORMAT, ViewDimension = .TEXTURE3D}
+    atlas_uav.Texture3D = {WSize = VOLUME_ATLAS_DEPTH}
+    r.device->CreateUnorderedAccessView(v.atlas, nil, &atlas_uav, renderer_srv_cpu(v.uav_index))
+    v.buffer, mapped = renderer_create_mapped_upload_buffer(u64(FRAME_COUNT * MAX_IRRADIANCE_VOLUMES * size_of(GpuIrradianceVolume)))
+    v.mapped = ([^]GpuIrradianceVolume)(mapped)
+    // A UAV between captures; committed buffers start in COMMON, which a
+    // UAV access promotes from.
+    v.result = create_buffer(16, .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON)
+    v.readback = create_buffer(FRAME_COUNT * 16, .READBACK, {}, {.COPY_DEST})
+
     p.pass_constant_buffer, mapped = renderer_create_mapped_upload_buffer(u64(PROBE_PASS_COUNT * size_of(PrefilterConstants)))
     passes := ([^]PrefilterConstants)(mapped)
     for face in 0..<PROBE_FACES {
@@ -203,6 +362,16 @@ renderer_release_probes :: proc() {
     p.frame_constant_buffer->Release()
     p.sky_constant_buffer->Release()
     p.pass_constant_buffer->Release()
+    v := &g_renderer.volumes
+    v.atlas->Release()
+    v.buffer->Release()
+    v.result->Release()
+    v.readback->Release()
+    v.root_signature->Release()
+    for slot in 0..<MAX_IRRADIANCE_VOLUMES {
+        delete(v.cell_offset[slot])
+        delete(v.retry[slot])
+    }
 }
 
 // A render target view of one face (array slice) of one level.
@@ -224,11 +393,167 @@ renderer_probe_prefilter_pass :: proc(level, face: int) -> int {
 
 // Every probe is captured again, one per frame: after the environment or
 // lighting changed, or a new scene was loaded (with `forget`, which also
-// frees the slots of entities that no longer exist).
-renderer_recapture_probes :: proc(forget := false) {
+// frees the slots of entities that no longer exist). The volumes too, unless
+// only the probes were asked for.
+renderer_recapture_probes :: proc(forget := false, volumes := true) {
     p := &g_renderer.probes
     p.captured = {}
     if forget do for &entity in p.slot_entity do entity = -1
+    if volumes do renderer_recapture_volumes(forget = forget)
+}
+
+// Every volume's cells are captured again over their current values, or,
+// with `forget`, from cleared slots (a new scene).
+renderer_recapture_volumes :: proc(forget := false) {
+    v := &g_renderer.volumes
+    v.progress = {}
+    if forget do for &entity in v.slot_entity do entity = -1
+}
+
+// Captures one volume's cells again, keeping their values until replaced.
+renderer_recapture_volume :: proc(entity: int) {
+    v := &g_renderer.volumes
+    if slot := renderer_volume_slot(entity); slot >= 0 do v.progress[slot] = 0
+}
+
+renderer_volume_slot :: proc(entity: int) -> int {
+    for owner, slot in g_renderer.volumes.slot_entity do if owner == entity do return slot
+    return -1
+}
+
+renderer_volume_cell_count :: proc(cells: [3]i32) -> int {
+    return int(cells.x) * int(cells.y) * int(cells.z)
+}
+
+// A volume's progress: cells captured in the current pass, the pass (from
+// 0; `bounces` once complete), and whether it has a slot at all.
+renderer_volume_progress :: proc(entity: int) -> (cells, pass: int, ok: bool) {
+    v := &g_renderer.volumes
+    slot := renderer_volume_slot(entity)
+    if slot < 0 do return 0, 0, false
+    count := renderer_volume_cell_count(v.captured_cells[slot])
+    total := count * int(v.bounces)
+    if v.progress[slot] >= total && len(v.retry[slot]) == 0 do return count, int(v.bounces), true
+    if v.progress[slot] >= total do return count, int(v.bounces) - 1, true
+    return v.progress[slot] % count, v.progress[slot] / count, true
+}
+
+// Gives each volume in the scene a slot, picks this frame's cell to capture
+// if no reflection probe takes the capture, and lists the volumes for the
+// lit pass (partly captured ones too: cells not captured yet have no
+// weight). Volumes beyond MAX_IRRADIANCE_VOLUMES are ignored.
+renderer_update_volumes :: proc(scene: ^Scene) {
+    r := &g_renderer
+    v := &r.volumes
+    is_volume :: proc(scene: ^Scene, index: int) -> bool {
+        return index < scene.entity_count && scene.alive[index] && scene.has_transform[index] && scene.has_irradiance_volume[index]
+    }
+    for &entity in v.slot_entity do if entity >= 0 && !is_volume(scene, entity) do entity = -1
+
+    v.count, v.scene_count = 0, 0
+    v.capture_slot = -1
+    v.captures[r.frame_slot].active = false
+    gpu := v.mapped[int(r.frame_slot) * MAX_IRRADIANCE_VOLUMES:]
+    for i in 0..<scene.entity_count {
+        if !is_volume(scene, i) do continue
+        v.scene_count += 1
+        volume := scene.irradiance_volumes[i]
+        world := scene_world_matrix(scene, i)
+        slot := renderer_volume_slot(i)
+        if slot < 0 {
+            for entity, s in v.slot_entity do if entity < 0 && slot < 0 do slot = s
+            if slot < 0 do continue
+            v.slot_entity[slot] = i
+            v.captured_cells[slot] = {}
+        }
+        count := renderer_volume_cell_count(volume.cells)
+        // New cells start from nothing; a move captures over the old values.
+        // Either way the cells look for their capture points again.
+        moved := v.captured_world[slot] != world
+        if v.captured_cells[slot] != volume.cells {
+            v.captured_cells[slot] = volume.cells
+            v.clear_pending[slot] = true
+            resize(&v.cell_offset[slot], count)
+        }
+        if moved || v.clear_pending[slot] {
+            v.captured_world[slot] = world
+            v.progress[slot] = 0
+            for &offset in v.cell_offset[slot] do offset = 0
+            clear(&v.retry[slot])
+            v.generation[slot] += 1
+        }
+        if !v.enabled do continue
+
+        // Cells moving out of geometry go first, then the pass goes on.
+        if v.capture_slot < 0 && r.probes.capture_slot < 0 {
+            index := -1
+            if len(v.retry[slot]) > 0 {
+                index = pop(&v.retry[slot])
+            } else if v.progress[slot] < count * int(v.bounces) {
+                index = v.progress[slot] % count
+                v.progress[slot] += 1
+            }
+            if index >= 0 {
+                cell := [3]i32{i32(index) % volume.cells.x, i32(index) / volume.cells.x % volume.cells.y, i32(index) / (volume.cells.x * volume.cells.y)}
+                offset := v.cell_offset[slot][index]
+                v.capture_slot = slot
+                v.capture_cell = cell
+                v.capture_offset = VOLUME_CELL_OFFSETS[offset]
+                v.captures[r.frame_slot] = {active = true, slot = slot, cell = index, offset = offset, generation = v.generation[slot]}
+                local := (alg.Vector3f32{f32(cell.x), f32(cell.y), f32(cell.z)} + 0.5 + v.capture_offset) / alg.Vector3f32{f32(volume.cells.x), f32(volume.cells.y), f32(volume.cells.z)} - 0.5
+                center := world * alg.Vector4f32{local.x, local.y, local.z, 1}
+                r.probes.capture_position = center.xyz
+            }
+        }
+
+        size := alg.Vector3f32{
+            alg.length(alg.Vector3f32{world[0, 0], world[1, 0], world[2, 0]}),
+            alg.length(alg.Vector3f32{world[0, 1], world[1, 1], world[2, 1]}),
+            alg.length(alg.Vector3f32{world[0, 2], world[1, 2], world[2, 2]}),
+        }
+        cell_size := size / alg.Vector3f32{f32(volume.cells.x), f32(volume.cells.y), f32(volume.cells.z)}
+        gpu[v.count] = GpuIrradianceVolume{
+            world_to_box = alg.transpose(alg.matrix4_inverse_f32(world)),
+            box_to_world = alg.transpose(world),
+            size = size,
+            blend_distance = volume.blend_distance,
+            cells = {u32(volume.cells.x), u32(volume.cells.y), u32(volume.cells.z)},
+            first_z = u32(slot * IRRADIANCE_VOLUME_MAX_CELLS),
+            normal_bias = 0.2 * min(cell_size.x, cell_size.y, cell_size.z),
+        }
+        v.count += 1
+    }
+}
+
+// The validity of the cell frame `slot` captured, once the GPU has finished
+// it: an invalid cell is queued to be captured from its next offset.
+renderer_read_volume_capture :: proc(slot: u32) {
+    v := &g_renderer.volumes
+    capture := v.captures[slot]
+    v.captures[slot].active = false
+    if !capture.active || capture.generation != v.generation[capture.slot] do return
+    if int(capture.offset) + 1 >= len(VOLUME_CELL_OFFSETS) do return
+
+    read_range := d3d12.RANGE{Begin = uint(slot) * 16, End = uint(slot) * 16 + 4}
+    mapped: rawptr
+    dx_check(v.readback->Map(0, &read_range, &mapped))
+    validity := ([^]f32)(mapped)[slot * 4]
+    written_range := d3d12.RANGE{}
+    v.readback->Unmap(0, &written_range)
+
+    if validity >= VOLUME_RETRY_VALIDITY do return
+    v.cell_offset[capture.slot][capture.cell] = capture.offset + 1
+    append(&v.retry[capture.slot], capture.cell)
+}
+
+renderer_volume_buffer_address :: proc() -> u64 {
+    r := &g_renderer
+    return r.volumes.buffer->GetGPUVirtualAddress() + u64(r.frame_slot) * MAX_IRRADIANCE_VOLUMES * size_of(GpuIrradianceVolume)
+}
+
+// Whether this frame captures, for a reflection probe or a volume cell.
+renderer_capturing :: proc() -> bool {
+    return g_renderer.probes.capture_slot >= 0 || g_renderer.volumes.capture_slot >= 0
 }
 
 // Gives each probe in the scene a slot, picks this frame's capture (the
@@ -290,6 +615,7 @@ renderer_update_probes :: proc(scene: ^Scene) {
         }
         p.count += 1
     }
+    renderer_update_volumes(scene)
 }
 
 // The slot of an entity's probe, or -1 if it has none (or not yet).
@@ -306,6 +632,8 @@ renderer_probe_buffer_address :: proc() -> u64 {
 renderer_bind_probes :: proc() {
     renderer_bind_buffer_srv(.Probes, renderer_probe_buffer_address())
     renderer_bind_srv(.Probe_Maps, g_renderer.probes.srv_index)
+    renderer_bind_buffer_srv(.Volumes, renderer_volume_buffer_address())
+    renderer_bind_srv(.Volume_Atlas, g_renderer.volumes.srv_index)
 }
 
 // The six capture faces' view-projections (cull frustums and constants).
@@ -336,6 +664,7 @@ renderer_write_probe_capture_constants :: proc(frame: FrameConstants, sky: SkyCo
         constants.ssr_enabled = 0
         constants.light_show_clusters = 0
         constants.shadow_show_cascades = 0
+        constants.volume_show = 0
         p.frame_constants[int(r.frame_slot) * PROBE_FACES + face] = constants
 
         forward := CUBE_FACE_DIRECTIONS[face]
@@ -363,15 +692,18 @@ renderer_write_probe_capture_constants :: proc(frame: FrameConstants, sky: SkyCo
 renderer_render_probe_capture :: proc(draws: []Draw, face_batches: [PROBE_FACES][]DrawBatch) {
     r := &g_renderer
     p := &r.probes
+    v := &r.volumes
     renderer_begin_gpu_pass(.Probe_Capture)
     defer renderer_end_gpu_pass(.Probe_Capture)
-    if p.capture_slot < 0 do return
+    heaps := []^d3d12.IDescriptorHeap{r.srv_heap}
+    r.command_list->SetDescriptorHeaps(1, raw_data(heaps))
+    renderer_clear_volume_slots()
+    if !renderer_capturing() do return
+    volume_cell := v.capture_slot >= 0
 
     barrier := resource_transition(p.capture_texture, {.PIXEL_SHADER_RESOURCE}, {.RENDER_TARGET})
     r.command_list->ResourceBarrier(1, &barrier)
 
-    heaps := []^d3d12.IDescriptorHeap{r.srv_heap}
-    r.command_list->SetDescriptorHeaps(1, raw_data(heaps))
     r.command_list->SetGraphicsRootSignature(r.root_signature)
     r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
     renderer_set_square_viewport(PROBE_SIZE)
@@ -406,7 +738,7 @@ renderer_render_probe_capture :: proc(draws: []Draw, face_batches: [PROBE_FACES]
 
         r.command_list->OMSetRenderTargets(1, &rtv, false, &dsv)
         renderer_bind_cbv(.Frame_Constants, frame_constants + u64(face) * size_of(FrameConstants))
-        renderer_draw_batches(draws, face_batches[face], p.capture_pipeline_states)
+        renderer_draw_batches(draws, face_batches[face], v.capture_pipeline_states if volume_cell else p.capture_pipeline_states)
     }
 
     // Each capture level from the one above (2 x 2 texels each).
@@ -425,6 +757,11 @@ renderer_render_probe_capture :: proc(draws: []Draw, face_batches: [PROBE_FACES]
         renderer_probe_level_barriers(level, {.RENDER_TARGET}, {.PIXEL_SHADER_RESOURCE})
     }
     renderer_end_event()
+
+    if volume_cell {
+        renderer_project_volume_cell()
+        return
+    }
 
     renderer_begin_event("Prefilter")
     barrier = resource_transition(p.array, {.PIXEL_SHADER_RESOURCE}, {.RENDER_TARGET})
@@ -489,4 +826,121 @@ renderer_create_probe_pipelines :: proc(mesh_desc, fullscreen: d3d12.GRAPHICS_PI
     PREFILTER :: "shaders/environment_prefilter.hlsl"
     renderer_create_fullscreen_pso(fullscreen, PREFILTER, "PSProbeDownsample", PROBE_FORMAT, &p.downsample_pipeline_state)
     renderer_create_fullscreen_pso(fullscreen, PREFILTER, "PSProbePrefilter", PROBE_FORMAT, &p.prefilter_pipeline_state)
+
+    // Volume cells: one-sided surfaces are drawn from behind too, writing
+    // zero coverage (alpha) there; double-sided ones are seen from both sides
+    // anyway and draw as for probes.
+    capture_volume_ps := renderer_compile_shader("shaders/scene.hlsl", "PSCaptureVolume", "ps")
+    defer capture_volume_ps->Release()
+    capture_volume_masked_ps := renderer_compile_shader("shaders/scene.hlsl", "PSCaptureVolumeMasked", "ps")
+    defer capture_volume_masked_ps->Release()
+    for variant in Draw_Variant {
+        desc := mesh_desc
+        desc.RasterizerState.CullMode = .NONE
+        switch variant {
+            case .Opaque: desc.PS = shader_bytecode(capture_volume_ps)
+            case .Masked: desc.PS = shader_bytecode(capture_volume_masked_ps)
+            case .Double_Sided:
+            case .Masked_Double_Sided: desc.PS = shader_bytecode(capture_masked_ps)
+        }
+        renderer_create_pso(&desc, &r.volumes.capture_pipeline_states[variant])
+    }
+}
+
+// The volumes' compute root signature (made once) and the projection and
+// clear pipelines; rebuilt by shader hot-reload.
+renderer_create_volume_compute_pipelines :: proc() {
+    r := &g_renderer
+    v := &r.volumes
+    if v.root_signature == nil {
+        capture_range := d3d12.DESCRIPTOR_RANGE{RangeType = .SRV, NumDescriptors = 1}
+        atlas_range := d3d12.DESCRIPTOR_RANGE{RangeType = .UAV, NumDescriptors = 1}
+        params: [Volume_Root_Slot]d3d12.ROOT_PARAMETER
+        params[.Constants].ParameterType = ._32BIT_CONSTANTS
+        params[.Constants].Constants = {Num32BitValues = size_of(VolumePassConstants) / 4}
+        params[.Capture].ParameterType = .DESCRIPTOR_TABLE
+        params[.Capture].DescriptorTable = {NumDescriptorRanges = 1, pDescriptorRanges = &capture_range}
+        params[.Atlas].ParameterType = .DESCRIPTOR_TABLE
+        params[.Atlas].DescriptorTable = {NumDescriptorRanges = 1, pDescriptorRanges = &atlas_range}
+        params[.Result].ParameterType = .UAV
+        params[.Result].Descriptor = {ShaderRegister = 1}
+        rs_desc := d3d12.ROOT_SIGNATURE_DESC{NumParameters = len(params), pParameters = &params[Volume_Root_Slot(0)]}
+        v.root_signature = create_root_signature(&rs_desc, "Irradiance volumes")
+    }
+    entries := [2]cstring{"CSProjectCell", "CSClearSlot"}
+    pipelines := [2]^^d3d12.IPipelineState{&v.project_pipeline_state, &v.clear_pipeline_state}
+    for entry, i in entries {
+        cs := renderer_compile_shader("shaders/irradiance_volume.hlsl", entry, "cs")
+        defer cs->Release()
+        if renderer_skip_pipeline() do continue
+        desc := d3d12.COMPUTE_PIPELINE_STATE_DESC{pRootSignature = v.root_signature, CS = shader_bytecode(cs)}
+        renderer_check_pipeline(r.device->CreateComputePipelineState(&desc, d3d12.IPipelineState_UUID, (^rawptr)(pipelines[i])))
+    }
+}
+
+renderer_volume_atlas_barrier :: proc(before, after: d3d12.RESOURCE_STATES) {
+    barrier := resource_transition(g_renderer.volumes.atlas, before, after)
+    g_renderer.command_list->ResourceBarrier(1, &barrier)
+}
+
+// Zeroes the blocks of slots whose cells changed, so their cells have no
+// weight until captured. The SRV heap must be set.
+renderer_clear_volume_slots :: proc() {
+    r := &g_renderer
+    v := &r.volumes
+    pending := false
+    for clear in v.clear_pending do pending ||= clear
+    if !pending do return
+
+    renderer_begin_event("Clear volumes")
+    defer renderer_end_event()
+    renderer_volume_atlas_barrier({.PIXEL_SHADER_RESOURCE}, {.UNORDERED_ACCESS})
+    r.command_list->SetComputeRootSignature(v.root_signature)
+    r.command_list->SetPipelineState(v.clear_pipeline_state)
+    r.command_list->SetComputeRootDescriptorTable(u32(Volume_Root_Slot.Atlas), renderer_srv_gpu(v.uav_index))
+    for &clear, slot in v.clear_pending {
+        if !clear do continue
+        clear = false
+        constants := VolumePassConstants{first_z = u32(slot * IRRADIANCE_VOLUME_MAX_CELLS)}
+        r.command_list->SetComputeRoot32BitConstants(u32(Volume_Root_Slot.Constants), size_of(constants) / 4, &constants, 0)
+        // 4 x 4 x 4 threads per group (irradiance_volume.hlsl).
+        r.command_list->Dispatch(VOLUME_ATLAS_WIDTH / 4, VOLUME_ATLAS_HEIGHT / 4, IRRADIANCE_VOLUME_MAX_CELLS / 4)
+    }
+    renderer_volume_atlas_barrier({.UNORDERED_ACCESS}, {.PIXEL_SHADER_RESOURCE})
+}
+
+// Reduces the capture (its mips made) to the cell's coefficients in the
+// atlas.
+renderer_project_volume_cell :: proc() {
+    r := &g_renderer
+    v := &r.volumes
+    renderer_begin_event("Project to SH")
+    defer renderer_end_event()
+
+    barriers := [2]d3d12.RESOURCE_BARRIER{
+        resource_transition(r.probes.capture_texture, {.PIXEL_SHADER_RESOURCE}, {.NON_PIXEL_SHADER_RESOURCE}),
+        resource_transition(v.atlas, {.PIXEL_SHADER_RESOURCE}, {.UNORDERED_ACCESS}),
+    }
+    r.command_list->ResourceBarrier(len(barriers), &barriers[0])
+    r.command_list->SetComputeRootSignature(v.root_signature)
+    r.command_list->SetPipelineState(v.project_pipeline_state)
+    constants := VolumePassConstants{
+        cell = {u32(v.capture_cell.x), u32(v.capture_cell.y), u32(v.capture_cell.z)},
+        first_z = u32(v.capture_slot * IRRADIANCE_VOLUME_MAX_CELLS),
+        offset = v.capture_offset,
+    }
+    r.command_list->SetComputeRoot32BitConstants(u32(Volume_Root_Slot.Constants), size_of(constants) / 4, &constants, 0)
+    r.command_list->SetComputeRootDescriptorTable(u32(Volume_Root_Slot.Capture), renderer_srv_gpu(r.probes.capture_level_srv_start + VOLUME_SH_LEVEL))
+    r.command_list->SetComputeRootDescriptorTable(u32(Volume_Root_Slot.Atlas), renderer_srv_gpu(v.uav_index))
+    r.command_list->SetComputeRootUnorderedAccessView(u32(Volume_Root_Slot.Result), v.result->GetGPUVirtualAddress())
+    r.command_list->Dispatch(1, 1, 1)
+    barriers[0] = resource_transition(r.probes.capture_texture, {.NON_PIXEL_SHADER_RESOURCE}, {.PIXEL_SHADER_RESOURCE})
+    barriers[1] = resource_transition(v.atlas, {.UNORDERED_ACCESS}, {.PIXEL_SHADER_RESOURCE})
+    r.command_list->ResourceBarrier(len(barriers), &barriers[0])
+
+    // The validity, for renderer_read_volume_capture. The buffer was
+    // promoted to a UAV from COMMON, and decays back after the frame.
+    barrier := resource_transition(v.result, {.UNORDERED_ACCESS}, {.COPY_SOURCE})
+    r.command_list->ResourceBarrier(1, &barrier)
+    r.command_list->CopyBufferRegion(v.readback, u64(r.frame_slot) * 16, v.result, 0, 16)
 }

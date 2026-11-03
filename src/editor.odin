@@ -15,6 +15,9 @@ g_editor_selection_anchor: Entity = Entity(-1)
 // The entity whose material slot g_editor_material_slot refers to.
 g_editor_material_entity := -1
 g_editor_file_status: string
+// editor_scene_dirty's cached result, and the frames until it checks again.
+g_editor_scene_dirty: bool
+g_editor_dirty_frames: int
 
 editor_is_selected :: proc(entity: Entity) -> bool {
     return int(entity) >= 0 && int(entity) < MAX_ENTITIES && g_editor_selection[int(entity)]
@@ -162,6 +165,70 @@ editor_any_selected :: proc(scene: ^Scene, test: proc(scene: ^Scene, entity: Ent
     return false
 }
 
+// Asks for a scene file and opens it, after the unsaved-changes check.
+editor_open_scene :: proc(scene: ^Scene) {
+    if !editor_confirm_discard(scene) do return
+
+    path: [4096]u8
+    count := window_scene_file_dialog(false, g_scene_path, path[:])
+    if count < 0 do g_editor_file_status = "Could not open the file dialog."
+    if count <= 0 do return
+
+    selected := string(path[:count])
+    ok, message := scene_load_from_file(selected)
+    g_editor_file_status = message
+    if ok {
+        scene_file_mark_saved(scene, selected)
+        editor_clear_history()
+        editor_clear_selection()
+        renderer_update_post_title()
+    }
+}
+
+// Saves to the current file, or asks for one first (Save As, or a scene
+// never saved). Returns whether the scene was saved.
+editor_save_scene :: proc(scene: ^Scene, save_as: bool) -> bool {
+    editor_finish_edit()
+
+    path := g_scene_path
+    buffer: [4096]u8
+    if save_as || len(path) == 0 {
+        count := window_scene_file_dialog(true, g_scene_path if len(g_scene_path) > 0 else SCENE_FILE_PATH, buffer[:])
+        if count < 0 do g_editor_file_status = "Could not open the file dialog."
+        if count <= 0 do return false
+        path = string(buffer[:count])
+    }
+
+    ok, message := scene_save_to_file(scene, path)
+    g_editor_file_status = message
+    if ok {
+        scene_file_mark_saved(scene, path)
+        renderer_update_post_title()
+    }
+    return ok
+}
+
+// Whether the current scene may be replaced or the editor closed: true when
+// it has no unsaved changes, or the user saves or discards them.
+editor_confirm_discard :: proc(scene: ^Scene) -> bool {
+    editor_finish_edit()
+    if !scene_file_dirty(scene) do return true
+    switch window_ask_save_changes(scene_file_name()) {
+        case .Save: return editor_save_scene(scene, save_as = false)
+        case .Discard: return true
+        case .Cancel: return false
+    }
+    return false
+}
+
+// The unsaved-changes state for the Scene panel, re-encoding the scene a few
+// times a second rather than every frame.
+editor_scene_dirty :: proc(scene: ^Scene) -> bool {
+    if g_editor_dirty_frames == 0 do g_editor_scene_dirty = scene_file_dirty(scene)
+    g_editor_dirty_frames = (g_editor_dirty_frames + 1) % 15
+    return g_editor_scene_dirty
+}
+
 editor_draw_scene :: proc(scene: ^Scene){
     editor_prune_selection(scene)
     ui_next_window(16, 462, 300, 360)
@@ -187,6 +254,7 @@ editor_draw_scene :: proc(scene: ^Scene){
         }
         ui_begin_disabled(editor_find_available_slot(scene) < 0)
         if ui_button("Add Reflection Probe") do editor_add_reflection_probe(scene)
+        if ui_button("Add Irradiance Volume") do editor_add_irradiance_volume(scene)
         ui_end_disabled()
         ui_separator()
         editor_draw_viewport_controls()
@@ -251,26 +319,14 @@ editor_draw_scene :: proc(scene: ^Scene){
 
         ui_separator()
 
-        if ui_button("Save Scene"){
-            editor_finish_edit()
-            _, g_editor_file_status = scene_save_to_file(
-                scene,
-                SCENE_FILE_PATH
-            )
-        }
+        if ui_button("Open...") do editor_open_scene(scene)
+        ui_same_line()
+        if ui_button("Save") do editor_save_scene(scene, save_as = false)
+        ui_same_line()
+        if ui_button("Save As...") do editor_save_scene(scene, save_as = true)
 
-        if ui_button("Load Scene"){
-            ok, message := scene_load_from_file(SCENE_FILE_PATH)
-            g_editor_file_status = message
-
-            if ok{
-                editor_clear_history()
-                editor_clear_selection()
-                renderer_update_post_title()
-            }
-        }
-
-        debug_ui_text(SCENE_FILE_PATH)
+        debug_ui_text(fmt.tprintf("%s%s", scene_file_name(), " (unsaved changes)" if editor_scene_dirty(scene) else ""))
+        if len(g_scene_path) > 0 do debug_ui_text(g_scene_path)
 
         if len(g_editor_file_status) > 0 {
             debug_ui_text(g_editor_file_status)
@@ -550,6 +606,42 @@ editor_draw_reflection_probe_controls :: proc(scene: ^Scene, index: int) {
     debug_ui_text("from its center. It captures again when moved.")
 }
 
+editor_draw_irradiance_volume_controls :: proc(scene: ^Scene, index: int) {
+    ui_separator()
+    debug_ui_text("Irradiance volume")
+
+    // One slider per axis, each its own undo step; values are whole cells.
+    labels := [3]cstring{"Cells along X", "Cells along Y", "Cells along Z"}
+    for label, axis in labels {
+        before := editor_value(scene, index, .Volume_Cells)
+        value := before
+        changed := ui_slider_float(label, &value[axis], 1, IRRADIANCE_VOLUME_MAX_CELLS)
+        if changed do changed = editor_apply_value(scene, Entity(index), .Volume_Cells, value)
+        editor_track_edit(scene, index, .Volume_Cells, before, changed)
+    }
+    editor_drag_number(scene, index, .Volume_Blend_Distance, "Blend distance", 0.05, 0.0, 100.0)
+
+    v := &g_renderer.volumes
+    text_buffer: [128]u8
+    cells, pass, ok := renderer_volume_progress(index)
+    switch {
+    case !v.enabled:
+        debug_ui_text("Irradiance volumes are off in Renderer controls.")
+    case !ok:
+        debug_ui_text(fmt.bprintf(text_buffer[:], "Not used: at most %d volumes are.", MAX_IRRADIANCE_VOLUMES))
+    case:
+        count := renderer_volume_cell_count(scene.irradiance_volumes[index].cells)
+        if pass >= int(v.bounces) {
+            debug_ui_text(fmt.bprintf(text_buffer[:], "Captured: %d cells, %d bounces", count, v.bounces))
+        } else {
+            debug_ui_text(fmt.bprintf(text_buffer[:], "Capturing bounce %d of %d: cell %d of %d", pass + 1, v.bounces, cells, count))
+        }
+        if ui_button("Capture volume again") do renderer_recapture_volume(index)
+    }
+    debug_ui_text("Scale sets the box; cells fill it evenly.")
+    debug_ui_text("One cell is captured per frame.")
+}
+
 editor_draw_directional_light_controls :: proc(scene: ^Scene, index: int) {
     ui_separator()
     debug_ui_text("Directional light")
@@ -656,6 +748,10 @@ editor_draw_inspector :: proc(scene: ^Scene) {
 
             if scene.has_reflection_probe[index] {
                 editor_draw_reflection_probe_controls(scene, index)
+            }
+
+            if scene.has_irradiance_volume[index] {
+                editor_draw_irradiance_volume_controls(scene, index)
             }
 
             if scene.has_directional_light[index] {

@@ -45,6 +45,9 @@ EditorField :: enum {
     Probe_Blend_Distance,
     Probe_Box_Projection,
 
+    Volume_Cells,
+    Volume_Blend_Distance,
+
     Sun_Color,
     Sun_Intensity,
     Sun_Direction,
@@ -87,8 +90,8 @@ EditorAssetValue :: struct {
 }
 
 // An entity the editor creates or deletes: a model, a point or spot light
-// with its marker mesh, a reflection probe, or an empty one (a group, such
-// as a glTF node without geometry).
+// with its marker mesh, a reflection probe, an irradiance volume, or an empty
+// one (a group, such as a glTF node without geometry).
 EditorEntitySnapshot :: struct {
     name: string,
     transform: Transform,
@@ -99,6 +102,7 @@ EditorEntitySnapshot :: struct {
     point_light: Maybe(PointLight),
     spot_light: Maybe(SpotLight),
     reflection_probe: Maybe(ReflectionProbe),
+    irradiance_volume: Maybe(IrradianceVolume),
     // Restored as a link even while the parent is not alive yet: undoing a
     // deleted subtree restores the children before their parents.
     parent: Maybe(Entity),
@@ -211,6 +215,9 @@ editor_field_exists :: proc(
         case .Probe_Blend_Distance, .Probe_Box_Projection:
             return scene.has_reflection_probe[index]
 
+        case .Volume_Cells, .Volume_Blend_Distance:
+            return scene.has_irradiance_volume[index]
+
         case .Sun_Color, .Sun_Intensity, .Sun_Direction:
             return scene.has_directional_light[index]
 
@@ -306,6 +313,11 @@ editor_value :: proc(
             return {scene.reflection_probes[index].blend_distance, 0, 0}
         case .Probe_Box_Projection:
             return editor_bool_value(scene.reflection_probes[index].box_projection)
+        case .Volume_Cells:
+            cells := scene.irradiance_volumes[index].cells
+            return {f32(cells.x), f32(cells.y), f32(cells.z)}
+        case .Volume_Blend_Distance:
+            return {scene.irradiance_volumes[index].blend_distance, 0, 0}
 
         case .Sun_Color:
             return scene.directional_lights[index].color
@@ -419,6 +431,12 @@ editor_apply_value :: proc(
             scene.reflection_probes[index].blend_distance = max(value[0], 0)
         case .Probe_Box_Projection:
             scene.reflection_probes[index].box_projection = value[0] != 0
+        case .Volume_Cells:
+            for axis in 0..<3 {
+                scene.irradiance_volumes[index].cells[axis] = clamp(i32(math.round(value[axis])), 1, IRRADIANCE_VOLUME_MAX_CELLS)
+            }
+        case .Volume_Blend_Distance:
+            scene.irradiance_volumes[index].blend_distance = max(value[0], 0)
 
         case .Sun_Color:
             scene.directional_lights[index].color = value

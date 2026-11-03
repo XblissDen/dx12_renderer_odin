@@ -42,6 +42,8 @@ main :: proc(){
 
     defer renderer_destroy()
     debug_ui_init()
+    // The startup scene is untitled and counts as saved until edited.
+    scene_file_mark_saved(&g_scene)
 
     last_time := time.now()
     elapsed_for_fps: f32

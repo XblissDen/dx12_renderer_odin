@@ -115,6 +115,22 @@ reflection_probe_valid :: proc(probe: ReflectionProbe) -> bool {
     return probe.blend_distance >= 0 && probe.blend_distance < 1e6
 }
 
+// Diffuse light captured at a grid of points filling the entity's box (the
+// unit cube under its world matrix, as for reflection probes), used by
+// surfaces inside it instead of the sky's. See renderer_probes.odin.
+IrradianceVolume :: struct {
+    // Points along the box's x, y and z, each at the center of its cell.
+    cells: [3]i32,
+    // Over this distance (world units) inside the box's faces, the volume
+    // fades out into whatever lies outside it.
+    blend_distance: f32,
+}
+
+irradiance_volume_valid :: proc(volume: IrradianceVolume) -> bool {
+    for count in volume.cells do if count < 1 || count > IRRADIANCE_VOLUME_MAX_CELLS do return false
+    return volume.blend_distance >= 0 && volume.blend_distance < 1e6
+}
+
 DirectionalLight :: struct{
     direction: alg.Vector3f32,
     color: [3]f32,
@@ -202,6 +218,9 @@ Scene :: struct{
 
     reflection_probes: [MAX_ENTITIES]ReflectionProbe,
     has_reflection_probe: [MAX_ENTITIES]bool,
+
+    irradiance_volumes: [MAX_ENTITIES]IrradianceVolume,
+    has_irradiance_volume: [MAX_ENTITIES]bool,
 
     cameras: [MAX_ENTITIES]Camera,
     has_camera: [MAX_ENTITIES]bool,
@@ -335,6 +354,9 @@ scene_clear_entity_slot :: proc(scene: ^Scene, index: int) {
     scene.reflection_probes[index] = {}
     scene.has_reflection_probe[index] = false
 
+    scene.irradiance_volumes[index] = {}
+    scene.has_irradiance_volume[index] = false
+
     scene.directional_lights[index] = {}
     scene.has_directional_light[index] = false
 
@@ -391,6 +413,12 @@ scene_add_reflection_probe :: proc(scene: ^Scene, entity: Entity, probe: Reflect
     index := int(entity)
     scene.reflection_probes[index] = probe
     scene.has_reflection_probe[index] = true
+}
+
+scene_add_irradiance_volume :: proc(scene: ^Scene, entity: Entity, volume: IrradianceVolume) {
+    index := int(entity)
+    scene.irradiance_volumes[index] = volume
+    scene.has_irradiance_volume[index] = true
 }
 
 // Point and spot lights, which share the renderer's MAX_LIGHTS.

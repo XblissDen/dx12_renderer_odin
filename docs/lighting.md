@@ -3,7 +3,8 @@
 All lighting happens in one forward pass (`ShadeSurface` in
 `shaders/scene.hlsl`): each pixel of each surface sums the sun, the point and
 spot lights reaching its cluster, the environment's diffuse and specular
-light (or a reflection probe's), and emission. The result goes to the HDR target in linear units;
+light (or a reflection probe's, and diffuse light from an irradiance
+volume), and emission. The result goes to the HDR target in linear units;
 exposure and tone mapping come later ([Post-processing](post_processing.md)).
 
 ## Surface shading
@@ -317,6 +318,103 @@ irradiance map for the probe's roughest level read along the normal, which
 is close to the cosine-weighted average of the captured light. Interiors then
 come out much darker, since a capture holds the sky's light after one bounce
 (more with each capture again). It suits scenes with auto exposure.
+
+## Irradiance volumes
+
+The sky's irradiance map assumes every surface sees the whole sky, so
+interiors get the sky's full blue light, and no surface gets light bounced
+off the others. An **irradiance volume** (`src/renderer_probes.odin`,
+`shaders/irradiance_volume.hlsl`) captures the diffuse light at a grid of
+points, and surfaces inside it use that instead. It is the diffuse
+counterpart of reflection probes, and stores far less per point. See
+[Editor](editor.md#irradiance-volumes) for placing one.
+
+- **Grid**: the volume entity's unit cube under its world matrix, as for
+  reflection probes, divided into **cells** (8 × 4 × 8 by default, up to 32
+  along each axis). Each cell holds the light around its center.
+- **Capture**: one cell per frame, with the reflection probes' capture: the
+  same 256 × 256 cube of the lit scene and its mip chain, without the
+  prefiltering. Probes go first when both are waiting. A compute pass
+  (`CSProjectCell`) then reduces the capture's 32 × 32 level to **L1
+  spherical harmonics**: per color, the light's average plus one linear term
+  per axis, 12 numbers per cell. A texel adds its radiance weighted by the
+  solid angle it covers and the basis functions along its direction.
+- **Stored ready to evaluate**: the coefficients are pre-scaled by the
+  cosine lobe's convolution, so the lit pass gets the cosine-weighted
+  average radiance (irradiance / π, what the irradiance map holds) along
+  normal N as `constant + dot(linear, N)`.
+- **Bounces**: captures shade surfaces with the volumes captured so far. The
+  first pass over the cells gives light that bounced once, and each further
+  pass adds another bounce. **Volume bounces** (Renderer controls, default 2)
+  sets the number of passes.
+- **Cost**: a cell capture takes about 0.45 ms of GPU time in Sponza (in the
+  **Probe capture** row), so a volume filling Sponza (17 × 7 × 10 cells, two
+  bounces, plus the cells that move, below) takes about 3,850 frames, about
+  21 seconds at 180 frames a second. Using the volume costs about 0.16 ms in
+  the lit pass at 1920 × 1080.
+
+### Cells inside walls
+
+A cell whose center is inside a wall or a closed model sees the inside of
+that model, and its light would leak out to the surfaces around it. Cells
+therefore capture with back faces drawn too: one-sided materials draw their
+back faces black with zero alpha (`PSCaptureVolume`). The alpha averaged
+over the capture is how much of the cell's view is front faces. Seeing more
+than 10% back faces lowers a cell's **validity**, and at 30% it is invalid.
+
+An invalid cell moves, as DDGI moves its probes out of geometry. The
+projection also writes the cell's validity to a small buffer the CPU reads
+back two frames later (`renderer_read_volume_capture`). If the cell is
+invalid, it is captured again from the next of 14 offset points: 0.45 cells
+along each axis, then 0.35 cells toward each corner. It keeps the first
+valid one for later bounces. The atlas stores where each cell was captured
+from. In Sponza about 1,470 of the 2,380 captures of the first bake are such
+retries, mostly cells inside the walls, pillars and roof.
+
+### Lookup
+
+All volumes share one 3D texture (`VOLUME_ATLAS_*`), a 32³ block per volume.
+A block has four planes: the red, green and blue coefficients, each times
+the cell's validity, then the validity and the capture offset.
+`ApplyIrradianceVolumes` in the lit pass:
+
+1. Moves the lookup point 0.2 cells along the normal, so a surface reads the
+   cells in front of it rather than those level with it.
+2. Blends the eight cells around that point. Each cell's trilinear weight is
+   scaled by its validity, and by how far it lies in front of the surface
+   (DDGI's smooth back-face term, `((dot(direction to cell, N) + 1) / 2)²
+   + 0.2`). Cells behind a wall then add little to the light in front of it.
+3. Fades the volume out where no valid cell is near, and over **Blend
+   distance** inside the box's faces. Like probes, overlapping volumes are
+   averaged, and the light they leave out comes from the sky (or from
+   probes, with **Probes replace the sky's diffuse light**).
+
+The volume replaces only the diffuse ambient light. GTAO and material
+occlusion still apply on top, and reflections still come from probes, the
+sky and SSR. **Show diffuse ambient light only** (Renderer controls) shows
+the light a white surface gets, which makes volumes easy to compare with the
+sky's light.
+
+### Limits
+
+- **Coarse**: with cells a meter or more apart, light changes smoothly. Small
+  objects get light from cells around them, not their own contact shadows;
+  GTAO adds those.
+- **Leaks**: the back-face term reduces light passing through walls thinner
+  than a cell, but does not stop it. A volume per room, with blend distances,
+  leaks less than one volume over a building.
+- **Darker interiors**: rooms come out much darker than with the sky's
+  light, as they should. Auto exposure suits them.
+- **Sun shadows** in captures come from the camera's cascades, as for probes:
+  cells far from the camera can see sunlight where there is shadow. Bake
+  with the camera near the volume, or raise **Shadow distance** while it
+  bakes.
+- **Static**: changing lights or models does not capture again on its own.
+  Use **Capture volume again** (Inspector) or **Capture all volumes again**
+  (Renderer controls). Changing the environment does capture again. Moving a
+  volume captures it again over its old values, and changing its cells
+  starts from nothing.
+- **Up to 4 volumes** are used.
 
 ## Volumetric fog
 

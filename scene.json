@@ -11,7 +11,7 @@
         ],
         "rotation": [
           0.00000000,
-          115.18151855,
+          147.94825745,
           0.00000000
         ],
         "rotation_speed": 0.60000002,
@@ -78,7 +78,7 @@
         ],
         "rotation": [
           0.00000000,
-          115.18151855,
+          147.94825745,
           0.00000000
         ],
         "rotation_speed": 0.60000002,
@@ -145,7 +145,7 @@
         ],
         "rotation": [
           0.00000000,
-          115.18151855,
+          147.94825745,
           0.00000000
         ],
         "rotation_speed": 0.60000002,
@@ -300,9 +300,9 @@
       "name": "Warm point light",
       "transform": {
         "position": [
-          -0.98226035,
+          -1.91453063,
           1.50000000,
-          1.74217236
+          -0.57842243
         ],
         "rotation": [
           0.00000000,
@@ -364,7 +364,7 @@
         ],
         "intensity": 3.00000000,
         "orbit_radius": 2.00000000,
-        "orbit_angle": 115.18151855,
+        "orbit_angle": 147.94825745,
         "orbit_speed": 0.60000002,
         "orbit_enabled": true,
         "orbit_center": [
@@ -385,9 +385,9 @@
       "name": "Cool point light",
       "transform": {
         "position": [
-          0.98246193,
+          1.91454315,
           1.50000000,
-          -1.74205875
+          0.57838106
         ],
         "rotation": [
           0.00000000,
@@ -449,7 +449,7 @@
         ],
         "intensity": 3.00000000,
         "orbit_radius": 2.00000000,
-        "orbit_angle": 118.32322693,
+        "orbit_angle": 151.08982849,
         "orbit_speed": 0.60000002,
         "orbit_enabled": true,
         "orbit_center": [
@@ -1417,6 +1417,91 @@
         "blend_distance": 1.00000000,
         "box_projection": true
       },
+      "directional_light": null,
+      "camera": null,
+      "parent": null
+    },
+    {
+      "name": "Point light",
+      "transform": {
+        "position": [
+          29.28253365,
+          -2.79963374,
+          -3.18925905
+        ],
+        "rotation": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "rotation_speed": 0.00000000,
+        "scale": [
+          0.20000000,
+          0.20000000,
+          0.20000000
+        ]
+      },
+      "mesh_renderer": {
+        "mesh": "cube"
+      },
+      "material": {
+        "tint": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ],
+        "texture": "checkerboard",
+        "unlit": true,
+        "roughness": 0.00000000,
+        "metallic": 0.00000000,
+        "normal_texture": "",
+        "normal_strength": 0.00000000,
+        "uv_scale": 1.00000000,
+        "roughness_texture": "",
+        "use_roughness_map": false,
+        "metallic_texture": "",
+        "use_metallic_map": false,
+        "emissive": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "emissive_strength": 0.00000000,
+        "emissive_texture": "",
+        "use_emissive_map": false,
+        "occlusion_texture": "",
+        "use_occlusion_map": false,
+        "occlusion_strength": 0.00000000,
+        "alpha_mask": false,
+        "alpha_cutoff": 0.00000000,
+        "alpha_blend": false,
+        "transparency": 0.00000000,
+        "double_sided": false
+      },
+      "extra_materials": [
+
+      ],
+      "point_light": {
+        "color": [
+          1.00000000,
+          1.00000000,
+          1.00000000
+        ],
+        "intensity": 3.00000000,
+        "orbit_radius": 2.00000000,
+        "orbit_angle": 0.00000000,
+        "orbit_speed": 0.60000002,
+        "orbit_enabled": false,
+        "orbit_center": [
+          0.00000000,
+          0.00000000,
+          0.00000000
+        ],
+        "range": 17.29161644,
+        "cast_shadows": true
+      },
+      "spot_light": null,
+      "reflection_probe": null,
       "directional_light": null,
       "camera": null,
       "parent": null

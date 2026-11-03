@@ -177,7 +177,11 @@ cbuffer FrameConstants : register(b4)
     float  fog_max_distance;
     uint   fog_history_valid;
     uint   fog_frame;
-    float3 _fog_pad;
+    // Irradiance volumes in g_volumes; nonzero volume_show displays only the
+    // diffuse ambient light.
+    uint   volume_count;
+    uint   volume_show;
+    float  _volume_pad;
 
     // The light views drawn into the shadow atlas this frame (VSShadow).
     float4x4 shadow_view_projection[SHADOW_TILE_VIEWS];
@@ -202,6 +206,29 @@ struct GpuProbe
 };
 StructuredBuffer<GpuProbe> g_probes : register(t10);
 TextureCubeArray<float4> g_probe_maps : register(t11);
+
+// An irradiance volume (renderer_probes.odin): a grid of cells filling the
+// unit cube in box space, each holding L1 spherical harmonics of the light
+// around its center.
+struct GpuIrradianceVolume
+{
+    float4x4 world_to_box;
+    float4x4 box_to_world;
+    float3 size; // World length of the box's edges.
+    float blend_distance;
+    uint3 cells;
+    uint first_z; // Its block's first slice in g_volume_atlas.
+    float normal_bias;
+    float3 _pad;
+    float4 _pad2;
+};
+StructuredBuffer<GpuIrradianceVolume> g_volumes : register(t12);
+// Per block of 32^3 cells (VOLUME_MAX_CELLS), four planes along x: red,
+// green and blue coefficients (constant term, then x, y, z), each times the
+// cell's validity, then the validity and the offset (in cells) the cell was
+// captured from.
+Texture3D<float4> g_volume_atlas : register(t13);
+#define VOLUME_MAX_CELLS 32u
 
 // The first element of the cluster holding this pixel (SV_Position.xy) at
 // this view depth.
@@ -833,6 +860,76 @@ void ApplyProbes(float3 world_pos, float3 R, float3 N, float material_roughness,
     if (probe_diffuse != 0u) diffuse = diffuse_sum * scale + diffuse * rest;
 }
 
+// Replaces the diffuse ambient light with the irradiance volumes whose boxes
+// hold the point, blended like probes. The lookup moves along the normal by
+// the volume's bias, then blends the eight cells around it. Each cell's
+// trilinear weight is scaled by
+//   - its validity: cells inside walls, and cells not captured yet, have
+//     none (the stored coefficients are already times validity);
+//   - how far it lies in front of the surface (DDGI's smooth back-face
+//     term), so cells behind a wall add little to the light in front of it.
+// Where no valid cell is near, the volume fades out.
+void ApplyIrradianceVolumes(float3 world_pos, float3 N, inout float3 diffuse)
+{
+    float3 sum = 0.0f;
+    float weight_sum = 0.0f;
+    for (uint i = 0; i < volume_count; ++i)
+    {
+        GpuIrradianceVolume volume = g_volumes[i];
+        float3 local = mul(float4(world_pos, 1.0f), volume.world_to_box).xyz;
+        float3 inside = (0.5f - abs(local)) * volume.size;
+        float distance = min(inside.x, min(inside.y, inside.z));
+        if (distance <= 0.0f) continue;
+        float weight = volume.blend_distance > 0.0f ? saturate(distance / volume.blend_distance) : 1.0f;
+
+        // In cell units, cell centers at whole numbers, clamped to the grid.
+        float3 lookup = mul(float4(world_pos + N * volume.normal_bias, 1.0f), volume.world_to_box).xyz + 0.5f;
+        int3 last = int3(volume.cells) - 1;
+        float3 grid = clamp(lookup * float3(volume.cells) - 0.5f, 0.0f, float3(last));
+        int3 base = int3(floor(grid));
+        float3 fraction = grid - float3(base);
+
+        float3 light = 0.0f;
+        float light_weight = 0.0f;
+        float coverage = 0.0f;
+        [unroll]
+        for (uint corner = 0; corner < 8u; ++corner)
+        {
+            int3 offset = int3(corner & 1u, (corner >> 1) & 1u, corner >> 2);
+            int3 cell = min(base + offset, last);
+            float3 axis_weights = select(offset != 0, fraction, 1.0f - fraction);
+            float trilinear = axis_weights.x * axis_weights.y * axis_weights.z;
+            int3 texel = cell + int3(0, 0, volume.first_z);
+            // Validity, and where the cell was captured from.
+            float4 placement = g_volume_atlas.Load(int4(texel + int3(3 * int(VOLUME_MAX_CELLS), 0, 0), 0));
+            float validity = placement.x;
+            coverage += trilinear * validity;
+            if (trilinear * validity <= 0.0f) continue;
+
+            float3 cell_local = (float3(cell) + 0.5f + placement.yzw) / float3(volume.cells) - 0.5f;
+            float3 to_cell = mul(float4(cell_local, 1.0f), volume.box_to_world).xyz - world_pos;
+            float facing = (dot(to_cell, N) * rsqrt(max(dot(to_cell, to_cell), 1e-8f)) + 1.0f) * 0.5f;
+            float cell_weight = trilinear * (facing * facing + 0.2f);
+
+            // Stored ready to evaluate: the cosine-weighted average radiance
+            // (irradiance / pi) is constant + dot(linear, N).
+            float4 red = g_volume_atlas.Load(int4(texel, 0));
+            float4 green = g_volume_atlas.Load(int4(texel + int3(int(VOLUME_MAX_CELLS), 0, 0), 0));
+            float4 blue = g_volume_atlas.Load(int4(texel + int3(2 * int(VOLUME_MAX_CELLS), 0, 0), 0));
+            light += cell_weight * float3(
+                red.x + dot(red.yzw, N), green.x + dot(green.yzw, N), blue.x + dot(blue.yzw, N)
+            );
+            light_weight += cell_weight * validity;
+        }
+        if (light_weight <= 1e-6f) continue;
+        weight *= saturate(coverage * 8.0f);
+        sum += weight * max(light / light_weight, 0.0f);
+        weight_sum += weight;
+    }
+    if (weight_sum <= 0.0f) return;
+    diffuse = sum / max(weight_sum, 1.0f) + diffuse * saturate(1.0f - weight_sum);
+}
+
 // In a probe capture, the sun's cascades cover the camera's view, not the
 // probe's: use the first (finest) one whose map holds the point, or none.
 uint CaptureCascade(float3 world_pos)
@@ -897,6 +994,8 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
     {
         ApplyProbes(input.world_pos, reflect(-V, N), N, material_roughness, prefiltered_color, incoming_diffuse);
     }
+    // Inside a volume, its cells' light replaces the diffuse light.
+    if (volume_count > 0u) ApplyIrradianceVolumes(input.world_pos, N, incoming_diffuse);
     // Where SSR found the reflected surface, it replaces the environment.
     // Like SSAO it is per pixel of the opaque surface, so blended ones skip it.
     if (ssr_enabled != 0u && !transparent)
@@ -1070,6 +1169,12 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
     {
         result = ClusterHeatColor(cluster_light_count);
     }
+    if (volume_show != 0u)
+    {
+        // The light a white diffuse surface would get from the environment,
+        // probes or volumes, before occlusion.
+        result = incoming_diffuse;
+    }
 
     return float4(result, transparent ? saturate(albedo_sample.a * g_object.opacity) : 1.0f);
 }
@@ -1095,6 +1200,24 @@ float4 PSCaptureMasked(PSInput input, bool is_front_face : SV_IsFrontFace) : SV_
     ClipAlpha(input.texcoord);
     if (g_object.unlit != 0) return UnlitColor();
     return ShadeSurface(input, is_front_face, false);
+}
+
+// Irradiance volume cells capture with back faces drawn too (for one-sided
+// materials), writing zero there: the capture's alpha then tells how much of
+// the cell's view is the back of something, as from inside a wall.
+float4 PSCaptureVolume(PSInput input, bool is_front_face : SV_IsFrontFace) : SV_TARGET
+{
+    if (!is_front_face) return 0.0f;
+    return PSMain(input, true);
+}
+
+float4 PSCaptureVolumeMasked(PSInput input, bool is_front_face : SV_IsFrontFace) : SV_TARGET
+{
+    g_object = g_objects[input.draw];
+    ClipAlpha(input.texcoord);
+    if (!is_front_face) return 0.0f;
+    if (g_object.unlit != 0) return UnlitColor();
+    return ShadeSurface(input, true, false);
 }
 
 // A blended surface takes over the pixel's motion vector where it covers at

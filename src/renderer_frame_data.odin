@@ -431,7 +431,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     // A probe captured this frame sees in every direction, so it needs every
     // light, not only those reaching the camera's view.
     renderer_update_probes(scene)
-    capturing := r.probes.capture_slot >= 0
+    capturing := renderer_capturing()
 
 
     sun: DirectionalLight
@@ -732,6 +732,8 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         // Last frame's volume maps onto this one only at the same distance.
         fog_history_valid = u32(r.fog_history_ready && r.fog_history_distance == r.fog.distance),
         fog_frame = u32(r.frame_counter),
+        volume_count = u32(r.volumes.count),
+        volume_show = u32(r.volumes.show),
         shadow_view_projection = shadow_view_projection,
     }
     r.frame_cb_mapped_data[r.frame_slot] = constants

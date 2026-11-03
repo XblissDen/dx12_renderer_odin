@@ -7,8 +7,9 @@ written in Odin on DirectX 12, with a Dear ImGui interface.
 
 - **Lighting**: metallic-roughness PBR; one sun plus up to 1024 point and spot
   lights shaded through clustered lighting; image-based lighting from HDR
-  panoramas, with the panorama's sun extracted as a shadowed light; and
-  box-projected reflection probes captured from the scene.
+  panoramas, with the panorama's sun extracted as a shadowed light;
+  box-projected reflection probes captured from the scene; and irradiance
+  volumes for bounced diffuse light.
 - **Shadows**: four cascaded sun shadow maps, and a cached shadow atlas for up
   to 64 spot and point lights, each sized by how large it looks on screen.
 - **Screen-space and volumetric effects**: ground-truth ambient occlusion (GTAO),
@@ -22,8 +23,8 @@ written in Odin on DirectX 12, with a Dear ImGui interface.
 - **Editor**: picking and multiple selection, parent/child hierarchies
   (glTF models come in as their node trees),
   move/rotate/scale gizmos, viewport icons and debug lines (light ranges,
-  bounds), an Inspector, undo and redo, and saving and
-  loading scenes.
+  bounds), an Inspector, undo and redo, and scene files (Open and Save As
+  dialogs, with a check for unsaved changes).
 - **Draws**: GPU culling with indirect draws (frustum culling per view, and
   two-phase Hi-Z occlusion culling for the camera, down to meshlets of large
   meshes),
@@ -78,7 +79,7 @@ dx12_renderer.exe
 | **W / E / R**, **Q** | Gizmo move, rotate, scale; world or local axes (mouse released) |
 | **1–6** | Exposure, bloom threshold, bloom strength |
 | **F1** | Hide or show the panels |
-| **Esc** | Quit |
+| **Esc** | Quit (asks to save unsaved changes) |
 
 ## Dear ImGui
 

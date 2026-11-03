@@ -1,6 +1,9 @@
 package main
 
 import "base:runtime"
+import "core:fmt"
+import "core:os"
+import "core:path/filepath"
 import win32 "core:sys/windows"
 
 WINDOW_CLASS :: "DX12WindowClass"
@@ -125,9 +128,6 @@ window_unlock_cursor :: proc(){
 
 // Positive = UTF-8 bytes written, zero = cancelled, negative = error.
 window_open_asset_file :: proc(model: bool, output: []u8) -> i32 {
-    if len(output) == 0 do return -1
-
-    path: [32768]u16
     filter: win32.wstring =
         win32.L("Models (*.obj;*.gltf;*.glb)\x00*.obj;*.gltf;*.glb\x00\x00")
 
@@ -135,20 +135,58 @@ window_open_asset_file :: proc(model: bool, output: []u8) -> i32 {
         filter = win32.L("Textures (*.png;*.jpg;*.jpeg)\x00*.png;*.jpg;*.jpeg\x00\x00")
     }
 
+    return window_file_dialog(filter, false, "", output)
+}
+
+// An Open or Save As dialog for scene files, starting in the folder of
+// `start` (the working directory when it has none). Save As suggests its
+// file name and asks before overwriting. Returns as window_open_asset_file
+// does.
+window_scene_file_dialog :: proc(save: bool, start: string, output: []u8) -> i32 {
+    return window_file_dialog(win32.L("Scenes (*.json)\x00*.json\x00\x00"), save, start, output)
+}
+
+@(private)
+window_file_dialog :: proc(filter: win32.wstring, save: bool, start: string, output: []u8) -> i32 {
+    if len(output) == 0 do return -1
+
+    path: [32768]u16
+    if save && len(start) > 0 {
+        initial := win32.utf8_to_utf16(filepath.base(start), context.temp_allocator)
+        if len(initial) >= len(path) do return -1
+        copy(path[:], initial)
+    }
+    folder := filepath.dir(start)
+    if folder == "" || folder == "." {
+        folder = os.get_working_directory(context.temp_allocator) or_else "."
+    }
+
+    // The working directory stays put: assets and the catalog are relative
+    // to it.
     dialog := win32.OPENFILENAMEW{
         lStructSize = u32(size_of(win32.OPENFILENAMEW)),
         hwndOwner = g_hwnd,
         lpstrFile = win32.wstring(raw_data(path[:])),
         nMaxFile = u32(len(path)),
         lpstrFilter = filter,
+        lpstrInitialDir = win32.utf8_to_wstring(folder),
         Flags = win32.OFN_EXPLORER |
-                win32.OFN_FILEMUSTEXIST |
                 win32.OFN_PATHMUSTEXIST |
                 win32.OFN_NOCHANGEDIR,
     }
 
-    if !win32.GetOpenFileNameW(&dialog) {
-        return 0 if win32.CommDlgExtendedError() == 0 else -1
+    window_unlock_cursor()
+    if save {
+        dialog.lpstrDefExt = win32.L("json")
+        dialog.Flags |= win32.OFN_OVERWRITEPROMPT
+        if !win32.GetSaveFileNameW(&dialog) {
+            return 0 if win32.CommDlgExtendedError() == 0 else -1
+        }
+    } else {
+        dialog.Flags |= win32.OFN_FILEMUSTEXIST
+        if !win32.GetOpenFileNameW(&dialog) {
+            return 0 if win32.CommDlgExtendedError() == 0 else -1
+        }
     }
 
     // Converts into the caller's buffer and includes its null terminator.
@@ -159,6 +197,23 @@ window_open_asset_file :: proc(model: bool, output: []u8) -> i32 {
     if selected == "" do return -1
 
     return i32(len(selected))
+}
+
+WindowSaveChoice :: enum {
+    Save,
+    Discard,
+    Cancel,
+}
+
+// Asks whether to save the changes to `name` first: Yes, No or Cancel.
+window_ask_save_changes :: proc(name: string) -> WindowSaveChoice {
+    window_unlock_cursor()
+    text := win32.utf8_to_wstring(fmt.tprintf("Save changes to %s?", name))
+    switch win32.MessageBoxW(g_hwnd, text, win32.L(WINDOW_TITLE), win32.MB_YESNOCANCEL | win32.MB_ICONWARNING) {
+        case win32.IDYES: return .Save
+        case win32.IDNO: return .Discard
+    }
+    return .Cancel
 }
 
 @(private)
@@ -194,7 +249,7 @@ wparam: win32.WPARAM, lparam: win32.LPARAM) -> win32.LRESULT{
             g_client_height = u32((u64(lparam) >> 16) & 0xffff)
         case win32.WM_KEYDOWN:
             if wparam == win32.VK_ESCAPE{
-                win32.PostQuitMessage(0)
+                if editor_confirm_discard(&g_scene) do win32.PostQuitMessage(0)
             } else if wparam == win32.VK_F1 {
                 if (u64(lparam) & (u64(1) << 30)) == 0 {
                     g_debug_ui_visible = !g_debug_ui_visible
@@ -238,6 +293,9 @@ wparam: win32.WPARAM, lparam: win32.LPARAM) -> win32.LRESULT{
             if debug_ui_wants_keyboard() {
                 return 0
             }
+        case win32.WM_CLOSE:
+            // Closing the window asks about unsaved changes, like Escape.
+            if !editor_confirm_discard(&g_scene) do return 0
         case win32.WM_DESTROY:
             window_unlock_cursor()
             win32.PostQuitMessage(0)

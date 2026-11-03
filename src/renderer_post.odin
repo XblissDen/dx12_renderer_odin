@@ -189,8 +189,11 @@ renderer_bloom_pass :: proc(
 renderer_update_post_title :: proc() {
     r := &g_renderer
     title := fmt.tprintf(
-        "%s | FPS %.0f Frame %.1f ms | E %s T %.1f B %.1f [1-6]",
+        "%s - %s%s | FPS %.0f Frame %.1f ms | E %s T %.1f B %.1f [1-6]",
         WINDOW_TITLE,
+        scene_file_name(),
+        // A star for unsaved changes, checked once a second with the title.
+        "*" if scene_file_dirty(&g_scene) else "",
         r.fps,
         r.frame_ms,
         // Auto: the compensation, which keys 1/2 adjust.

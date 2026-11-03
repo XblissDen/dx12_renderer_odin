@@ -133,6 +133,7 @@ renderer_begin_frame :: proc() {
         renderer_read_gpu_timings(r.frame_slot)
         renderer_read_auto_exposure(r.frame_slot)
         renderer_read_cull_counters(r.frame_slot)
+        renderer_read_volume_capture(r.frame_slot)
     }
 
     allocator := r.command_allocators[r.frame_slot]

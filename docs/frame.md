@@ -46,7 +46,7 @@ frame never overwrites them while an earlier one still reads them.
 | --- | --- | --- |
 | GPU culling | Compute pass testing draws against every view's frustum, and the camera's large meshes meshlet by meshlet, filling in the shadow views' calls and the camera's early ones | [below](#gpu-culling) |
 | Shadows | Sun cascades, then the shadow atlas tiles of lights that changed (at most 28 views) | [Lighting](lighting.md#shadows) |
-| Probe capture | On frames that capture a reflection probe: its six faces, their mips, and the prefiltered levels | [Lighting](lighting.md#reflection-probes) |
+| Probe capture | On frames that capture a reflection probe: its six faces, their mips, and the prefiltered levels. On frames that capture an irradiance volume cell: the faces, their mips, and the projection to spherical harmonics | [Lighting](lighting.md#reflection-probes), [volumes](lighting.md#irradiance-volumes) |
 | Depth prepass | Depth, motion vectors, and the surface buffer (normal, roughness): the camera's early calls, then the depth pyramid and the late cull, then its late calls | [below](#depth-prepass) |
 | GTAO | Ambient occlusion from depth and the prepass normals, then a depth-aware blur | [Lighting](lighting.md#ambient-occlusion-gtao) |
 | SSR | Reflections traced through depth, read from last frame's image | [Lighting](lighting.md#screen-space-reflections-ssr) |
@@ -367,6 +367,7 @@ assigns registers:
 | Surface | t7 | Prepass normal and roughness |
 | Texture T8, Depth | t8, t9 | AO or motion vectors; scene depth |
 | Probes, Probe maps | t10, t11 | Root SRV, this frame's reflection probes; their prefiltered cube map array |
+| Volumes, Volume atlas | t12, t13 | Root SRV, this frame's irradiance volumes; their cells' 3D texture |
 | Textures | t22 onwards | The whole SRV heap, the bindless texture array |
 | Exposure buffer | t16 | Root SRV, the automatic exposure |
 | Reflections | t17 | SSR result |
@@ -377,7 +378,8 @@ Static samplers: linear wrap (s0), shadow comparison with a white border (s1),
 16× anisotropic for materials (s2), panoramas wrapping horizontally but
 clamped at the poles (s3), and clamp-to-edge for screen-space lookups (s4).
 
-Compute passes (GPU culling, auto exposure, light clusters, fog) have their
+Compute passes (GPU culling, auto exposure, light clusters, fog, irradiance
+volume projection) have their
 own small root signatures (GPU culling's also holds the meshlets, the mesh
 index buffers as a table over the SRV heap, the compacted index buffer and the
 meshlet flags), and so do the selection outline and debug lines,
@@ -404,7 +406,7 @@ passes mark their steps:
 | Pass | Steps inside |
 | --- | --- |
 | Shadow | `Sun cascade 0`–`3`, then `Spot light <entity> (<size> px)` or `Point light <entity> (<size> px)` for each light drawn into the atlas this frame |
-| Probe capture | `Face +X` … `Face -Z`, `Capture mips`, `Prefilter` (empty on frames without a capture) |
+| Probe capture | `Clear volumes` (when a volume's cells changed), then `Face +X` … `Face -Z`, `Capture mips`, and `Prefilter` for a probe or `Project to SH` for a volume cell (empty on frames without a capture) |
 | Depth prepass | `Early draws`, the `Occlusion culling` pass (with `Depth pyramid`), `Late draws` |
 | Scene | `Sky`, `Opaque`, `Blended` (when there are blended draws), `Fog` |
 | Post + UI | `Tone mapping`, the `FXAA / sharpen` pass, `Debug lines`, `Selection outline`, `UI` |

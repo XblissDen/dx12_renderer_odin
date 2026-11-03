@@ -203,7 +203,11 @@ FrameConstants :: struct #align(256) {
     fog_max_distance: f32,
     fog_history_valid: u32,
     fog_frame: u32,
-    _fog_pad: [3]f32,
+    // Irradiance volumes in the volume buffer, and nonzero to show only the
+    // diffuse ambient light (what the volumes change).
+    volume_count: u32,
+    volume_show: u32,
+    _volume_pad: f32,
 
     // The light views drawn into the shadow atlas this frame (VSShadow).
     shadow_view_projection: [SHADOW_TILE_VIEWS]alg.Matrix4f32,
@@ -536,6 +540,8 @@ Renderer :: struct {
 
     // Reflection probes: settings, slots, captures (renderer_probes.odin).
     probes: Probes,
+    // Irradiance volumes, captured like probes (renderer_probes.odin).
+    volumes: IrradianceVolumes,
 
     // Volumetric fog (renderer_fog.odin): the settings, the cell volumes (two
     // written in turn, then the integrated one) with their SRVs and UAVs, and
@@ -808,6 +814,7 @@ renderer_build_pipelines :: proc() -> (error: string) {
         renderer_create_light_cluster_pipeline()
         renderer_create_fog_pipelines()
         renderer_create_cull_pipeline()
+        renderer_create_volume_compute_pipelines()
     }
     r.shader_collecting = true
     create()
@@ -851,6 +858,8 @@ renderer_pipeline_slots :: proc() -> []^^d3d12.IPipelineState {
         &r.probes.downsample_pipeline_state, &r.probes.prefilter_pipeline_state,
     )
     for &pso in r.probes.capture_pipeline_states do append(&slots, &pso)
+    for &pso in r.volumes.capture_pipeline_states do append(&slots, &pso)
+    append(&slots, &r.volumes.project_pipeline_state, &r.volumes.clear_pipeline_state)
     return slots[:]
 }
 
@@ -971,6 +980,8 @@ renderer_init :: proc() {
 
     r.fog = renderer_default_fog_settings()
     r.probes.enabled = true
+    r.volumes.enabled = true
+    r.volumes.bounces = DEFAULT_VOLUME_BOUNCES
 
     r.frustum_culling_enabled = true
     r.occlusion_culling_enabled = true
@@ -1117,6 +1128,8 @@ Root_Slot :: enum u32 {
     Instance_Draws,      // t21: root SRV, this frame's instance lists
     Probes,              // t10: root SRV, this frame's reflection probes (GpuProbe)
     Probe_Maps,          // t11: the reflection probes' prefiltered cubes
+    Volumes,             // t12: root SRV, this frame's irradiance volumes (GpuIrradianceVolume)
+    Volume_Atlas,        // t13: the irradiance volumes' cells
 }
 
 // SRV: a root shader-resource view of a buffer, bound by GPU address.
@@ -1157,6 +1170,8 @@ ROOT_LAYOUT := [Root_Slot]Root_Param{
     .Instance_Draws      = {.SRV, 21, 0, .VERTEX},
     .Probes              = {.SRV, 10, 0, .PIXEL},
     .Probe_Maps          = {.Table, 11, 1, .PIXEL},
+    .Volumes             = {.SRV, 12, 0, .PIXEL},
+    .Volume_Atlas        = {.Table, 13, 1, .PIXEL},
 }
 
 // Binds this frame's objects and instance lists, and the bindless textures

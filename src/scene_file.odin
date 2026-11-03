@@ -1,6 +1,8 @@
 package main
 
+import "core:bytes"
 import "core:encoding/json"
+import "core:path/filepath"
 import "core:mem"
 import "core:os"
 import "core:strings"
@@ -11,7 +13,8 @@ SCENE_FILE_PATH :: "scene.json"
 // 9: blending. 10: auto-exposure. 11: light ranges, spot lights.
 // 12: spot light shadows. 13: point light shadows. 14: orbit centers.
 // 15: TAA sharpening. 16: parents. 17: reflection probes.
-SCENE_FILE_VERSION :: 17
+// 18: irradiance volumes.
+SCENE_FILE_VERSION :: 18
 
 ScenePostSettings :: struct{
     exposure: f32,
@@ -45,6 +48,8 @@ SceneFileEntity :: struct {
     spot_light: Maybe(SpotLight),
     // Version 17+.
     reflection_probe: Maybe(ReflectionProbe),
+    // Version 18+.
+    irradiance_volume: Maybe(IrradianceVolume),
     directional_light: Maybe(DirectionalLight),
     camera: Maybe(Camera),
     // Version 16+: the parent's position in `entities`; absent for roots
@@ -70,11 +75,19 @@ SceneFile :: struct {
     // Absent in files saved before reflection probes; they load with the
     // defaults (and have no probes to use them).
     probes: Maybe(SceneProbeSettings),
+    // Absent in files saved before irradiance volumes; they load with the
+    // defaults (and have no volumes to use them).
+    volumes: Maybe(SceneVolumeSettings),
 }
 
 SceneProbeSettings :: struct {
     enabled: bool,
     diffuse: bool,
+}
+
+SceneVolumeSettings :: struct {
+    enabled: bool,
+    bounces: i32,
 }
 
 SceneAmbientOcclusionSettings :: struct {
@@ -125,11 +138,44 @@ LegacySceneFile :: struct {
 g_scene_file_arena: mem.Dynamic_Arena
 g_scene_file_arena_active: bool
 
+// The file the scene was opened from or last saved to; empty while the
+// startup scene has never been saved.
+g_scene_path: string
+// The scene as it was then (scene_file_snapshot).
+g_scene_saved: []u8
+
 scene_file_destroy :: proc(){
     if g_scene_file_arena_active{
         mem.dynamic_arena_destroy(&g_scene_file_arena)
         g_scene_file_arena_active = false
     }
+    delete(g_scene_path)
+    g_scene_path = ""
+    delete(g_scene_saved)
+    g_scene_saved = nil
+}
+
+// Records the scene as saved, at `path` when one is given.
+scene_file_mark_saved :: proc(scene: ^Scene, path := "") {
+    if len(path) > 0 && path != g_scene_path {
+        delete(g_scene_path)
+        g_scene_path = strings.clone(path)
+    }
+    delete(g_scene_saved)
+    g_scene_saved = scene_file_snapshot(scene)
+    g_editor_dirty_frames = 0
+}
+
+// Whether the scene differs from what was last saved or opened.
+scene_file_dirty :: proc(scene: ^Scene) -> bool {
+    current := scene_file_snapshot(scene)
+    defer delete(current)
+    return !bytes.equal(current, g_scene_saved)
+}
+
+// The current file's name for the UI and window title.
+scene_file_name :: proc() -> string {
+    return filepath.base(g_scene_path) if len(g_scene_path) > 0 else "Untitled"
 }
 
 scene_store_owned_name :: proc(name: string) -> (result: string, ok: bool) {
@@ -243,6 +289,15 @@ scene_file_validate :: proc(scene: ^Scene) -> string{
             }
         }
 
+        if scene.has_irradiance_volume[i] {
+            if !scene.has_transform[i] {
+                return "Irradiance volume needs a Transform."
+            }
+            if !irradiance_volume_valid(scene.irradiance_volumes[i]) {
+                return "Invalid irradiance volume settings."
+            }
+        }
+
         if scene.has_mesh_renderer[i]{
             if !scene.has_transform[i] || !scene.has_material[i]{
                 return "Mesh needs Transform and Material."
@@ -299,15 +354,73 @@ scene_file_validate :: proc(scene: ^Scene) -> string{
 }
 
 scene_save_to_file :: proc(scene: ^Scene, path: string) -> (ok: bool, message: string)  {
+    data, encode_message := scene_file_encode(scene)
+    if data == nil do return false, encode_message
+    defer delete(data)
+
+    write_error := os.write_entire_file(path,data)
+    if write_error != nil{
+        return false, "Could not write scene file."
+    }
+
+    return true, "Scene saved."
+}
+
+// The scene as the JSON a save writes, or nil and why not.
+scene_file_encode :: proc(scene: ^Scene) -> ([]u8, string) {
     validation := scene_file_validate(scene)
     if len(validation) > 0{
-        return false, validation
+        return nil, validation
     }
-    if !renderer_environment_settings_valid(g_renderer.environment_settings) do return false, "Invalid environment settings."
+    if !renderer_environment_settings_valid(g_renderer.environment_settings) do return nil, "Invalid environment settings."
 
-    // Inactive slots are dropped, so entity indices are compacted on reload.
     entities := make([dynamic]SceneFileEntity, 0, scene.entity_count)
     defer delete(entities)
+    file := scene_file_build(scene, &entities, compare = false)
+
+    data, encode_error := json.marshal(file, json.Marshal_Options{
+        spec = .JSON,
+        pretty = true,
+        use_spaces = true,
+        spaces = 2,
+        use_enum_names = true,
+    })
+    if encode_error != nil{
+        delete(data)
+        return nil, "Could not encode scene."
+    }
+    return data, ""
+}
+
+// What a save would store, as raw bytes for the unsaved-changes check, which
+// runs several times a second (JSON takes milliseconds for large scenes).
+// Names and extra material slots are written out, since the structs only
+// point at them.
+scene_file_snapshot :: proc(scene: ^Scene) -> []u8 {
+    entities := make([dynamic]SceneFileEntity, 0, scene.entity_count, context.temp_allocator)
+    file := scene_file_build(scene, &entities, compare = true)
+
+    data := make([dynamic]u8, 0, size_of(SceneFile) + len(entities) * (size_of(SceneFileEntity) + 64))
+    for entity in entities {
+        entity := entity
+        name_length := len(entity.name)
+        append(&data, ..mem.ptr_to_bytes(&name_length))
+        append(&data, entity.name)
+        append(&data, ..mem.slice_to_bytes(entity.extra_materials))
+        entity.name, entity.extra_materials = "", nil
+        append(&data, ..mem.ptr_to_bytes(&entity))
+    }
+    file.entities = nil
+    append(&data, ..mem.ptr_to_bytes(&file))
+    return data[:]
+}
+
+// The file's contents for the scene. Inactive slots are dropped, so entity
+// indices are compacted on reload. For the unsaved-changes check (`compare`),
+// what changes by itself is left out: cameras' transforms and angles (flying
+// around), the spin of rotating objects, and orbiting lights' positions.
+@(private="file")
+scene_file_build :: proc(scene: ^Scene, entities: ^[dynamic]SceneFileEntity, compare: bool) -> SceneFile {
     // Each live slot's position in `entities`, for the parent links.
     saved_index := make([]int, scene.entity_count, context.temp_allocator)
     live := 0
@@ -334,14 +447,32 @@ scene_save_to_file :: proc(scene: ^Scene, path: string) -> (ok: bool, message: s
         if scene.has_point_light[i] do entity.point_light = scene.point_lights[i]
         if scene.has_spot_light[i] do entity.spot_light = scene.spot_lights[i]
         if scene.has_reflection_probe[i] do entity.reflection_probe = scene.reflection_probes[i]
+        if scene.has_irradiance_volume[i] do entity.irradiance_volume = scene.irradiance_volumes[i]
         if scene.has_directional_light[i] do entity.directional_light = scene.directional_lights[i]
         if scene.has_camera[i] do entity.camera = scene.cameras[i]
-        append(&entities, entity)
+        if compare && scene.has_transform[i] {
+            transform := scene.transforms[i]
+            if transform.rotation_speed != 0 do transform.rotation.y = 0
+            if scene.has_point_light[i] && scene.point_lights[i].orbit_enabled {
+                transform.position = {}
+                light := scene.point_lights[i]
+                light.orbit_angle = 0
+                entity.point_light = light
+            }
+            entity.transform = transform
+            if scene.has_camera[i] {
+                entity.transform = nil
+                camera := scene.cameras[i]
+                camera.yaw, camera.pitch = 0, 0
+                entity.camera = camera
+            }
+        }
+        append(entities, entity)
     }
 
-    file := SceneFile{
+    return SceneFile{
         version = SCENE_FILE_VERSION,
-        entities = entities[:],
+        entities = entities^[:],
         post_process = {
             exposure = g_renderer.post_exposure,
             bloom_threshold = g_renderer.post_threshold,
@@ -373,26 +504,11 @@ scene_save_to_file :: proc(scene: ^Scene, path: string) -> (ok: bool, message: s
             enabled = g_renderer.probes.enabled,
             diffuse = g_renderer.probes.diffuse,
         },
+        volumes = SceneVolumeSettings{
+            enabled = g_renderer.volumes.enabled,
+            bounces = g_renderer.volumes.bounces,
+        },
     }
-
-    data, encode_error := json.marshal(file, json.Marshal_Options{
-        spec = .JSON,
-        pretty = true,
-        use_spaces = true,
-        spaces = 2,
-        use_enum_names = true,
-    })
-    if encode_error != nil{
-        return false, "Could not encode scene."
-    }
-    defer delete(data)
-
-    write_error := os.write_entire_file(path,data)
-    if write_error != nil{
-        return false, "Could not write scene file."
-    }
-
-    return true, "Scene saved."
 }
 
 scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
@@ -475,6 +591,7 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
             scene_add_spot_light(staged, entity, light)
         }
         if probe, ok := source.reflection_probe.?; ok do scene_add_reflection_probe(staged, entity, probe)
+        if volume, ok := source.irradiance_volume.?; ok do scene_add_irradiance_volume(staged, entity, volume)
         if directional_light, ok := source.directional_light.?; ok do scene_add_directional_light(staged, entity, directional_light)
         if camera, ok := source.camera.?; ok do scene_add_camera(staged, entity, camera)
 
@@ -571,6 +688,8 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
     }
     if !auto_exposure_settings_valid(auto_exposure) do return false, "Invalid auto-exposure settings."
     probes := file.probes.? or_else SceneProbeSettings{enabled = true}
+    volumes := file.volumes.? or_else SceneVolumeSettings{enabled = true, bounces = DEFAULT_VOLUME_BOUNCES}
+    if volumes.bounces < 1 || volumes.bounces > MAX_VOLUME_BOUNCES do return false, "Invalid irradiance volume settings."
 
     for i in 0..<staged.entity_count{
         if staged.has_directional_light[i]{
@@ -616,6 +735,8 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
     g_renderer.fog = fog
     g_renderer.probes.enabled = probes.enabled
     g_renderer.probes.diffuse = probes.diffuse
+    g_renderer.volumes.enabled = volumes.enabled
+    g_renderer.volumes.bounces = volumes.bounces
     // The slots' entities and captures belong to the old scene.
     renderer_recapture_probes(forget = true)
 

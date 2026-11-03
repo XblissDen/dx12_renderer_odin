@@ -11,7 +11,8 @@ README](../README.md) covers building and running.
   captures, and shader hot-reload.
 - [Lighting](lighting.md): surface shading, materials, the sun, point and spot
   lights, clustered lighting, shadows, image-based lighting and the sky,
-  reflection probes, volumetric fog, GTAO, and screen-space reflections.
+  reflection probes, irradiance volumes, volumetric fog, GTAO, and
+  screen-space reflections.
 - [Post-processing](post_processing.md): TAA and sharpening, FXAA, auto
   exposure, bloom, and tone mapping.
 - [Assets](assets.md): the asset catalog, OBJ and glTF import, materials,
@@ -57,7 +58,7 @@ README](../README.md) covers building and running.
 | `src/renderer_taa.odin` | TAA targets and resolve |
 | `src/renderer_post.odin` | HDR/LDR targets, bloom, auto exposure |
 | `src/renderer_environment.odin` | HDR panoramas, sun extraction, IBL baking |
-| `src/renderer_probes.odin` | Reflection probes: slots, captures, prefiltering |
+| `src/renderer_probes.odin` | Reflection probes and irradiance volumes: slots, captures, prefiltering, cell scheduling |
 | `src/renderer_selection.odin` | Selection outline and debug lines |
 | `src/texture_mips.odin`, `src/texture_cache.odin` | Mip chains; BC7/BC5/BC4/BC6H compression and the texture cache |
 | `src/assets.odin`, `src/gltf.odin`, `src/mesh.odin` | Asset catalog, glTF and OBJ loading, meshlet building |
@@ -69,5 +70,6 @@ README](../README.md) covers building and running.
 | `shaders/auto_exposure.hlsl` | Luminance histogram and exposure adaptation |
 | `shaders/cull.hlsl` | GPU frustum, occlusion and meshlet culling, the depth pyramid |
 | `shaders/sky.hlsl`, `irradiance.hlsl`, `environment_prefilter.hlsl` | Sky, IBL baking, reflection probe filtering |
+| `shaders/irradiance_volume.hlsl` | Irradiance volume cells: projection to spherical harmonics |
 | `shaders/common.hlsl` | Code the shaders share: PI and the panorama mapping |
 | `shaders/selection.hlsl` | Selection outline and debug lines |

@@ -5,7 +5,7 @@
 A scene (`src/scene.odin`) is a fixed set of up to 1024 entity slots. Each
 component type is an array indexed by entity, with a matching `has_…` flag:
 transform, mesh renderer (a model handle), material slots, point light, spot
-light, reflection probe, directional light, and camera. An entity is just its index, plus an
+light, reflection probe, irradiance volume, directional light, and camera. An entity is just its index, plus an
 `alive` flag and a name. Deleted slots are reused by later entities.
 
 - **Transform**: position, Euler rotation, and per-axis scale (positive on
@@ -19,6 +19,9 @@ light, reflection probe, directional light, and camera. An entity is just its in
   exactly one directional light (the sun), and exactly one camera.
 - **Reflection probes** have a blend distance and box projection; their box
   is the entity's transform ([below](#reflection-probes)).
+- **Irradiance volumes** have a cell count along each axis and a blend
+  distance; their box is the entity's transform too
+  ([below](#irradiance-volumes)).
 
 The default scene, built in code at startup, has three objects on a stone
 ground, the sun, two orbiting point lights, and the camera.
@@ -34,7 +37,8 @@ so text stays sharp.
 
 - **Renderer controls**: shader reload status, exposure, bloom, tone mapping,
   anti-aliasing, the environment, shadows, GTAO, SSR, reflection probes,
-  light clusters, fog, and the frustum, occlusion and meshlet culling switches. **Show ImGui demo** opens
+  irradiance volumes (with **Show diffuse ambient light only**), light
+  clusters, fog, and the frustum, occlusion and meshlet culling switches. **Show ImGui demo** opens
   ImGui's own demo window.
 - **Profiler**: frame rate and frame time, the camera's and shadow views'
   draws and calls after culling (with how many were occluded), the camera's
@@ -44,8 +48,9 @@ so text stays sharp.
   the [GPU timings](frame.md#gpu-timings) of every pass.
 - **Scene**: add models (a glTF model with several nodes as its node tree,
   see [Hierarchy](hierarchy.md#gltf-node-trees)), lights and reflection
-  probes, undo and redo,
-  duplicate, delete, focus, save and load, and the entity tree (drag a row
+  probes, irradiance volumes, undo and redo,
+  duplicate, delete, focus, open, save and save as
+  ([Scene files](#scene-files)), and the entity tree (drag a row
   onto another to parent it).
 - **Inspector**: the primary selected entity's parent, transform, material
   slot, light or probe settings, and the gizmo's options.
@@ -79,7 +84,7 @@ plane at least 100.
 | **W / E / R** (released) | Gizmo: move, rotate, scale |
 | **Q** (released) | Gizmo: world or local axes |
 | **Ctrl+A** (released) | Select every listed entity |
-| **Esc** | Quit |
+| **Esc** | Quit (asking about [unsaved changes](#scene-files)) |
 
 While the mouse is captured, ImGui gets no mouse or keyboard input. Keys typed
 into a UI control do not trigger the shortcuts.
@@ -184,7 +189,8 @@ Neither shows while the UI is hidden (F1).
 
 **Icons for entities without a mesh** (on by default): every placed entity
 that draws nothing gets a 10-pixel icon at its world position. These are
-empty entities, reflection probes, and lights whose marker mesh was removed;
+empty entities, reflection probes, irradiance volumes, and lights whose
+marker mesh was removed;
 the camera gets none. The icons make such entities clickable in the
 viewport.
 
@@ -192,6 +198,8 @@ viewport.
 - A **spot light** is the same disc, with three rays fanning along its beam's
   direction on screen.
 - A **reflection probe** is a light blue ball with a highlight.
+- An **irradiance volume** is a light orange ring around a 3 × 3 grid of
+  dots.
 - An **empty entity** is a diamond.
 - A selected icon gets a ring, orange for the primary and darker for the
   others.
@@ -211,8 +219,10 @@ in `src/renderer_selection.odin`). They show:
   range, four edges from the light to that circle, and a fainter circle for
   the inner angle. Lines use the light's color at full brightness.
 - **Orbits**: an orbiting point light's circle, in its parent's space.
-- **Probe boxes**, for the selected reflection probes, or for every probe
-  with **Boxes of all reflection probes**, in light blue.
+- **Probe and volume boxes**, for the selected reflection probes and
+  irradiance volumes, or for all of them with **Boxes of all probes and
+  volumes**: probes in light blue, volumes in light orange. A selected
+  volume also shows a small cross at each cell's center (up to 4096 cells).
 - **Mesh bounds**, with **Mesh bounds** checked: each drawn mesh's local
   bounding box, placed by its world matrix, which is the box that culling
   uses.
@@ -317,12 +327,68 @@ how probes capture and shade.
 - **Limits**: up to 16 probes are used. Any more are ignored, and their
   Inspector says so.
 
+## Irradiance volumes
+
+**Add Irradiance Volume** places a volume centered three units in front of
+the camera, with an 8 × 4 × 8 box and a cell every unit. See
+[Lighting](lighting.md#irradiance-volumes) for how volumes capture and
+shade.
+
+- **Placing**: scale the box to cover the space whose diffuse light it should
+  hold, such as a room or a building. Cells fill the box evenly, so scaling
+  it spreads them further apart.
+- **Cells along X, Y and Z** (1 to 32 each): more cells follow the light more
+  closely, but each takes a frame to capture. About one cell per meter suits
+  rooms. Changing them starts the volume over.
+- **Blend distance**: how far inside its faces the volume fades in.
+- **Capturing**: a volume captures when added, moved or resized, and again
+  after the environment changes or a scene loads. The Inspector shows the
+  bounce and cell being captured, then "Captured". After changing lights or
+  models, use **Capture volume again**, or **Capture all volumes again** in
+  Renderer controls, which also has **Volume bounces** (1 to 8, default 2;
+  raising it continues from the passes already made).
+- **Limits**: up to 4 volumes are used. Any more are ignored, and their
+  Inspector says so.
+
 ## Scene files
 
-**Save Scene** and **Load Scene** write and read `scene.json`
-(`src/scene_file.odin`): every live entity with its components, plus the
-renderer settings (post-processing, environment, shadows, ambient occlusion, SSR,
-reflection probes, fog, auto exposure). Assets are referenced by catalog ID.
+A scene file (`src/scene_file.odin`) holds every live entity with its
+components, plus the renderer settings (post-processing, environment, shadows,
+ambient occlusion, SSR, reflection probes, irradiance volumes, fog, auto
+exposure). Assets are
+referenced by catalog ID, so a scene file can live in any folder.
+
+The Scene panel's file buttons:
+
+- **Open...** picks a `.json` scene file in the Windows file dialog and loads
+  it. That clears undo history and the selection.
+- **Save** writes the scene to the file it came from. If it was never saved
+  (the startup scene is **Untitled**), Save works like Save As.
+- **Save As...** picks a file to save to, suggesting `scene.json` for an
+  untitled scene, and asks before overwriting. The scene then belongs to that
+  file.
+
+The panel shows the file's name and full path, and "(unsaved changes)" when
+the scene differs from that file. The window title shows the name too, with
+a `*` for unsaved changes. Both dialogs start in the current file's folder,
+or in the working directory. The working directory itself never changes,
+since the catalog and assets are relative to it.
+
+**Unsaved changes.** Opening another scene, Esc, or closing the window asks
+"Save changes to …?" when there is anything to save:
+
+- **Yes** saves first (asking for a file if the scene is untitled), and goes
+  on only if the save worked.
+- **No** discards the changes.
+- **Cancel** keeps the scene open.
+
+A scene has unsaved changes when what a save would write differs from what
+was last saved or opened. Changes that happen by themselves are left out:
+the camera flying around, objects spinning, and lights orbiting. Undoing
+back to how the file has it counts as no change. The check compares the
+values as raw bytes (`scene_file_snapshot`) rather than encoding JSON. That
+takes about 0.02 ms, against about 13 ms of JSON for a scene with 40 copies
+of Sponza, so the panel can check four times a second.
 
 - **Validation**: a file is checked completely before anything changes. Every
   referenced asset must exist and suit its use (an albedo texture where an
@@ -333,7 +399,7 @@ reflection probes, fog, auto exposure). Assets are referenced by catalog ID.
   entity slots now hold other entities and the old images show the old scene.
 - **Parents** are saved as positions in the file's entity list, and loading
   rejects cycles ([Hierarchy](hierarchy.md#scene-files)).
-- **Versions**: the format is at version 17. Newer settings are optional
+- **Versions**: the format is at version 18. Newer settings are optional
   sections or fields, and a file without one gets a default. Where a feature
   changed how existing scenes look, the default keeps the old look: Reinhard
   tone mapping, FXAA, no sharpening, auto exposure off, no volumetric fog,

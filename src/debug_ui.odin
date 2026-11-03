@@ -399,8 +399,23 @@ debug_ui_lighting_controls :: proc() {
         debug_ui_text(fmt.bprintf(text_buffer[:], "%d in the scene (up to %d are used)", probes.scene_count, MAX_REFLECTION_PROBES))
         // Probes capture again on their own only when moved or the
         // environment changes; not when lights or models do.
-        if ui_button("Capture all probes again") do renderer_recapture_probes()
+        if ui_button("Capture all probes again") do renderer_recapture_probes(volumes = false)
     }
+
+    ui_separator()
+    volumes := &r.volumes
+    ui_checkbox("Irradiance volumes", &volumes.enabled)
+    if volumes.enabled {
+        bounces := f32(volumes.bounces)
+        if ui_slider_float("Volume bounces", &bounces, 1, MAX_VOLUME_BOUNCES) {
+            // More bounces continue from the passes already made.
+            volumes.bounces = clamp(i32(math.round(bounces)), 1, MAX_VOLUME_BOUNCES)
+        }
+        text_buffer: [96]u8
+        debug_ui_text(fmt.bprintf(text_buffer[:], "%d in the scene (up to %d are used)", volumes.scene_count, MAX_IRRADIANCE_VOLUMES))
+        if ui_button("Capture all volumes again") do renderer_recapture_volumes()
+    }
+    ui_checkbox("Show diffuse ambient light only", &volumes.show)
 
     ui_separator()
     ui_checkbox("Show light clusters", &r.light_show_clusters)
