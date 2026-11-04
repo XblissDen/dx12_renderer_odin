@@ -44,13 +44,14 @@ frame never overwrites them while an earlier one still reads them.
 
 | Pass | What it does | Details |
 | --- | --- | --- |
-| Ray structures | With ray-traced shadows or reflections: builds the frame's TLAS over every draw | [below](#ray-tracing-structures) |
+| Ray structures | With ray-traced shadows, reflections or dynamic volumes: builds the frame's TLAS over every draw | [below](#ray-tracing-structures) |
 | GPU culling | Compute pass testing draws against every view's frustum, and the camera's large meshes meshlet by meshlet, filling in the shadow views' calls and the camera's early ones | [below](#gpu-culling) |
 | Shadows | Sun cascades (unless rays replace them and fog is off), then the shadow atlas tiles of lights that changed (at most 28 views) | [Lighting](lighting.md#shadows) |
 | Probe capture | On frames that capture a reflection probe: its six faces, their mips, and the prefiltered levels. On frames that capture an irradiance volume cell: the faces, their mips, and the projection to spherical harmonics | [Lighting](lighting.md#reflection-probes), [volumes](lighting.md#irradiance-volumes) |
 | Depth prepass | Depth, motion vectors, and the surface buffer (normal, roughness): the camera's early calls, then the depth pyramid and the late cull, then its late calls | [below](#depth-prepass) |
 | GTAO | Ambient occlusion from depth and the prepass normals, then a depth-aware blur | [Lighting](lighting.md#ambient-occlusion-gtao) |
 | Light clusters | Compute pass listing the lights that reach each view cluster | [Lighting](lighting.md#clustered-lighting) |
+| Dynamic GI | Dynamic irradiance volumes (DXR 1.1): clears probes that start over, traces a batch of probes' rays, blends them into the probes' maps and moves probes out of geometry | [Lighting](lighting.md#dynamic-volumes) |
 | Reflections | Ray-traced reflections (DXR 1.1), or SSR: reflections traced through depth, read from last frame's image. After the light clusters, which ray hits use | [Lighting](lighting.md#ray-traced-reflections), [SSR](lighting.md#screen-space-reflections-ssr) |
 | Volumetric fog | Compute passes lighting the fog's cells and integrating them front to back | [Lighting](lighting.md#volumetric-fog) |
 | Scene | Sky, then lit opaque surfaces, then blended surfaces (accumulated, then composited), then the fog, into the HDR target | [Lighting](lighting.md) |
@@ -405,6 +406,7 @@ assigns registers:
 | Volumes, Volume atlas | t12, t13 | Root SRV, this frame's irradiance volumes; their cells' 3D texture |
 | Scene BVH, Ray instances | t14, t15 | Root SRVs, this frame's TLAS and its per-instance table (DXR 1.1 GPUs only) |
 | Mesh buffers | t0 onwards, space 1 | The whole SRV heap again, as raw buffers (mesh vertices and indices for ray hits) |
+| Dynamic volumes | t0–t2, space 2 | The dynamic volumes' irradiance, distance and probe atlases |
 | Textures | t22 onwards | The whole SRV heap, the bindless texture array |
 | Exposure buffer | t16 | Root SRV, the automatic exposure |
 | Reflections | t17 | Ray-traced or SSR reflections |

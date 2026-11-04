@@ -54,6 +54,7 @@ GPU_Pass :: enum u32{
     Occlusion,
     Probe_Capture,
     Ray_Structures,
+    Dynamic_GI,
 }
 
 // As the Profiler panel and GPU captures name the passes.
@@ -63,7 +64,7 @@ GPU_PASS_NAMES := [GPU_Pass]string{
     .Depth_Prepass = "Depth prepass", .GTAO = "GTAO + blur", .FXAA = "FXAA / sharpen", .TAA = "TAA resolve",
     .Auto_Exposure = "Auto exposure", .SSR = "Reflections", .Light_Clusters = "Light clusters", .Fog = "Volumetric fog",
     .Culling = "GPU culling", .Occlusion = "Occlusion culling", .Probe_Capture = "Probe capture",
-    .Ray_Structures = "Ray structures",
+    .Ray_Structures = "Ray structures", .Dynamic_GI = "Dynamic GI",
 }
 
 Vertex :: struct {
@@ -214,7 +215,8 @@ FrameConstants :: struct #align(256) {
     // diffuse ambient light (what the volumes change).
     volume_count: u32,
     volume_show: u32,
-    _volume_pad: f32,
+    // Nonzero: the volumes are dynamic, probes updated by rays.
+    volume_dynamic: u32,
 
     // The light views drawn into the shadow atlas this frame (VSShadow).
     shadow_view_projection: [SHADOW_TILE_VIEWS]alg.Matrix4f32,
@@ -882,6 +884,10 @@ renderer_pipeline_slots :: proc() -> []^^d3d12.IPipelineState {
     for &pso in r.probes.capture_pipeline_states do append(&slots, &pso)
     for &pso in r.volumes.capture_pipeline_states do append(&slots, &pso)
     append(&slots, &r.volumes.project_pipeline_state, &r.volumes.clear_pipeline_state)
+    append(&slots,
+        &r.volumes.ray_pipeline_state, &r.volumes.blend_irradiance_pipeline_state,
+        &r.volumes.blend_distance_pipeline_state, &r.volumes.relocate_pipeline_state, &r.volumes.reset_pipeline_state,
+    )
     return slots[:]
 }
 
@@ -1157,6 +1163,7 @@ Root_Slot :: enum u32 {
     Scene_BVH,           // t14: root SRV, this frame's TLAS (ray tracing only)
     Ray_Instances,       // t15: root SRV, this frame's GpuRayInstance table
     Mesh_Buffers,        // t0, space1 onwards: the whole SRV heap as raw buffers (mesh vertices and indices)
+    Dynamic_Volumes,     // t0-t2, space2: the dynamic volumes' irradiance, distance and probe atlases
 }
 
 // SRV: a root shader-resource view of a buffer, bound by GPU address.
@@ -1202,6 +1209,7 @@ ROOT_LAYOUT := [Root_Slot]Root_Param{
     .Scene_BVH           = {.SRV, 14, 0, .PIXEL},
     .Ray_Instances       = {.SRV, 15, 0, .PIXEL},
     .Mesh_Buffers        = {.Table, 0, SRV_HEAP_CAPACITY, .PIXEL}, // In register space 1.
+    .Dynamic_Volumes     = {.Table, 0, 3, .PIXEL}, // In register space 2.
 }
 
 // Binds this frame's objects and instance lists, and the bindless textures
@@ -1280,7 +1288,7 @@ renderer_create_root_signature :: proc() {
                     NumDescriptors = layout.count,
                     BaseShaderRegister = layout.register,
                     // The raw view of the heap must not overlap the textures'.
-                    RegisterSpace = 1 if slot == .Mesh_Buffers else 0,
+                    RegisterSpace = 1 if slot == .Mesh_Buffers else 2 if slot == .Dynamic_Volumes else 0,
                 }
                 param.ParameterType = .DESCRIPTOR_TABLE
                 param.DescriptorTable = {NumDescriptorRanges = 1, pDescriptorRanges = &ranges[slot]}
@@ -1631,6 +1639,7 @@ renderer_create_pipelines :: proc() {
     renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSSsr", SSR_FORMAT, &r.ssr_pipeline_state)
     if r.ray_tracing.supported {
         renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSRayReflections", SSR_FORMAT, &r.ray_reflection_pipeline_state)
+        renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSVolumeRays", .R32G32B32A32_FLOAT, &r.volumes.ray_pipeline_state)
     }
     // Fog over the lit image: fog.rgb + scene * fog.a, keeping the scene's alpha.
     fog_apply := fullscreen
@@ -2165,7 +2174,9 @@ renderer_render_frame :: proc(scene: ^Scene) {
     renderer_render_depth_prepass(frame)
     renderer_render_gtao()
     renderer_build_light_clusters()
-    // After the clusters: ray-traced reflections light their hits with them.
+    // After the clusters: probe rays and ray-traced reflections light their
+    // hits with them; reflections and the lit pass read the updated probes.
+    renderer_update_dynamic_volumes()
     renderer_render_ssr()
     renderer_render_fog()
     renderer_render_scene_pass(draws, frame.scene_batches, frame.late_scene_batches, frame.transparent_batches)

@@ -736,6 +736,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         fog_frame = u32(r.frame_counter),
         volume_count = u32(r.volumes.count),
         volume_show = u32(r.volumes.show),
+        volume_dynamic = u32(renderer_dynamic_volumes_active()),
         shadow_view_projection = shadow_view_projection,
         ray_shadows = ray_shadows,
         ray_sun_tan = ray_sun_tan,

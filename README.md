@@ -9,7 +9,8 @@ written in Odin on DirectX 12, with a Dear ImGui interface.
   lights shaded through clustered lighting; image-based lighting from HDR
   panoramas, with the panorama's sun extracted as a shadowed light;
   box-projected reflection probes captured from the scene; and irradiance
-  volumes for bounced diffuse light.
+  volumes for bounced diffuse light, updated live by rays (DDGI-style) or
+  baked from captures.
 - **Shadows**: ray-traced sun shadows with soft edges (DXR 1.1 inline ray
   queries) or four cascaded shadow maps, and a cached shadow atlas for up to
   64 spot and point lights, each sized by how large it looks on screen.

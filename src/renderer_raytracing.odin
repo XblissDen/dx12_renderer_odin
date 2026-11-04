@@ -10,8 +10,10 @@ package main
 //     world matrix.
 // A ray query in a shader (RayQuery, TraceRayInline) walks them and reports
 // hits; there are no ray-tracing pipelines or shader tables. The lit pass
-// uses them for the sun's shadows (scene.hlsl, SunRayVisibility), and the
-// reflection pass for reflections (PSRayReflections, renderer_ssr.odin).
+// uses them for the sun's shadows (scene.hlsl, SunRayVisibility), the
+// reflection pass for reflections (PSRayReflections, renderer_ssr.odin), and
+// dynamic irradiance volumes for their probes (PSVolumeRays,
+// renderer_probes.odin).
 //
 // GPUs without DXR 1.1 keep the cascaded shadow maps: the shaders are then
 // compiled without RAY_TRACING, since a pipeline using ray queries cannot be
@@ -32,13 +34,16 @@ RAY_STRUCTURE_ALIGNMENT :: u64(256)
 // Cutout hits read texture coordinates from the vertex buffers (scene.hlsl).
 #assert(size_of(Vertex) == 48 && offset_of(Vertex, texcoord) == 24)
 
-// Per TLAS instance (draw), for cutout hits: the raw views of its mesh's
-// buffers and its submesh's first index. Laid out like scene.hlsl's.
+// Per TLAS instance (draw), for shading hits: the raw views of its mesh's
+// buffers, its submesh's first index, and flags (RAY_INSTANCE_DOUBLE_SIDED:
+// a hit on its back is not the inside of something). Laid out like
+// scene.hlsl's.
 GpuRayInstance :: struct {
     vertex_buffer, index_buffer: u32,
     first_index: u32,
-    _pad: u32,
+    flags: u32,
 }
+RAY_INSTANCE_DOUBLE_SIDED :: 0x1
 
 // The sun's angular radius by default: the real sun's, about 0.27 degrees.
 DEFAULT_SUN_ANGLE :: f32(0.27)
@@ -320,6 +325,7 @@ renderer_write_ray_instance :: proc(index: int, model: alg.Matrix4f32, mesh: Mes
         vertex_buffer = gpu.vertex_srv_index,
         index_buffer = gpu.index_srv_index,
         first_index = first_index,
+        flags = RAY_INSTANCE_DOUBLE_SIDED if double_sided else 0,
     }
 }
 
@@ -329,7 +335,7 @@ renderer_build_scene_tlas :: proc(instance_count: int) {
     r := &g_renderer
     rt := &r.ray_tracing
     rt.instance_count = instance_count
-    rt.built = renderer_ray_shadows_active() || renderer_ray_reflections_active()
+    rt.built = renderer_ray_shadows_active() || renderer_ray_reflections_active() || renderer_dynamic_volumes_active()
     // Timed every frame, like every pass (zero when nothing is built).
     renderer_begin_gpu_pass(.Ray_Structures)
     defer renderer_end_gpu_pass(.Ray_Structures)
@@ -363,6 +369,7 @@ renderer_bind_ray_tracing :: proc() {
     renderer_bind_buffer_srv(.Scene_BVH, rt.tlas->GetGPUVirtualAddress())
     renderer_bind_buffer_srv(.Ray_Instances, rt.info_buffer->GetGPUVirtualAddress() + u64(int(r.frame_slot) * MAX_DRAWS * size_of(GpuRayInstance)))
     renderer_bind_srv(.Mesh_Buffers, 0)
+    renderer_bind_srv(.Dynamic_Volumes, r.volumes.dynamic_srv_start)
 }
 
 // The frame constants' ray-tracing fields: whether to trace the sun's

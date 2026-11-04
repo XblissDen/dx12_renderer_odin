@@ -19,8 +19,17 @@ package main
 // term per axis, for each color), which the lit pass interpolates between
 // cells and evaluates along the surface normal. Captures shade with the
 // volumes captured so far, so each further pass over the cells adds a bounce.
+//
+// On GPUs with DXR 1.1, volumes are dynamic instead (DDGI, Majercik et al.):
+// every cell is a probe that rays update each frame, so its light follows
+// moving lights, the sun and edits without baking. A pixel pass traces a
+// batch of probes' rays (PSVolumeRays), compute passes blend them into each
+// probe's octahedral irradiance and distance maps and move probes out of
+// geometry (dynamic_volume.hlsl), and the lit pass weights probes by whether
+// they can see the surface (volumes.hlsl, SampleDynamicVolume).
 
 import "core:math"
+import "core:math/rand"
 import alg "core:math/linalg"
 import d3d12 "vendor:directx/d3d12"
 import dxgi "vendor:directx/dxgi"
@@ -135,6 +144,34 @@ VOLUME_CELL_OFFSETS := [?][3]f32{
 // Below this validity a capture counts as invalid and moves on.
 VOLUME_RETRY_VALIDITY :: 0.5
 
+// Cells per volume at most (its room in the dynamic atlases).
+IRRADIANCE_VOLUME_MAX_TOTAL_CELLS :: 8192
+// Dynamic volumes' atlases (volumes.hlsl): a tile per probe, 256 per row,
+// each volume's probes from slot * IRRADIANCE_VOLUME_MAX_TOTAL_CELLS on.
+DYNAMIC_ATLAS_COLUMNS :: 256
+DYNAMIC_ATLAS_ROWS :: MAX_IRRADIANCE_VOLUMES * IRRADIANCE_VOLUME_MAX_TOTAL_CELLS / DYNAMIC_ATLAS_COLUMNS
+#assert(DYNAMIC_ATLAS_ROWS == 128) // As volumes.hlsl.
+DYNAMIC_IRRADIANCE_TILE :: 8
+DYNAMIC_DISTANCE_TILE :: 16
+// The rays texture: a row of up to this many rays per probe of the batch.
+DYNAMIC_MAX_RAYS :: 256
+DYNAMIC_MAX_BATCH :: 4096
+DEFAULT_DYNAMIC_RAYS :: 128
+DEFAULT_DYNAMIC_BATCH :: 2048
+DEFAULT_DYNAMIC_HYSTERESIS :: f32(0.97)
+
+// This frame's probe update, for PSVolumeRays (b3) and dynamic_volume.hlsl;
+// laid out like volumes.hlsl's cbuffer.
+DynamicVolumeConstants :: struct #align(256) {
+    rotation: [3][4]f32,
+    rays, batch, cursor, total: u32,
+    hysteresis: f32,
+    volume_count: u32,
+    _pad: [2]f32,
+}
+
+Dynamic_Root_Slot :: enum u32 {Constants, Volumes, Rays, Atlases, Reset}
+
 // A cell captured in some frame, whose validity is read back when that
 // frame's slot comes round again.
 VolumeCapture :: struct {
@@ -158,7 +195,14 @@ GpuIrradianceVolume :: struct {
     // How far along the normal the lookup moves, away from the surface the
     // nearest cells may be behind.
     normal_bias: f32,
-    _pad: [7]f32,
+    // Dynamic: its first probe in the atlases, its first place in the order
+    // probes are updated in, its probe count, and the longest distance the
+    // distance maps record.
+    first_probe: u32,
+    sequence_start: u32,
+    probe_count: u32,
+    max_distance: f32,
+    _pad: [3]f32,
 }
 #assert(size_of(GpuIrradianceVolume) == 192)
 
@@ -207,6 +251,32 @@ IrradianceVolumes :: struct {
     root_signature: ^d3d12.IRootSignature,
     project_pipeline_state, clear_pipeline_state: ^d3d12.IPipelineState,
     capture_pipeline_states: [Draw_Variant]^d3d12.IPipelineState,
+
+    // Dynamic volumes (DXR 1.1): the setting, rays per probe, the most
+    // probes updated per frame, and how much of its old light a probe keeps
+    // per update.
+    ray_traced: bool,
+    rays, batch_limit: i32,
+    hysteresis: f32,
+    // This frame's batch: where it starts in the update order, its size, and
+    // the order's length (every listed volume's probes). Slots whose probes
+    // start over this frame, and whether last frame was dynamic (turning it
+    // on starts every slot over).
+    cursor, batch, total: int,
+    dynamic_reset: [MAX_IRRADIANCE_VOLUMES]bool,
+    was_dynamic: bool,
+    // The atlases (irradiance, distance, probe data), as consecutive SRVs
+    // and UAVs; the rays texture with its SRV and RTV.
+    irradiance, distance, probe_data, rays_texture: ^d3d12.IResource,
+    dynamic_srv_start, dynamic_uav_start, rays_srv_index: u32,
+    rays_rtv_heap: ^d3d12.IDescriptorHeap,
+    // Per frame slot: DynamicVolumeConstants.
+    dynamic_constant_buffer: ^d3d12.IResource,
+    dynamic_constants: [^]DynamicVolumeConstants,
+    dynamic_root_signature: ^d3d12.IRootSignature,
+    ray_pipeline_state: ^d3d12.IPipelineState,
+    blend_irradiance_pipeline_state, blend_distance_pipeline_state: ^d3d12.IPipelineState,
+    relocate_pipeline_state, reset_pipeline_state: ^d3d12.IPipelineState,
 }
 
 // The root constants of the projection and clear passes (b0).
@@ -334,6 +404,7 @@ renderer_create_probes :: proc() {
     // UAV access promotes from.
     v.result = create_buffer(16, .DEFAULT, {.ALLOW_UNORDERED_ACCESS}, d3d12.RESOURCE_STATE_COMMON)
     v.readback = create_buffer(FRAME_COUNT * 16, .READBACK, {}, {.COPY_DEST})
+    renderer_create_dynamic_volumes()
 
     p.pass_constant_buffer, mapped = renderer_create_mapped_upload_buffer(u64(PROBE_PASS_COUNT * size_of(PrefilterConstants)))
     passes := ([^]PrefilterConstants)(mapped)
@@ -372,6 +443,87 @@ renderer_release_probes :: proc() {
         delete(v.cell_offset[slot])
         delete(v.retry[slot])
     }
+    if g_renderer.ray_tracing.supported {
+        v.irradiance->Release()
+        v.distance->Release()
+        v.probe_data->Release()
+        v.rays_texture->Release()
+        v.rays_rtv_heap->Release()
+        v.dynamic_constant_buffer->Release()
+        v.dynamic_root_signature->Release()
+    }
+}
+
+// The dynamic volumes' settings and resources, on GPUs with DXR 1.1. The
+// atlases rest as pixel-shader resources (the lit pass and the rays read
+// them) and are written as UAVs; the rays texture rests as a compute input.
+// Committed resources start zeroed, so every probe starts never updated.
+renderer_create_dynamic_volumes :: proc() {
+    r := &g_renderer
+    v := &r.volumes
+    if !r.ray_tracing.supported do return
+    v.ray_traced = true
+    v.rays = DEFAULT_DYNAMIC_RAYS
+    v.batch_limit = DEFAULT_DYNAMIC_BATCH
+    v.hysteresis = DEFAULT_DYNAMIC_HYSTERESIS
+
+    heap_props := d3d12.HEAP_PROPERTIES{Type = .DEFAULT}
+    Atlas :: struct {texture: ^^d3d12.IResource, width, height: u32, format: dxgi.FORMAT}
+    atlases := [3]Atlas{
+        {&v.irradiance, DYNAMIC_ATLAS_COLUMNS * DYNAMIC_IRRADIANCE_TILE, DYNAMIC_ATLAS_ROWS * DYNAMIC_IRRADIANCE_TILE, .R16G16B16A16_FLOAT},
+        {&v.distance, DYNAMIC_ATLAS_COLUMNS * DYNAMIC_DISTANCE_TILE, DYNAMIC_ATLAS_ROWS * DYNAMIC_DISTANCE_TILE, .R16G16_FLOAT},
+        {&v.probe_data, DYNAMIC_ATLAS_COLUMNS, DYNAMIC_ATLAS_ROWS, .R32G32B32A32_FLOAT},
+    }
+    v.dynamic_srv_start = renderer_alloc_srv(len(atlases))
+    v.dynamic_uav_start = renderer_alloc_srv(len(atlases))
+    for atlas, i in atlases {
+        desc := d3d12.RESOURCE_DESC{
+            Dimension = .TEXTURE2D,
+            Width = u64(atlas.width),
+            Height = atlas.height,
+            DepthOrArraySize = 1,
+            MipLevels = 1,
+            Format = atlas.format,
+            SampleDesc = {Count = 1},
+            Flags = {.ALLOW_UNORDERED_ACCESS},
+        }
+        dx_check(r.device->CreateCommittedResource(
+            &heap_props, {}, &desc, {.PIXEL_SHADER_RESOURCE}, nil, d3d12.IResource_UUID, (^rawptr)(atlas.texture),
+        ))
+        renderer_write_srv(atlas.texture^, atlas.format, v.dynamic_srv_start + u32(i))
+        uav := d3d12.UNORDERED_ACCESS_VIEW_DESC{Format = atlas.format, ViewDimension = .TEXTURE2D}
+        r.device->CreateUnorderedAccessView(atlas.texture^, nil, &uav, renderer_srv_cpu(v.dynamic_uav_start + u32(i)))
+    }
+
+    rays_desc := d3d12.RESOURCE_DESC{
+        Dimension = .TEXTURE2D,
+        Width = DYNAMIC_MAX_RAYS,
+        Height = DYNAMIC_MAX_BATCH,
+        DepthOrArraySize = 1,
+        MipLevels = 1,
+        Format = .R32G32B32A32_FLOAT,
+        SampleDesc = {Count = 1},
+        Flags = {.ALLOW_RENDER_TARGET},
+    }
+    clear_value := d3d12.CLEAR_VALUE{Format = .R32G32B32A32_FLOAT}
+    dx_check(r.device->CreateCommittedResource(
+        &heap_props, {}, &rays_desc, {.NON_PIXEL_SHADER_RESOURCE}, &clear_value, d3d12.IResource_UUID, (^rawptr)(&v.rays_texture),
+    ))
+    v.rays_srv_index = renderer_alloc_srv()
+    renderer_write_srv(v.rays_texture, .R32G32B32A32_FLOAT, v.rays_srv_index)
+    rtv_heap_desc := d3d12.DESCRIPTOR_HEAP_DESC{NumDescriptors = 1, Type = .RTV}
+    dx_check(r.device->CreateDescriptorHeap(&rtv_heap_desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&v.rays_rtv_heap)))
+    r.device->CreateRenderTargetView(v.rays_texture, nil, descriptor_handle(v.rays_rtv_heap, .RTV, 0))
+
+    mapped: rawptr
+    v.dynamic_constant_buffer, mapped = renderer_create_mapped_upload_buffer(u64(FRAME_COUNT * size_of(DynamicVolumeConstants)))
+    v.dynamic_constants = ([^]DynamicVolumeConstants)(mapped)
+}
+
+// Whether this frame's volumes are dynamic (ray-traced probes).
+renderer_dynamic_volumes_active :: proc() -> bool {
+    r := &g_renderer
+    return r.ray_tracing.supported && r.volumes.enabled && r.volumes.ray_traced
 }
 
 // A render target view of one face (array slice) of one level.
@@ -407,13 +559,19 @@ renderer_recapture_probes :: proc(forget := false, volumes := true) {
 renderer_recapture_volumes :: proc(forget := false) {
     v := &g_renderer.volumes
     v.progress = {}
+    // Dynamic probes start over: their light no longer applies.
+    for &reset in v.dynamic_reset do reset = true
     if forget do for &entity in v.slot_entity do entity = -1
 }
 
-// Captures one volume's cells again, keeping their values until replaced.
+// Captures one volume's cells again, keeping their values until replaced
+// (dynamic: its probes start over).
 renderer_recapture_volume :: proc(entity: int) {
     v := &g_renderer.volumes
-    if slot := renderer_volume_slot(entity); slot >= 0 do v.progress[slot] = 0
+    if slot := renderer_volume_slot(entity); slot >= 0 {
+        v.progress[slot] = 0
+        v.dynamic_reset[slot] = true
+    }
 }
 
 renderer_volume_slot :: proc(entity: int) -> int {
@@ -453,6 +611,10 @@ renderer_update_volumes :: proc(scene: ^Scene) {
     v.count, v.scene_count = 0, 0
     v.capture_slot = -1
     v.captures[r.frame_slot].active = false
+    is_dynamic := renderer_dynamic_volumes_active()
+    if is_dynamic && !v.was_dynamic do for &reset in v.dynamic_reset do reset = true
+    v.was_dynamic = is_dynamic
+    v.total = 0
     gpu := v.mapped[int(r.frame_slot) * MAX_IRRADIANCE_VOLUMES:]
     for i in 0..<scene.entity_count {
         if !is_volume(scene, i) do continue
@@ -481,11 +643,13 @@ renderer_update_volumes :: proc(scene: ^Scene) {
             for &offset in v.cell_offset[slot] do offset = 0
             clear(&v.retry[slot])
             v.generation[slot] += 1
+            v.dynamic_reset[slot] = true
         }
         if !v.enabled do continue
 
-        // Cells moving out of geometry go first, then the pass goes on.
-        if v.capture_slot < 0 && r.probes.capture_slot < 0 {
+        // Baked: cells moving out of geometry go first, then the pass goes
+        // on. Dynamic volumes capture nothing.
+        if !is_dynamic && v.capture_slot < 0 && r.probes.capture_slot < 0 {
             index := -1
             if len(v.retry[slot]) > 0 {
                 index = pop(&v.retry[slot])
@@ -520,9 +684,148 @@ renderer_update_volumes :: proc(scene: ^Scene) {
             cells = {u32(volume.cells.x), u32(volume.cells.y), u32(volume.cells.z)},
             first_z = u32(slot * IRRADIANCE_VOLUME_MAX_CELLS),
             normal_bias = 0.2 * min(cell_size.x, cell_size.y, cell_size.z),
+            first_probe = u32(slot * IRRADIANCE_VOLUME_MAX_TOTAL_CELLS),
+            sequence_start = u32(v.total),
+            probe_count = u32(count),
+            max_distance = 1.5 * alg.length(cell_size),
         }
         v.count += 1
+        v.total += count
     }
+
+    v.batch = 0
+    if is_dynamic && v.total > 0 do renderer_schedule_dynamic_volumes()
+}
+
+// This frame's batch of dynamic probes: the next ones in the update order
+// (round-robin over every listed volume's probes), and a random rotation
+// for their rays.
+renderer_schedule_dynamic_volumes :: proc() {
+    r := &g_renderer
+    v := &r.volumes
+    v.batch = min(int(v.batch_limit), v.total, DYNAMIC_MAX_BATCH)
+    v.cursor %= v.total
+
+    axis := alg.Vector3f32{rand.float32() * 2 - 1, rand.float32() * 2 - 1, rand.float32() * 2 - 1}
+    if alg.length(axis) < 1e-3 do axis = {0, 1, 0}
+    rotation := alg.matrix3_from_quaternion_f32(alg.quaternion_angle_axis_f32(rand.float32() * 2 * math.PI, alg.normalize(axis)))
+    constants := DynamicVolumeConstants{
+        rays = u32(v.rays),
+        batch = u32(v.batch),
+        cursor = u32(v.cursor),
+        total = u32(v.total),
+        hysteresis = v.hysteresis,
+        volume_count = u32(v.count),
+    }
+    for row in 0..<3 do constants.rotation[row] = {rotation[row, 0], rotation[row, 1], rotation[row, 2], 0}
+    v.dynamic_constants[r.frame_slot] = constants
+    v.cursor = (v.cursor + v.batch) % v.total
+}
+
+renderer_dynamic_constants_address :: proc() -> u64 {
+    r := &g_renderer
+    return r.volumes.dynamic_constant_buffer->GetGPUVirtualAddress() + u64(r.frame_slot) * size_of(DynamicVolumeConstants)
+}
+
+renderer_dynamic_atlas_barriers :: proc(before, after: d3d12.RESOURCE_STATES) {
+    v := &g_renderer.volumes
+    barriers := [3]d3d12.RESOURCE_BARRIER{
+        resource_transition(v.irradiance, before, after),
+        resource_transition(v.distance, before, after),
+        resource_transition(v.probe_data, before, after),
+    }
+    g_renderer.command_list->ResourceBarrier(len(barriers), &barriers[0])
+}
+
+// The dynamic volumes' update, after the light clusters (probe rays light
+// their hits with them) and before reflections and the lit pass, which read
+// the result: probes of slots that start over are cleared, the batch's rays
+// are traced, then blended into the probes, which then move.
+renderer_update_dynamic_volumes :: proc() {
+    r := &g_renderer
+    v := &r.volumes
+    renderer_begin_gpu_pass(.Dynamic_GI)
+    defer renderer_end_gpu_pass(.Dynamic_GI)
+    if !renderer_dynamic_volumes_active() do return
+
+    heaps := []^d3d12.IDescriptorHeap{r.srv_heap}
+    r.command_list->SetDescriptorHeaps(1, raw_data(heaps))
+    resets := false
+    for reset in v.dynamic_reset do resets ||= reset
+    if resets {
+        renderer_begin_event("Start over")
+        renderer_dynamic_atlas_barriers({.PIXEL_SHADER_RESOURCE}, {.UNORDERED_ACCESS})
+        renderer_bind_dynamic_compute()
+        r.command_list->SetPipelineState(v.reset_pipeline_state)
+        for &reset, slot in v.dynamic_reset {
+            if !reset do continue
+            reset = false
+            range := [2]u32{u32(slot * IRRADIANCE_VOLUME_MAX_TOTAL_CELLS), IRRADIANCE_VOLUME_MAX_TOTAL_CELLS}
+            r.command_list->SetComputeRoot32BitConstants(u32(Dynamic_Root_Slot.Reset), 2, &range, 0)
+            r.command_list->Dispatch(IRRADIANCE_VOLUME_MAX_TOTAL_CELLS / 64, 1, 1)
+        }
+        renderer_dynamic_atlas_barriers({.UNORDERED_ACCESS}, {.PIXEL_SHADER_RESOURCE})
+        renderer_end_event()
+    }
+    if v.batch == 0 do return
+
+    // One pixel per ray: the batch's probes are rows.
+    renderer_begin_event("Probe rays")
+    barrier := resource_transition(v.rays_texture, {.NON_PIXEL_SHADER_RESOURCE}, {.RENDER_TARGET})
+    r.command_list->ResourceBarrier(1, &barrier)
+    rtv := descriptor_handle(v.rays_rtv_heap, .RTV, 0)
+    r.command_list->OMSetRenderTargets(1, &rtv, false, nil)
+    viewport := d3d12.VIEWPORT{Width = f32(v.rays), Height = f32(v.batch), MaxDepth = 1}
+    scissor := d3d12.RECT{right = v.rays, bottom = i32(v.batch)}
+    r.command_list->RSSetViewports(1, &viewport)
+    r.command_list->RSSetScissorRects(1, &scissor)
+    r.command_list->SetGraphicsRootSignature(r.root_signature)
+    r.command_list->SetPipelineState(v.ray_pipeline_state)
+    r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
+    renderer_bind_cbv(.Frame_Constants, renderer_frame_cb_address())
+    renderer_bind_cbv(.Prefilter_Constants, renderer_dynamic_constants_address())
+    renderer_bind_objects()
+    renderer_bind_srv(.Texture_T1, r.shadow_srv_index)
+    renderer_bind_srv(.Shadow_Atlas, r.shadow_atlas_srv_index)
+    renderer_bind_buffer_srv(.Shadow_Tiles, renderer_shadow_tile_address())
+    renderer_bind_srv(.Irradiance, r.irradiance_srv_index)
+    renderer_bind_srv(.Prefiltered, r.prefilter_srv_index)
+    renderer_bind_buffer_srv(.Lights, renderer_light_buffer_address())
+    renderer_bind_buffer_srv(.Cluster_Lights, r.cluster_buffer->GetGPUVirtualAddress())
+    renderer_bind_probes()
+    renderer_bind_ray_tracing()
+    r.command_list->DrawInstanced(3, 1, 0, 0)
+    barrier = resource_transition(v.rays_texture, {.RENDER_TARGET}, {.NON_PIXEL_SHADER_RESOURCE})
+    r.command_list->ResourceBarrier(1, &barrier)
+    renderer_end_event()
+
+    renderer_begin_event("Blend and relocate")
+    renderer_dynamic_atlas_barriers({.PIXEL_SHADER_RESOURCE}, {.UNORDERED_ACCESS})
+    renderer_bind_dynamic_compute()
+    r.command_list->SetPipelineState(v.blend_irradiance_pipeline_state)
+    r.command_list->Dispatch(u32(v.batch), 1, 1)
+    r.command_list->SetPipelineState(v.blend_distance_pipeline_state)
+    r.command_list->Dispatch(u32(v.batch), 1, 1)
+    // The blends read each probe's update count, which relocation then
+    // advances.
+    uav_barrier := d3d12.RESOURCE_BARRIER{Type = .UAV}
+    uav_barrier.UAV = {pResource = v.probe_data}
+    r.command_list->ResourceBarrier(1, &uav_barrier)
+    r.command_list->SetPipelineState(v.relocate_pipeline_state)
+    r.command_list->Dispatch(u32((v.batch + 63) / 64), 1, 1)
+    renderer_dynamic_atlas_barriers({.UNORDERED_ACCESS}, {.PIXEL_SHADER_RESOURCE})
+    renderer_end_event()
+}
+
+// The compute passes' root signature and bindings.
+renderer_bind_dynamic_compute :: proc() {
+    r := &g_renderer
+    v := &r.volumes
+    r.command_list->SetComputeRootSignature(v.dynamic_root_signature)
+    r.command_list->SetComputeRootConstantBufferView(u32(Dynamic_Root_Slot.Constants), renderer_dynamic_constants_address())
+    r.command_list->SetComputeRootShaderResourceView(u32(Dynamic_Root_Slot.Volumes), renderer_volume_buffer_address())
+    r.command_list->SetComputeRootDescriptorTable(u32(Dynamic_Root_Slot.Rays), renderer_srv_gpu(v.rays_srv_index))
+    r.command_list->SetComputeRootDescriptorTable(u32(Dynamic_Root_Slot.Atlases), renderer_srv_gpu(v.dynamic_uav_start))
 }
 
 // The validity of the cell frame `slot` captured, once the GPU has finished
@@ -876,6 +1179,40 @@ renderer_create_volume_compute_pipelines :: proc() {
         if renderer_skip_pipeline() do continue
         desc := d3d12.COMPUTE_PIPELINE_STATE_DESC{pRootSignature = v.root_signature, CS = shader_bytecode(cs)}
         renderer_check_pipeline(r.device->CreateComputePipelineState(&desc, d3d12.IPipelineState_UUID, (^rawptr)(pipelines[i])))
+    }
+
+    // Dynamic volumes' passes (dynamic_volume.hlsl), on GPUs with DXR 1.1:
+    // the update constants (b3), the volume list (t12), the rays (t0), the
+    // three atlases (u0-u2), and a reset range (b1).
+    if !r.ray_tracing.supported do return
+    if v.dynamic_root_signature == nil {
+        rays_range := d3d12.DESCRIPTOR_RANGE{RangeType = .SRV, NumDescriptors = 1}
+        atlas_range := d3d12.DESCRIPTOR_RANGE{RangeType = .UAV, NumDescriptors = 3}
+        params: [Dynamic_Root_Slot]d3d12.ROOT_PARAMETER
+        params[.Constants].ParameterType = .CBV
+        params[.Constants].Descriptor = {ShaderRegister = 3}
+        params[.Volumes].ParameterType = .SRV
+        params[.Volumes].Descriptor = {ShaderRegister = 12}
+        params[.Rays].ParameterType = .DESCRIPTOR_TABLE
+        params[.Rays].DescriptorTable = {NumDescriptorRanges = 1, pDescriptorRanges = &rays_range}
+        params[.Atlases].ParameterType = .DESCRIPTOR_TABLE
+        params[.Atlases].DescriptorTable = {NumDescriptorRanges = 1, pDescriptorRanges = &atlas_range}
+        params[.Reset].ParameterType = ._32BIT_CONSTANTS
+        params[.Reset].Constants = {ShaderRegister = 1, Num32BitValues = 2}
+        rs_desc := d3d12.ROOT_SIGNATURE_DESC{NumParameters = len(params), pParameters = &params[Dynamic_Root_Slot(0)]}
+        v.dynamic_root_signature = create_root_signature(&rs_desc, "Dynamic volumes")
+    }
+    dynamic_entries := [4]cstring{"CSBlendIrradiance", "CSBlendDistance", "CSRelocate", "CSResetProbes"}
+    dynamic_pipelines := [4]^^d3d12.IPipelineState{
+        &v.blend_irradiance_pipeline_state, &v.blend_distance_pipeline_state,
+        &v.relocate_pipeline_state, &v.reset_pipeline_state,
+    }
+    for entry, i in dynamic_entries {
+        cs := renderer_compile_shader("shaders/dynamic_volume.hlsl", entry, "cs")
+        defer cs->Release()
+        if renderer_skip_pipeline() do continue
+        desc := d3d12.COMPUTE_PIPELINE_STATE_DESC{pRootSignature = v.dynamic_root_signature, CS = shader_bytecode(cs)}
+        renderer_check_pipeline(r.device->CreateComputePipelineState(&desc, d3d12.IPipelineState_UUID, (^rawptr)(dynamic_pipelines[i])))
     }
 }
 

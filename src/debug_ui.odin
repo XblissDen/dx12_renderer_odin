@@ -426,14 +426,26 @@ debug_ui_lighting_controls :: proc() {
     volumes := &r.volumes
     ui_checkbox("Irradiance volumes", &volumes.enabled)
     if volumes.enabled {
-        bounces := f32(volumes.bounces)
-        if ui_slider_float("Volume bounces", &bounces, 1, MAX_VOLUME_BOUNCES) {
-            // More bounces continue from the passes already made.
-            volumes.bounces = clamp(i32(math.round(bounces)), 1, MAX_VOLUME_BOUNCES)
-        }
         text_buffer: [96]u8
+        if r.ray_tracing.supported do ui_checkbox("Dynamic (ray-traced probes)", &volumes.ray_traced)
+        if renderer_dynamic_volumes_active() {
+            // Whole numbers of rays and probes.
+            rays := f32(volumes.rays)
+            if ui_slider_float("Rays per probe", &rays, 32, DYNAMIC_MAX_RAYS) do volumes.rays = clamp(i32(math.round(rays)), 32, DYNAMIC_MAX_RAYS)
+            batch := f32(volumes.batch_limit)
+            if ui_slider_float("Probes per frame", &batch, 64, DYNAMIC_MAX_BATCH) do volumes.batch_limit = clamp(i32(math.round(batch)), 64, DYNAMIC_MAX_BATCH)
+            ui_slider_float("Hysteresis", &volumes.hysteresis, 0.5, 0.99)
+            debug_ui_text(fmt.bprintf(text_buffer[:], "%d probes, %d updated per frame", volumes.total, volumes.batch))
+            if ui_button("Start all volumes over") do renderer_recapture_volumes()
+        } else {
+            bounces := f32(volumes.bounces)
+            if ui_slider_float("Volume bounces", &bounces, 1, MAX_VOLUME_BOUNCES) {
+                // More bounces continue from the passes already made.
+                volumes.bounces = clamp(i32(math.round(bounces)), 1, MAX_VOLUME_BOUNCES)
+            }
+            if ui_button("Capture all volumes again") do renderer_recapture_volumes()
+        }
         debug_ui_text(fmt.bprintf(text_buffer[:], "%d in the scene (up to %d are used)", volumes.scene_count, MAX_IRRADIANCE_VOLUMES))
-        if ui_button("Capture all volumes again") do renderer_recapture_volumes()
     }
     ui_checkbox("Show diffuse ambient light only", &volumes.show)
 

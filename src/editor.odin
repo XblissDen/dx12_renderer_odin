@@ -631,6 +631,10 @@ editor_draw_irradiance_volume_controls :: proc(scene: ^Scene, index: int) {
         debug_ui_text("Irradiance volumes are off in Renderer controls.")
     case !ok:
         debug_ui_text(fmt.bprintf(text_buffer[:], "Not used: at most %d volumes are.", MAX_IRRADIANCE_VOLUMES))
+    case renderer_dynamic_volumes_active():
+        count := renderer_volume_cell_count(scene.irradiance_volumes[index].cells)
+        debug_ui_text(fmt.bprintf(text_buffer[:], "Dynamic: %d probes, updated by rays", count))
+        if ui_button("Start volume over") do renderer_recapture_volume(index)
     case:
         count := renderer_volume_cell_count(scene.irradiance_volumes[index].cells)
         if pass >= int(v.bounces) {
@@ -641,7 +645,7 @@ editor_draw_irradiance_volume_controls :: proc(scene: ^Scene, index: int) {
         if ui_button("Capture volume again") do renderer_recapture_volume(index)
     }
     debug_ui_text("Scale sets the box; cells fill it evenly.")
-    debug_ui_text("One cell is captured per frame.")
+    if !renderer_dynamic_volumes_active() do debug_ui_text("One cell is captured per frame.")
 }
 
 editor_draw_directional_light_controls :: proc(scene: ^Scene, index: int) {

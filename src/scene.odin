@@ -128,6 +128,7 @@ IrradianceVolume :: struct {
 
 irradiance_volume_valid :: proc(volume: IrradianceVolume) -> bool {
     for count in volume.cells do if count < 1 || count > IRRADIANCE_VOLUME_MAX_CELLS do return false
+    if renderer_volume_cell_count(volume.cells) > IRRADIANCE_VOLUME_MAX_TOTAL_CELLS do return false
     return volume.blend_distance >= 0 && volume.blend_distance < 1e6
 }
 

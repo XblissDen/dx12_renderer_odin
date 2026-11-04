@@ -376,9 +376,109 @@ points, and surfaces inside it use that instead. It is the diffuse
 counterpart of reflection probes, and stores far less per point. See
 [Editor](editor.md#irradiance-volumes) for placing one.
 
-- **Grid**: the volume entity's unit cube under its world matrix, as for
-  reflection probes, divided into **cells** (8 × 4 × 8 by default, up to 32
-  along each axis). Each cell holds the light around its center.
+The volume entity's unit cube under its world matrix, as for reflection
+probes, is divided into **cells** (8 × 4 × 8 by default, up to 32 along each
+axis and 8,192 in all). Each cell holds the light around its center. The
+cells' light comes from one of two places:
+
+- **Dynamic** (GPUs with DXR 1.1, the default there): rays update the cells
+  every frame, so the light follows moving lights, the sun and edits
+  ([below](#dynamic-volumes)).
+- **Baked**: cube captures, one cell per frame, once
+  ([below](#baked-volumes)). This is the only mode on other GPUs, and a
+  switch on DXR 1.1 GPUs to compare against.
+
+### Dynamic volumes
+
+On GPUs with DXR 1.1, each cell is a **probe** in the manner of DDGI
+(Majercik et al., "Dynamic Diffuse Global Illumination with Ray-Traced
+Irradiance Fields"). There is no bake: rays bring every probe up to date a
+little each frame (**Dynamic (ray-traced probes)** in Renderer controls).
+
+**Storage** (`shaders/volumes.hlsl`): per probe, two small maps of directions
+around it, each folded into a square by octahedral mapping:
+
+- **Irradiance**, 8 × 8 texels (6 × 6 plus a one-texel border): the
+  cosine-weighted average light arriving around each direction, which is what
+  a surface facing that way receives.
+- **Distance**, 16 × 16 texels (14 × 14 plus border): the average distance to
+  the first surface around each direction, and its square.
+
+The maps sit in two atlases (2048 × 1024 and 4096 × 2048, 256 probes per
+row). A third texture, one texel per probe, holds the probe's offset from its
+cell's center and how many updates it has had. Each volume has room for
+8,192 probes.
+
+**Update**, each frame after the light clusters (the **Dynamic GI** row in
+the GPU timings):
+
+1. **Rays** (`PSVolumeRays`): a full-screen pass over a rays-by-probes
+   target casts **Rays per probe** rays (default 128) from each probe of the
+   frame's batch, one pixel per ray. Directions are spread evenly over the
+   sphere (spherical Fibonacci) and turned by a random rotation each frame,
+   so successive updates sample different directions. A ray's hit is shaded
+   diffuse-only (`ShadeRayHit`): the sun with a shadow ray, point and spot
+   lights, and ambient light that includes the volumes themselves. Each
+   update therefore carries light one bounce further, and the bounces add up
+   over frames. A miss reads the sky, without its sun. A ray that hits the
+   back of a one-sided surface records no light and a negative distance:
+   that probe is inside something.
+2. **Blend** (`CSBlendIrradiance`, `CSBlendDistance` in
+   `shaders/dynamic_volume.hlsl`): one compute group per probe. Each map
+   texel averages the rays near its direction, and the result is blended
+   with what the texel held, keeping **Hysteresis** (default 0.97) of the
+   old value, or none on a probe's first update. The rays are weighted by
+   their cosine for irradiance, and by its 50th power for distance, so the
+   distance map keeps the shape of nearby walls. Distances are capped at 1.5
+   cell diagonals. The border texels then copy the interior texels across
+   the octahedron's folds, so bilinear filtering is seamless.
+3. **Relocate** (`CSRelocate`): DDGI's probe relocation, on the GPU. A probe
+   whose rays meet back faces more than 25% of the time is inside geometry:
+   it moves through the nearest back face, to just beyond it. A probe very
+   close to a surface moves away from it. It stays within 0.45 cells of its
+   cell's center, and a probe still inside geometry is not used. This
+   replaces the baked mode's readback and retries.
+
+**Batches**: **Probes per frame** (default 2,048, up to 4,096) are updated
+each frame, taking turns across every volume's probes. A volume filling
+Sponza (18 × 7 × 10 = 1,260 probes) is updated whole every frame. Moving,
+resizing or adding a volume, changing the environment, loading a scene, or
+**Start over** clears its probes, which then fill in again on their next
+update.
+
+**Lookup** (`SampleDynamicVolume`, from `ApplyIrradianceVolumes`): the eight
+probes around the surface, as in DDGI:
+
+1. The lookup point moves off the surface along the normal, and towards the
+   viewer, by 0.2 cells.
+2. Each probe's trilinear weight is scaled by the smooth back-face term (as
+   for baked volumes), then by a **visibility test**. From the probe's
+   distance map toward the lookup point come the mean distance to the first
+   surface in that direction and its variance. A point farther than the mean
+   is likely behind that surface; Chebyshev's inequality bounds how likely,
+   and its cube scales the weight (at least 0.05). Weights below 0.2 are
+   crushed further, so a nearly hidden probe does not tint the rest. This is
+   what keeps light from leaking through walls, rather than the cell layout.
+3. The probes' irradiance along the normal is averaged by those weights.
+   Probes not yet updated, or inside geometry, are skipped, and the volume
+   fades out where none are near.
+
+**Results**: in Sponza with a volume of 18 × 7 × 10 cells, the probes
+settle within a few seconds and match the baked result closely, without
+waiting about 25 seconds for a bake. With a high sun, the bounce from the
+sunlit floor appears straight away and warms the walls, where a baked volume
+would need capturing again. **Cost** at 1920 × 1080: about 0.35 to 0.5 ms
+per frame for the update (1,260 probes × 128 rays), and 0.3 ms more in the
+lit pass than the baked lookup (16 atlas reads per volume per pixel instead
+of 32 texel loads, plus the visibility test).
+
+**Limits**: probe rays only see the point and spot lights in the camera's
+view (the frame's light list). Probes are spaced a cell apart, so light
+between them is interpolated, and GTAO still adds contact shadows. A probe
+that cannot get out of a thick wall within 0.45 cells stays unused.
+
+### Baked volumes
+
 - **Capture**: one cell per frame, with the reflection probes' capture: the
   same 256 × 256 cube of the lit scene and its mip chain, without the
   prefiltering. Probes go first when both are waiting. A compute pass
@@ -400,7 +500,7 @@ counterpart of reflection probes, and stores far less per point. See
   21 seconds at 180 frames a second. Using the volume costs about 0.16 ms in
   the lit pass at 1920 × 1080.
 
-### Cells inside walls
+#### Cells inside walls
 
 A cell whose center is inside a wall or a closed model sees the inside of
 that model, and its light would leak out to the surfaces around it. Cells
@@ -418,9 +518,9 @@ valid one for later bounces. The atlas stores where each cell was captured
 from. In Sponza about 1,470 of the 2,380 captures of the first bake are such
 retries, mostly cells inside the walls, pillars and roof.
 
-### Lookup
+#### Lookup
 
-All volumes share one 3D texture (`VOLUME_ATLAS_*`), a 32³ block per volume.
+All baked volumes share one 3D texture (`VOLUME_ATLAS_*`), a 32³ block per volume.
 A block has four planes: the red, green and blue coefficients, each times
 the cell's validity, then the validity and the capture offset.
 `ApplyIrradianceVolumes` in the lit pass:
@@ -442,7 +542,7 @@ sky and SSR. **Show diffuse ambient light only** (Renderer controls) shows
 the light a white surface gets, which makes volumes easy to compare with the
 sky's light.
 
-### Limits
+#### Limits
 
 - **Coarse**: with cells a meter or more apart, light changes smoothly. Small
   objects get light from cells around them, not their own contact shadows;
@@ -452,10 +552,10 @@ sky's light.
   leaks less than one volume over a building.
 - **Darker interiors**: rooms come out much darker than with the sky's
   light, as they should. Auto exposure suits them.
-- **Sun shadows** in captures come from the camera's cascades, as for probes:
-  cells far from the camera can see sunlight where there is shadow. Bake
-  with the camera near the volume, or raise **Shadow distance** while it
-  bakes.
+- **Sun shadows** in captures come from the camera's cascades, as for
+  probes, unless ray-traced sun shadows are on: cells far from the camera can
+  then see sunlight where there is shadow. Bake with the camera near the
+  volume, or raise **Shadow distance** while it bakes.
 - **Static**: changing lights or models does not capture again on its own.
   Use **Capture volume again** (Inspector) or **Capture all volumes again**
   (Renderer controls). Changing the environment does capture again. Moving a

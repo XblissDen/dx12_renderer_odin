@@ -1,4 +1,5 @@
 #include "common.hlsl"
+#include "volumes.hlsl"
 
 // Clustered lighting; must match renderer_lights.odin. The view is split into
 // a grid of cells, 16x9 across the screen and 24 slices in depth (spaced
@@ -187,7 +188,7 @@ cbuffer FrameConstants : register(b4)
     // diffuse ambient light.
     uint   volume_count;
     uint   volume_show;
-    float  _volume_pad;
+    uint   volume_dynamic; // Nonzero: the volumes are dynamic (ray-traced probes).
 
     // The light views drawn into the shadow atlas this frame (VSShadow).
     float4x4 shadow_view_projection[SHADOW_TILE_VIEWS];
@@ -220,23 +221,8 @@ struct GpuProbe
 StructuredBuffer<GpuProbe> g_probes : register(t10);
 TextureCubeArray<float4> g_probe_maps : register(t11);
 
-// An irradiance volume (renderer_probes.odin): a grid of cells filling the
-// unit cube in box space, each holding L1 spherical harmonics of the light
-// around its center.
-struct GpuIrradianceVolume
-{
-    float4x4 world_to_box;
-    float4x4 box_to_world;
-    float3 size; // World length of the box's edges.
-    float blend_distance;
-    uint3 cells;
-    uint first_z; // Its block's first slice in g_volume_atlas.
-    float normal_bias;
-    float3 _pad;
-    float4 _pad2;
-};
-StructuredBuffer<GpuIrradianceVolume> g_volumes : register(t12);
-// Per block of 32^3 cells (VOLUME_MAX_CELLS), four planes along x: red,
+// Irradiance volumes: GpuIrradianceVolume, g_volumes and the dynamic
+// volumes' layout are in volumes.hlsl. Baked volumes store, per block of 32^3 cells (VOLUME_MAX_CELLS), four planes along x: red,
 // green and blue coefficients (constant term, then x, y, z), each times the
 // cell's validity, then the validity and the offset (in cells) the cell was
 // captured from.
@@ -873,16 +859,91 @@ void ApplyProbes(float3 world_pos, float3 R, float3 N, float material_roughness,
     if (probe_diffuse != 0u) diffuse = diffuse_sum * scale + diffuse * rest;
 }
 
+#if RAY_TRACING
+// Dynamic volumes' atlases (volumes.hlsl), updated by dynamic_volume.hlsl.
+Texture2D<float4> g_dynamic_irradiance : register(t0, space2);
+Texture2D<float2> g_dynamic_distance : register(t1, space2);
+Texture2D<float4> g_dynamic_probes : register(t2, space2);
+
+// The light a dynamic volume gives a surface, from the eight probes around
+// it (DDGI's lookup), and how much of the trilinear weight had probes to
+// give. The lookup point moves off the surface along its normal and towards
+// the viewer. Each probe's trilinear weight is scaled by
+//   - DDGI's smooth back-face term: probes behind the surface count less;
+//   - a visibility test: from the probe towards the lookup point, its
+//     distance map gives the mean distance to the first surface and its
+//     variance. A point beyond that mean is likely hidden from the probe,
+//     with the chance given by Chebyshev's inequality; that is what keeps
+//     light from leaking through walls.
+// Probes not yet updated, or inside geometry, are skipped.
+float3 SampleDynamicVolume(GpuIrradianceVolume volume, float3 world_pos, float3 N, float3 V, out float coverage)
+{
+    float3 biased = world_pos + (N + V * 0.5f) * volume.normal_bias;
+    float3 lookup = mul(float4(biased, 1.0f), volume.world_to_box).xyz + 0.5f;
+    int3 last = int3(volume.cells) - 1;
+    float3 grid = clamp(lookup * float3(volume.cells) - 0.5f, 0.0f, float3(last));
+    int3 base = int3(floor(grid));
+    float3 fraction = grid - float3(base);
+
+    float3 sum = 0.0f;
+    float weight_sum = 0.0f;
+    coverage = 0.0f;
+    [unroll]
+    for (uint corner = 0; corner < 8u; ++corner)
+    {
+        int3 offset = int3(corner & 1u, (corner >> 1) & 1u, corner >> 2);
+        uint3 cell = uint3(min(base + offset, last));
+        uint probe = volume.first_probe + cell.x + cell.y * volume.cells.x + cell.z * volume.cells.x * volume.cells.y;
+        float4 data = g_dynamic_probes.Load(int3(DynamicProbeTexel(probe), 0));
+        if (data.w < 1.0f) continue;
+        float3 axis_weights = select(offset != 0, fraction, 1.0f - fraction);
+        float trilinear = axis_weights.x * axis_weights.y * axis_weights.z;
+        float3 probe_pos = VolumeCellCenter(volume, cell) + data.xyz;
+
+        float3 to_probe = normalize(probe_pos - world_pos);
+        float facing = (dot(to_probe, N) + 1.0f) * 0.5f;
+        float weight = facing * facing + 0.2f;
+
+        float3 probe_to_point = biased - probe_pos;
+        float distance = length(probe_to_point);
+        float2 moments = g_dynamic_distance.SampleLevel(
+            g_clamp_sampler, DynamicTileUV(probe, probe_to_point / max(distance, 1e-4f), DYNAMIC_DISTANCE_TILE), 0
+        );
+        if (distance > moments.x)
+        {
+            float variance = abs(moments.x * moments.x - moments.y);
+            float beyond = distance - moments.x;
+            float chebyshev = variance / (variance + beyond * beyond);
+            weight *= max(0.05f, chebyshev * chebyshev * chebyshev);
+        }
+        // Crush tiny weights, so a nearly hidden probe does not tint the rest.
+        weight = max(weight, 1e-6f);
+        if (weight < 0.2f) weight *= weight * weight / (0.2f * 0.2f);
+        weight *= trilinear;
+
+        float3 irradiance = g_dynamic_irradiance.SampleLevel(
+            g_clamp_sampler, DynamicTileUV(probe, N, DYNAMIC_IRRADIANCE_TILE), 0
+        ).rgb;
+        sum += weight * irradiance;
+        weight_sum += weight;
+        coverage += trilinear;
+    }
+    return sum / max(weight_sum, 1e-6f);
+}
+#endif
+
 // Replaces the diffuse ambient light with the irradiance volumes whose boxes
-// hold the point, blended like probes. The lookup moves along the normal by
+// hold the point, blended like probes. Dynamic volumes use their probes
+// (SampleDynamicVolume). Baked ones: the lookup moves along the normal by
 // the volume's bias, then blends the eight cells around it. Each cell's
 // trilinear weight is scaled by
 //   - its validity: cells inside walls, and cells not captured yet, have
 //     none (the stored coefficients are already times validity);
 //   - how far it lies in front of the surface (DDGI's smooth back-face
 //     term), so cells behind a wall add little to the light in front of it.
-// Where no valid cell is near, the volume fades out.
-void ApplyIrradianceVolumes(float3 world_pos, float3 N, inout float3 diffuse)
+// Where no valid cell is near, the volume fades out. V points from the
+// surface towards the viewer.
+void ApplyIrradianceVolumes(float3 world_pos, float3 N, float3 V, inout float3 diffuse)
 {
     float3 sum = 0.0f;
     float weight_sum = 0.0f;
@@ -894,6 +955,19 @@ void ApplyIrradianceVolumes(float3 world_pos, float3 N, inout float3 diffuse)
         float distance = min(inside.x, min(inside.y, inside.z));
         if (distance <= 0.0f) continue;
         float weight = volume.blend_distance > 0.0f ? saturate(distance / volume.blend_distance) : 1.0f;
+
+#if RAY_TRACING
+        if (volume_dynamic != 0u)
+        {
+            float dynamic_coverage;
+            float3 dynamic_light = SampleDynamicVolume(volume, world_pos, N, V, dynamic_coverage);
+            if (dynamic_coverage <= 0.0f) continue;
+            weight *= saturate(dynamic_coverage * 8.0f);
+            sum += weight * dynamic_light;
+            weight_sum += weight;
+            continue;
+        }
+#endif
 
         // In cell units, cell centers at whole numbers, clamped to the grid.
         float3 lookup = mul(float4(world_pos + N * volume.normal_bias, 1.0f), volume.world_to_box).xyz + 0.5f;
@@ -968,12 +1042,14 @@ struct GpuRayInstance
     uint vertex_buffer; // Raw views in the SRV heap (g_mesh_buffers).
     uint index_buffer;
     uint first_index;   // The submesh's first index; primitives count from it.
-    uint _pad;
+    uint flags;         // RAY_INSTANCE_DOUBLE_SIDED.
 };
 StructuredBuffer<GpuRayInstance> g_ray_instances : register(t15);
 // The whole SRV heap again, as raw buffers.
 ByteAddressBuffer g_mesh_buffers[] : register(t0, space1);
 #define RAY_MASK_SHADOW_CASTER 0x1u
+// GpuRayInstance.flags: the surface is double-sided.
+#define RAY_INSTANCE_DOUBLE_SIDED 0x1u
 // The brightest a rough surface's ray-traced reflection may be (luminance).
 #define RAY_REFLECTION_ROUGH_MAX 16.0f
 // renderer.odin's Vertex: 48 bytes, texture coordinates at byte 24.
@@ -1104,7 +1180,7 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
         ApplyProbes(input.world_pos, reflect(-V, N), N, material_roughness, prefiltered_color, incoming_diffuse);
     }
     // Inside a volume, its cells' light replaces the diffuse light.
-    if (volume_count > 0u) ApplyIrradianceVolumes(input.world_pos, N, incoming_diffuse);
+    if (volume_count > 0u) ApplyIrradianceVolumes(input.world_pos, N, V, incoming_diffuse);
     // Where SSR found the reflected surface, it replaces the environment.
     // Like SSAO it is per pixel of the opaque surface, so blended ones skip it.
     if (ssr_enabled != 0u && !transparent)
@@ -1749,12 +1825,21 @@ void RayHitAttributes(
     if (dot(geometric_normal, normal) < 0.0f) geometric_normal = -geometric_normal;
 }
 
-// The light a reflected ray brings back from the surface it hit: the lit
-// pass's shading, simplified. Material textures are read at a mip that grows
-// with distance, normal maps are skipped, and so are GTAO and SSR. Point and
-// spot lights come from the light cluster where the hit is on screen, and
-// from every light in view otherwise.
-float3 ShadeRayHit(RayDesc ray, uint instance, uint primitive, float2 barycentrics, float t, bool front_face, float2 pixel)
+// Light from a direct source: the full BRDF, or for probe rays its diffuse
+// part only (specular toward a probe would only add noise to its light).
+float3 RayHitDirectLight(bool diffuse_only, float3 N, float3 V, float3 L, float3 albedo, float roughness, float metallic, float3 radiance)
+{
+    if (diffuse_only) return (1.0f - metallic) * albedo / PI * saturate(dot(N, L)) * radiance;
+    return EvaluateDirectLight(N, V, L, albedo, roughness, metallic, radiance);
+}
+
+// The light a ray brings back from the surface it hit: the lit pass's
+// shading, simplified. Material textures are read at a mip that grows with
+// distance, normal maps are skipped, and so are GTAO and SSR. Point and spot
+// lights come from the light cluster where the hit is on screen, and from
+// every light in view otherwise. Reflection rays get the full BRDF; probe
+// rays (diffuse_only) the light the surface scatters evenly.
+float3 ShadeRayHit(RayDesc ray, uint instance, uint primitive, float2 barycentrics, float t, bool front_face, float2 pixel, bool diffuse_only)
 {
     ObjectData object = g_objects[instance];
     if (object.unlit != 0u) return object.material_tint * 4.0f;
@@ -1805,20 +1890,28 @@ float3 ShadeRayHit(RayDesc ray, uint instance, uint primitive, float2 barycentri
         ).rgb * environment_intensity;
     }
     if (probe_count > 0u) ApplyProbes(P, R, N, roughness, prefiltered_color, incoming_diffuse);
-    if (volume_count > 0u) ApplyIrradianceVolumes(P, N, incoming_diffuse);
+    if (volume_count > 0u) ApplyIrradianceVolumes(P, N, V, incoming_diffuse);
 
-    float n_dot_v = max(dot(N, V), 0.0f);
-    float3 F0 = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
-    float3 kD = (1.0f - FresnelSchlick(n_dot_v, F0)) * (1.0f - metallic);
-    float2 environment_brdf = EnvBRDFApprox(n_dot_v, roughness);
-    float3 result = kD * albedo * incoming_diffuse + prefiltered_color * (F0 * environment_brdf.x + environment_brdf.y);
+    float3 result;
+    if (diffuse_only)
+    {
+        result = (1.0f - metallic) * albedo * incoming_diffuse;
+    }
+    else
+    {
+        float n_dot_v = max(dot(N, V), 0.0f);
+        float3 F0 = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
+        float3 kD = (1.0f - FresnelSchlick(n_dot_v, F0)) * (1.0f - metallic);
+        float2 environment_brdf = EnvBRDFApprox(n_dot_v, roughness);
+        result = kD * albedo * incoming_diffuse + prefiltered_color * (F0 * environment_brdf.x + environment_brdf.y);
+    }
 
     // The sun, with a shadow ray of its own.
     float3 sun_L = normalize(-sun_direction);
     if (dot(geometric_normal, sun_L) > 0.0f)
     {
         float visibility = SunRayVisibility(P, geometric_normal, sun_L, pixel, length(P - view_position));
-        result += EvaluateDirectLight(N, V, sun_L, albedo, roughness, metallic, sun_color * sun_intensity * visibility);
+        result += RayHitDirectLight(diffuse_only, N, V, sun_L, albedo, roughness, metallic, sun_color * sun_intensity * visibility);
     }
 
     // Point and spot lights: the hit's own cluster when it is on screen.
@@ -1846,7 +1939,7 @@ float3 ShadeRayHit(RayDesc ray, uint instance, uint primitive, float2 barycentri
         float shadow = light.spot_scale > 0.0f
             ? SpotShadowVisibility(light, P, geometric_normal)
             : PointShadowVisibility(light, P, geometric_normal);
-        result += EvaluateDirectLight(N, V, L, albedo, roughness, metallic, light.radiance * attenuation * shadow);
+        result += RayHitDirectLight(diffuse_only, N, V, L, albedo, roughness, metallic, light.radiance * attenuation * shadow);
     }
 
     result += object.emissive * g_textures[NonUniformResourceIndex(object.emissive_texture)].SampleLevel(
@@ -1918,7 +2011,7 @@ float4 PSRayReflections(FullscreenInput input) : SV_TARGET
         color = ShadeRayHit(
             ray, query.CommittedInstanceIndex(), query.CommittedPrimitiveIndex(),
             query.CommittedTriangleBarycentrics(), query.CommittedRayT(),
-            query.CommittedTriangleFrontFace(), float2(pixel)
+            query.CommittedTriangleFrontFace(), float2(pixel), false
         );
     }
     else
@@ -1942,6 +2035,68 @@ float4 PSRayReflections(FullscreenInput input) : SV_TARGET
     }
     float confidence = 1.0f - smoothstep(0.6f * ssr_max_roughness, ssr_max_roughness, roughness);
     return float4(color * confidence, confidence);
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic volumes' rays (renderer_probes.odin): one pixel per ray, x the ray
+// and y the probe's place in this frame's batch. Each ray leaves its probe
+// (at its relocated position) and records the light it brings back and how
+// far it went: the hit, shaded diffuse-only with the volumes' own light, so
+// light bounces once more each update; or the sky's light on a miss. A ray
+// that meets the back of a one-sided surface is inside something: it records
+// no light and a negative, shortened distance (DDGI's convention), which the
+// relocation pass counts. dynamic_volume.hlsl blends these into the probes.
+float4 PSVolumeRays(FullscreenInput input) : SV_TARGET
+{
+    uint ray_index = uint(input.position.x);
+    uint volume_index, cell_index;
+    DynamicBatchProbe(uint(input.position.y), volume_index, cell_index);
+    GpuIrradianceVolume volume = g_volumes[volume_index];
+    uint probe = volume.first_probe + cell_index;
+    float4 data = g_dynamic_probes.Load(int3(DynamicProbeTexel(probe), 0));
+
+    RayDesc ray;
+    ray.Origin = VolumeCellCenter(volume, VolumeCell(cell_index, volume.cells)) + data.xyz;
+    ray.Direction = DynamicRayDirection(ray_index);
+    ray.TMin = 0.0f;
+    ray.TMax = 1.0e4f;
+    // Both sides: a back face tells the probe it is inside geometry.
+    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> query;
+    query.TraceRayInline(g_scene_bvh, RAY_FLAG_NONE, 0xFFu, ray);
+    while (query.Proceed())
+    {
+        if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
+            RayHitsCutout(query.CandidateInstanceIndex(), query.CandidatePrimitiveIndex(), query.CandidateTriangleBarycentrics()))
+        {
+            query.CommitNonOpaqueTriangleHit();
+        }
+    }
+
+    if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+    {
+        uint instance = query.CommittedInstanceIndex();
+        float t = query.CommittedRayT();
+        bool front_face = query.CommittedTriangleFrontFace();
+        if (!front_face && (g_ray_instances[instance].flags & RAY_INSTANCE_DOUBLE_SIDED) == 0u)
+        {
+            return float4(0.0f, 0.0f, 0.0f, -0.2f * t);
+        }
+        float3 color = ShadeRayHit(
+            ray, instance, query.CommittedPrimitiveIndex(), query.CommittedTriangleBarycentrics(),
+            t, front_face, input.position.xy, true
+        );
+        return float4(color, t);
+    }
+    // The sky without its sun (the surfaces' direct light has it), a little
+    // blurred: one ray stands for a patch of sky.
+    float3 sky = ambient_color * ambient_intensity;
+    if (ambient_mode == 0u)
+    {
+        sky = g_prefiltered_environment.SampleLevel(
+            g_environment_sampler, DirectionToUV(EnvironmentDirection(ray.Direction)), 2.0f
+        ).rgb * environment_intensity;
+    }
+    return float4(sky, 1.0e4f);
 }
 #endif
 

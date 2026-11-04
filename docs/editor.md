@@ -39,7 +39,8 @@ so text stays sharp.
   anti-aliasing, the environment, shadows (with **Ray-traced sun shadows**
   and **Sun size** on GPUs with DXR 1.1), GTAO, reflections (ray-traced on
   GPUs with DXR 1.1, otherwise SSR), reflection probes,
-  irradiance volumes (with **Show diffuse ambient light only**), light
+  irradiance volumes (dynamic or baked, with **Show diffuse ambient light
+  only**), light
   clusters, fog, and the frustum, occlusion and meshlet culling switches. **Show ImGui demo** opens
   ImGui's own demo window.
 - **Profiler**: frame rate and frame time, the camera's and shadow views'
@@ -345,11 +346,19 @@ shade.
   hold, such as a room or a building. Cells fill the box evenly, so scaling
   it spreads them further apart. **Fit box to selected models** works as for
   [reflection probes](#reflection-probes).
-- **Cells along X, Y and Z** (1 to 32 each): more cells follow the light more
-  closely, but each takes a frame to capture. About one cell per meter suits
-  rooms. Changing them starts the volume over.
+- **Cells along X, Y and Z** (1 to 32 each, 8,192 in all; past that the
+  longest axis gives way): more cells follow the light more closely, but cost
+  more to update or capture. About one cell per meter suits rooms. Changing
+  them starts the volume over.
 - **Blend distance**: how far inside its faces the volume fades in.
-- **Capturing**: a volume captures when added, moved or resized, and again
+- **Dynamic** (GPUs with DXR 1.1): there is nothing to bake. The Inspector
+  shows the probe count, and **Start volume over** clears its probes. They
+  follow light changes on their own. Renderer controls has **Dynamic
+  (ray-traced probes)** to switch to baked volumes, **Rays per probe**,
+  **Probes per frame**, **Hysteresis** (how much of its old light a probe
+  keeps per update: higher is smoother but slower to follow changes), the
+  probe count, and **Start all volumes over**.
+- **Baked**: a volume captures when added, moved or resized, and again
   after the environment changes or a scene loads. The Inspector shows the
   bounce and cell being captured, then "Captured". After changing lights or
   models, use **Capture volume again**, or **Capture all volumes again** in

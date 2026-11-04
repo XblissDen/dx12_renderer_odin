@@ -432,8 +432,15 @@ editor_apply_value :: proc(
         case .Probe_Box_Projection:
             scene.reflection_probes[index].box_projection = value[0] != 0
         case .Volume_Cells:
+            cells := &scene.irradiance_volumes[index].cells
             for axis in 0..<3 {
-                scene.irradiance_volumes[index].cells[axis] = clamp(i32(math.round(value[axis])), 1, IRRADIANCE_VOLUME_MAX_CELLS)
+                cells[axis] = clamp(i32(math.round(value[axis])), 1, IRRADIANCE_VOLUME_MAX_CELLS)
+            }
+            // At most IRRADIANCE_VOLUME_MAX_TOTAL_CELLS: the longest axis gives.
+            for renderer_volume_cell_count(cells^) > IRRADIANCE_VOLUME_MAX_TOTAL_CELLS {
+                longest := 0
+                for axis in 1..<3 do if cells[axis] > cells[longest] do longest = axis
+                cells[longest] -= 1
             }
         case .Volume_Blend_Distance:
             scene.irradiance_volumes[index].blend_distance = max(value[0], 0)
