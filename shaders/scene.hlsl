@@ -974,6 +974,8 @@ StructuredBuffer<GpuRayInstance> g_ray_instances : register(t15);
 // The whole SRV heap again, as raw buffers.
 ByteAddressBuffer g_mesh_buffers[] : register(t0, space1);
 #define RAY_MASK_SHADOW_CASTER 0x1u
+// The brightest a rough surface's ray-traced reflection may be (luminance).
+#define RAY_REFLECTION_ROUGH_MAX 16.0f
 // renderer.odin's Vertex: 48 bytes, texture coordinates at byte 24.
 #define VERTEX_STRIDE 48u
 #define VERTEX_TEXCOORD_OFFSET 24u
@@ -1706,6 +1708,242 @@ float4 PSSsr(FullscreenInput input) : SV_TARGET
     }
     return result;
 }
+
+#if RAY_TRACING
+// ---------------------------------------------------------------------------
+// Ray-traced reflections (renderer_ssr.odin): in place of SSR, each pixel
+// traces its reflected ray through the scene's TLAS and shades what it hits
+// (ShadeRayHit) or, on a miss, reads the environment. The result goes to the
+// same target, which the lit pass blends over the probes' and environment's
+// specular.
+
+// What a ray hit needs from its triangle, in world space: the interpolated
+// shading normal, the triangle's own normal (turned to the same side), and
+// the texture coordinates.
+void RayHitAttributes(
+    uint instance, uint primitive, float2 barycentrics, ObjectData object,
+    out float3 normal, out float3 geometric_normal, out float2 texcoord
+)
+{
+    GpuRayInstance ray_instance = g_ray_instances[instance];
+    ByteAddressBuffer indices = g_mesh_buffers[NonUniformResourceIndex(ray_instance.index_buffer)];
+    ByteAddressBuffer vertices = g_mesh_buffers[NonUniformResourceIndex(ray_instance.vertex_buffer)];
+    uint3 corners = indices.Load3((ray_instance.first_index + primitive * 3u) * 4u);
+    float3 weights = float3(1.0f - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
+
+    float3 positions[3];
+    normal = 0.0f;
+    texcoord = 0.0f;
+    [unroll]
+    for (uint i = 0; i < 3u; ++i)
+    {
+        uint base = corners[i] * VERTEX_STRIDE;
+        positions[i] = asfloat(vertices.Load3(base));
+        normal += weights[i] * asfloat(vertices.Load3(base + 12u));
+        texcoord += weights[i] * asfloat(vertices.Load2(base + VERTEX_TEXCOORD_OFFSET));
+    }
+    float3 face = cross(positions[1] - positions[0], positions[2] - positions[0]);
+    // As the vertex shaders transform normals (the inverse transpose).
+    normal = normalize(mul(normal, (float3x3)object.normal_matrix));
+    geometric_normal = normalize(mul(face, (float3x3)object.normal_matrix));
+    if (dot(geometric_normal, normal) < 0.0f) geometric_normal = -geometric_normal;
+}
+
+// The light a reflected ray brings back from the surface it hit: the lit
+// pass's shading, simplified. Material textures are read at a mip that grows
+// with distance, normal maps are skipped, and so are GTAO and SSR. Point and
+// spot lights come from the light cluster where the hit is on screen, and
+// from every light in view otherwise.
+float3 ShadeRayHit(RayDesc ray, uint instance, uint primitive, float2 barycentrics, float t, bool front_face, float2 pixel)
+{
+    ObjectData object = g_objects[instance];
+    if (object.unlit != 0u) return object.material_tint * 4.0f;
+
+    float3 N, geometric_normal;
+    float2 texcoord;
+    RayHitAttributes(instance, primitive, barycentrics, object, N, geometric_normal, texcoord);
+    // Only double-sided surfaces are hit from behind (reflection rays cull
+    // back faces); their back is lit as its own side, as in the lit pass.
+    if (!front_face)
+    {
+        N = -N;
+        geometric_normal = -geometric_normal;
+    }
+    float3 P = ray.Origin + ray.Direction * t;
+    float3 V = -ray.Direction;
+
+    float lod = log2(1.0f + t) * 1.5f;
+    float2 material_uv = texcoord * object.uv_scale;
+    float3 albedo = g_textures[NonUniformResourceIndex(object.albedo_texture)].SampleLevel(
+        g_material_sampler, material_uv, lod
+    ).rgb * object.material_tint;
+    float roughness = object.roughness;
+    if (object.use_roughness_map != 0u)
+    {
+        roughness *= g_textures[NonUniformResourceIndex(object.roughness_texture)].SampleLevel(g_material_sampler, material_uv, lod).r;
+    }
+    roughness = clamp(roughness, 0.08f, 1.0f);
+    float metallic = object.metallic;
+    if (object.use_metallic_map != 0u)
+    {
+        metallic *= g_textures[NonUniformResourceIndex(object.metallic_texture)].SampleLevel(g_material_sampler, material_uv, lod).r;
+    }
+    metallic = saturate(metallic);
+
+    // Ambient light, as in ShadeSurface.
+    float3 incoming_diffuse = ambient_color * ambient_intensity;
+    float3 prefiltered_color = incoming_diffuse;
+    float3 R = reflect(-V, N);
+    [branch]
+    if (ambient_mode == 0u)
+    {
+        incoming_diffuse = g_irradiance.SampleLevel(
+            g_environment_sampler, DirectionToUV(EnvironmentDirection(N)), 0
+        ).rgb * environment_intensity;
+        prefiltered_color = g_prefiltered_environment.SampleLevel(
+            g_environment_sampler, DirectionToUV(EnvironmentDirection(R)), roughness * 4.0f
+        ).rgb * environment_intensity;
+    }
+    if (probe_count > 0u) ApplyProbes(P, R, N, roughness, prefiltered_color, incoming_diffuse);
+    if (volume_count > 0u) ApplyIrradianceVolumes(P, N, incoming_diffuse);
+
+    float n_dot_v = max(dot(N, V), 0.0f);
+    float3 F0 = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
+    float3 kD = (1.0f - FresnelSchlick(n_dot_v, F0)) * (1.0f - metallic);
+    float2 environment_brdf = EnvBRDFApprox(n_dot_v, roughness);
+    float3 result = kD * albedo * incoming_diffuse + prefiltered_color * (F0 * environment_brdf.x + environment_brdf.y);
+
+    // The sun, with a shadow ray of its own.
+    float3 sun_L = normalize(-sun_direction);
+    if (dot(geometric_normal, sun_L) > 0.0f)
+    {
+        float visibility = SunRayVisibility(P, geometric_normal, sun_L, pixel, length(P - view_position));
+        result += EvaluateDirectLight(N, V, sun_L, albedo, roughness, metallic, sun_color * sun_intensity * visibility);
+    }
+
+    // Point and spot lights: the hit's own cluster when it is on screen.
+    uint cluster_base = 0u;
+    uint count = light_count;
+    bool clustered = false;
+    float4 clip = mul(float4(P, 1.0f), view_projection);
+    if (clip.w > 0.0f)
+    {
+        float3 ndc = clip.xyz / clip.w;
+        if (all(abs(ndc.xy) < 1.0f) && ndc.z >= 0.0f && ndc.z <= 1.0f)
+        {
+            float2 screen = (ndc.xy * float2(0.5f, -0.5f) + 0.5f) * cluster_screen_size;
+            cluster_base = LightClusterBase(screen, mul(float4(P, 1.0f), view).z);
+            count = g_cluster_lights[cluster_base];
+            clustered = true;
+        }
+    }
+    for (uint i = 0; i < count; ++i)
+    {
+        GpuLight light = g_lights[clustered ? g_cluster_lights[cluster_base + 1u + i] : i];
+        float3 L;
+        float attenuation = LightAttenuation(light, light.position - P, L);
+        if (attenuation <= 0.0f) continue;
+        float shadow = light.spot_scale > 0.0f
+            ? SpotShadowVisibility(light, P, geometric_normal)
+            : PointShadowVisibility(light, P, geometric_normal);
+        result += EvaluateDirectLight(N, V, L, albedo, roughness, metallic, light.radiance * attenuation * shadow);
+    }
+
+    result += object.emissive * g_textures[NonUniformResourceIndex(object.emissive_texture)].SampleLevel(
+        g_material_sampler, material_uv, lod
+    ).rgb;
+    return result;
+}
+
+// The reflection at `pixel`: its ray, from the surface along the mirror
+// direction or, with TAA, a GGX-sampled one (as SSR), shaded where it hits,
+// or the environment's prefiltered light where it leaves the scene.
+// Premultiplied by confidence, which only fades out rough surfaces (left to
+// the probes and environment), so off-screen and hidden surfaces reflect too.
+float4 PSRayReflections(FullscreenInput input) : SV_TARGET
+{
+    uint width, height;
+    g_depth.GetDimensions(width, height);
+    int2 pixel = int2(input.position.xy);
+    float4 surface = g_surface.Load(int3(pixel, 0));
+    // The prepass clears the sky to roughness 1, so this skips it too.
+    if (surface.w >= ssr_max_roughness) return 0.0f;
+    float roughness = surface.w;
+
+    // The surface buffer is in view space; rays go in world space.
+    float3 view_pos = ViewPositionAt(pixel, float2(width, height));
+    float3 P = view_position + mul((float3x3)view, view_pos);
+    float3 N = normalize(mul((float3x3)view, surface.xyz));
+    float3 V = normalize(P - view_position); // From the camera to the surface.
+
+    float3 R = reflect(V, N);
+    if (ssr_stochastic != 0u)
+    {
+        float2 noise = RayNoise(float2(pixel) + 0.5f);
+        float alpha = roughness * roughness;
+        float cos_theta = sqrt((1.0f - noise.x) / (1.0f + (alpha * alpha - 1.0f) * noise.x));
+        float sin_theta = sqrt(max(1.0f - cos_theta * cos_theta, 0.0f));
+        float phi = 2.0f * PI * noise.y;
+        float3 helper = abs(N.y) < 0.99f ? float3(0, 1, 0) : float3(1, 0, 0);
+        float3 T = normalize(cross(helper, N));
+        float3 B = cross(N, T);
+        float3 H = T * (sin_theta * cos(phi)) + B * (sin_theta * sin(phi)) + N * cos_theta;
+        float3 sampled = reflect(V, H);
+        if (dot(sampled, N) > 0.0f) R = sampled;
+    }
+
+    RayDesc ray;
+    float distance = length(P - view_position);
+    ray.Origin = P + N * (0.002f + 0.0005f * distance);
+    ray.Direction = R;
+    ray.TMin = 0.0f;
+    ray.TMax = 1.0e4f;
+    // The closest hit, among every draw; back faces are skipped as the
+    // rasterizer skips them, except on double-sided instances.
+    RayQuery<RAY_FLAG_CULL_BACK_FACING_TRIANGLES | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> query;
+    query.TraceRayInline(g_scene_bvh, RAY_FLAG_NONE, 0xFFu, ray);
+    while (query.Proceed())
+    {
+        if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
+            RayHitsCutout(query.CandidateInstanceIndex(), query.CandidatePrimitiveIndex(), query.CandidateTriangleBarycentrics()))
+        {
+            query.CommitNonOpaqueTriangleHit();
+        }
+    }
+
+    float3 color;
+    [branch]
+    if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+    {
+        color = ShadeRayHit(
+            ray, query.CommittedInstanceIndex(), query.CommittedPrimitiveIndex(),
+            query.CommittedTriangleBarycentrics(), query.CommittedRayT(),
+            query.CommittedTriangleFrontFace(), float2(pixel)
+        );
+    }
+    else
+    {
+        // The sky's light without its sun, which the surface's own direct
+        // lighting already adds.
+        color = ambient_color * ambient_intensity;
+        if (ambient_mode == 0u)
+        {
+            color = g_prefiltered_environment.SampleLevel(
+                g_environment_sampler, DirectionToUV(EnvironmentDirection(R)), roughness * 4.0f
+            ).rgb * environment_intensity;
+        }
+    }
+    // Rough surfaces scatter rays widely; a rare bright hit would flicker
+    // through TAA, so their reflections are capped.
+    if (roughness > 0.2f)
+    {
+        float luminance = dot(color, float3(0.2126f, 0.7152f, 0.0722f));
+        color *= min(1.0f, RAY_REFLECTION_ROUGH_MAX / max(luminance, 1e-4f));
+    }
+    float confidence = 1.0f - smoothstep(0.6f * ssr_max_roughness, ssr_max_roughness, roughness);
+    return float4(color * confidence, confidence);
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // Light clusters: one thread per cluster (a group per depth slice) tests every

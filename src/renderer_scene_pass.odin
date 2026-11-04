@@ -228,7 +228,7 @@ renderer_render_post_process :: proc(scene: ^Scene) {
     // "Show reflections only" tone maps this frame's raw SSR output instead
     // (before TAA, so stochastic rays show their noise). It must not replace
     // the scene color, which next frame's SSR reflects.
-    show_reflections := r.ssr_show && renderer_ssr_active()
+    show_reflections := r.ssr_show && renderer_reflections_active()
     renderer_bind_srv(.Texture_T0, r.ssr_srv_index if show_reflections else r.scene_color_srv_index)
     renderer_bind_srv(.Texture_T1, r.bloom_srv_start)
 

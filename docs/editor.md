@@ -37,7 +37,8 @@ so text stays sharp.
 
 - **Renderer controls**: shader reload status, exposure, bloom, tone mapping,
   anti-aliasing, the environment, shadows (with **Ray-traced sun shadows**
-  and **Sun size** on GPUs with DXR 1.1), GTAO, SSR, reflection probes,
+  and **Sun size** on GPUs with DXR 1.1), GTAO, reflections (ray-traced on
+  GPUs with DXR 1.1, otherwise SSR), reflection probes,
   irradiance volumes (with **Show diffuse ambient light only**), light
   clusters, fog, and the frustum, occlusion and meshlet culling switches. **Show ImGui demo** opens
   ImGui's own demo window.

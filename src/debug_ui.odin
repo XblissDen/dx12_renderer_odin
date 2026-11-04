@@ -394,12 +394,20 @@ debug_ui_lighting_controls :: proc() {
     }
 
     ui_separator()
-    ui_checkbox("Screen-space reflections (SSR)", &r.ssr_enabled)
-    if r.ssr_enabled {
-        ui_slider_float("SSR max distance", &r.ssr_max_distance, MIN_SSR_MAX_DISTANCE, MAX_SSR_MAX_DISTANCE)
-        ui_slider_float("SSR thickness", &r.ssr_thickness, MIN_SSR_THICKNESS, MAX_SSR_THICKNESS)
-        ui_slider_float("SSR max roughness", &r.ssr_max_roughness, MIN_SSR_MAX_ROUGHNESS, MAX_SSR_MAX_ROUGHNESS)
+    // Ray-traced reflections replace SSR and share its roughness limit and
+    // reflections-only view.
+    if r.ray_tracing.supported do ui_checkbox("Ray-traced reflections (instead of SSR)", &r.ray_tracing.reflections)
+    if renderer_ray_reflections_active() {
+        ui_slider_float("Reflection max roughness", &r.ssr_max_roughness, MIN_SSR_MAX_ROUGHNESS, MAX_SSR_MAX_ROUGHNESS)
         ui_checkbox("Show reflections only", &r.ssr_show)
+    } else {
+        ui_checkbox("Screen-space reflections (SSR)", &r.ssr_enabled)
+        if r.ssr_enabled {
+            ui_slider_float("SSR max distance", &r.ssr_max_distance, MIN_SSR_MAX_DISTANCE, MAX_SSR_MAX_DISTANCE)
+            ui_slider_float("SSR thickness", &r.ssr_thickness, MIN_SSR_THICKNESS, MAX_SSR_THICKNESS)
+            ui_slider_float("SSR max roughness", &r.ssr_max_roughness, MIN_SSR_MAX_ROUGHNESS, MAX_SSR_MAX_ROUGHNESS)
+            ui_checkbox("Show reflections only", &r.ssr_show)
+        }
     }
 
     ui_separator()

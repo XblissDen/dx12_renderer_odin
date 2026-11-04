@@ -61,7 +61,7 @@ GPU_PASS_NAMES := [GPU_Pass]string{
     .Shadow = "Shadow", .Scene = "Scene", .Bloom_Prefilter = "Bloom prefilter",
     .Bloom_Downsample = "Bloom downsample", .Bloom_Upsample = "Bloom upsample", .Post_Process = "Post + UI",
     .Depth_Prepass = "Depth prepass", .GTAO = "GTAO + blur", .FXAA = "FXAA / sharpen", .TAA = "TAA resolve",
-    .Auto_Exposure = "Auto exposure", .SSR = "SSR", .Light_Clusters = "Light clusters", .Fog = "Volumetric fog",
+    .Auto_Exposure = "Auto exposure", .SSR = "Reflections", .Light_Clusters = "Light clusters", .Fog = "Volumetric fog",
     .Culling = "GPU culling", .Occlusion = "Occlusion culling", .Probe_Capture = "Probe capture",
     .Ray_Structures = "Ray structures",
 }
@@ -540,6 +540,8 @@ Renderer :: struct {
     ssr_rtv_heap: ^d3d12.IDescriptorHeap,
     surface_srv_index, ssr_srv_index: u32,
     ssr_pipeline_state: ^d3d12.IPipelineState,
+    // Ray-traced reflections, in place of SSR (DXR 1.1 GPUs only).
+    ray_reflection_pipeline_state: ^d3d12.IPipelineState,
     // Last frame's scene color holds an image of this size to reflect.
     ssr_history_valid: bool,
 
@@ -869,7 +871,7 @@ renderer_pipeline_slots :: proc() -> []^^d3d12.IPipelineState {
         &r.post_pipeline_state, &r.fxaa_pipeline_state, &r.sharpen_pipeline_state,
         &r.taa_resolve_pipeline_state, &r.sky_pipeline_state,
         &r.irradiance_pipeline_state, &r.prefilter_pipeline_state,
-        &r.gtao_pipeline_state, &r.ao_blur_pipeline_state, &r.ssr_pipeline_state,
+        &r.gtao_pipeline_state, &r.ao_blur_pipeline_state, &r.ssr_pipeline_state, &r.ray_reflection_pipeline_state,
         &r.cluster_pipeline_state, &r.cull_pipeline_state, &r.cull_meshlet_pipeline_state, &r.hiz_pipeline_state,
         &r.fog_inject_pipeline_state, &r.fog_integrate_pipeline_state, &r.fog_apply_pipeline_state,
         &r.selection_pipeline_state, &r.selection_outline_pipeline_state,
@@ -1627,6 +1629,9 @@ renderer_create_pipelines :: proc() {
     renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSGtao", .R8_UNORM, &r.gtao_pipeline_state)
     renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSAoBlur", .R8_UNORM, &r.ao_blur_pipeline_state)
     renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSSsr", SSR_FORMAT, &r.ssr_pipeline_state)
+    if r.ray_tracing.supported {
+        renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSRayReflections", SSR_FORMAT, &r.ray_reflection_pipeline_state)
+    }
     // Fog over the lit image: fog.rgb + scene * fog.a, keeping the scene's alpha.
     fog_apply := fullscreen
     fog_apply.BlendState.RenderTarget[0] = {
@@ -2159,8 +2164,9 @@ renderer_render_frame :: proc(scene: ^Scene) {
     // overwrites the HDR target.
     renderer_render_depth_prepass(frame)
     renderer_render_gtao()
-    renderer_render_ssr()
     renderer_build_light_clusters()
+    // After the clusters: ray-traced reflections light their hits with them.
+    renderer_render_ssr()
     renderer_render_fog()
     renderer_render_scene_pass(draws, frame.scene_batches, frame.late_scene_batches, frame.transparent_batches)
 

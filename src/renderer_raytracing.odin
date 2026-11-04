@@ -10,7 +10,8 @@ package main
 //     world matrix.
 // A ray query in a shader (RayQuery, TraceRayInline) walks them and reports
 // hits; there are no ray-tracing pipelines or shader tables. The lit pass
-// uses them for the sun's shadows (scene.hlsl, SunRayVisibility).
+// uses them for the sun's shadows (scene.hlsl, SunRayVisibility), and the
+// reflection pass for reflections (PSRayReflections, renderer_ssr.odin).
 //
 // GPUs without DXR 1.1 keep the cascaded shadow maps: the shaders are then
 // compiled without RAY_TRACING, since a pipeline using ray queries cannot be
@@ -50,6 +51,8 @@ RayTracing :: struct {
     // The sun's angular radius in degrees: shadow rays spread over its disc,
     // and TAA averages them into soft edges (without TAA they stay hard).
     sun_angle: f32,
+    // Ray-traced reflections in place of SSR (renderer_ssr.odin).
+    reflections: bool,
 
     device: ^d3d12.IDevice5,
     command_list: ^d3d12.IGraphicsCommandList4,
@@ -87,6 +90,7 @@ renderer_init_ray_tracing :: proc() {
     }
     rt.supported = true
     rt.shadows = true
+    rt.reflections = true
 
     inputs := d3d12.BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS{
         Type = .TOP_LEVEL,
@@ -121,6 +125,12 @@ renderer_release_ray_tracing :: proc() {
 renderer_ray_shadows_active :: proc() -> bool {
     rt := &g_renderer.ray_tracing
     return rt.supported && rt.shadows
+}
+
+// Whether this frame's reflections come from rays rather than SSR.
+renderer_ray_reflections_active :: proc() -> bool {
+    rt := &g_renderer.ray_tracing
+    return rt.supported && rt.reflections
 }
 
 renderer_release_mesh_structures :: proc(mesh: ^GpuMesh) {
@@ -277,9 +287,11 @@ renderer_execute_and_wait :: proc() {
 
 // Writes draw `index`'s TLAS instance: its submesh's BLAS placed by `model`.
 // Shadow casters go under RAY_MASK_SHADOW_CASTER. Cutouts are non-opaque, so
-// ray queries test their alpha; everything else is opaque, and no triangle
-// is culled by facing (a shadow ray meets a closed mesh's back faces first).
-renderer_write_ray_instance :: proc(index: int, model: alg.Matrix4f32, mesh: MeshHandle, submesh: int, first_index: u32, cutout, casts_shadow: bool) {
+// ray queries test their alpha; everything else is opaque. Facing: shadow
+// rays test both sides (a shadow ray may meet a closed mesh's back faces
+// first); reflection rays cull back faces, as the rasterizer does, except on
+// double-sided surfaces.
+renderer_write_ray_instance :: proc(index: int, model: alg.Matrix4f32, mesh: MeshHandle, submesh: int, first_index: u32, cutout, double_sided, casts_shadow: bool) {
     r := &g_renderer
     rt := &r.ray_tracing
     if !rt.supported do return
@@ -288,8 +300,8 @@ renderer_write_ray_instance :: proc(index: int, model: alg.Matrix4f32, mesh: Mes
     if gpu.blas != nil && submesh < len(gpu.blas_offsets) {
         blas = gpu.blas->GetGPUVirtualAddress() + gpu.blas_offsets[submesh]
     }
-    flags := d3d12.RAYTRACING_INSTANCE_FLAGS{.TRIANGLE_CULL_DISABLE}
-    flags += {.FORCE_NON_OPAQUE} if cutout else {.FORCE_OPAQUE}
+    flags := d3d12.RAYTRACING_INSTANCE_FLAGS{.FORCE_NON_OPAQUE} if cutout else {.FORCE_OPAQUE}
+    if double_sided do flags += {.TRIANGLE_CULL_DISABLE}
     mask: u32 = RAY_MASK_SHADOW_CASTER if casts_shadow else RAY_MASK_OTHER
     slot := int(r.frame_slot) * MAX_DRAWS + index
     // The C struct's bit fields: ID (24 bits) and mask (8), then hit-group
@@ -317,7 +329,7 @@ renderer_build_scene_tlas :: proc(instance_count: int) {
     r := &g_renderer
     rt := &r.ray_tracing
     rt.instance_count = instance_count
-    rt.built = renderer_ray_shadows_active()
+    rt.built = renderer_ray_shadows_active() || renderer_ray_reflections_active()
     // Timed every frame, like every pass (zero when nothing is built).
     renderer_begin_gpu_pass(.Ray_Structures)
     defer renderer_end_gpu_pass(.Ray_Structures)

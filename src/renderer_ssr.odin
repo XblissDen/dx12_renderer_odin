@@ -9,6 +9,11 @@ import dxgi "vendor:directx/dxgi"
 // and reads the surface it hits from last frame's HDR image. The lit pass
 // blends that over the environment's specular by the hit's confidence. With
 // TAA, rays spread over the specular lobe and the history averages them.
+//
+// On GPUs with DXR 1.1 the same target is filled by ray-traced reflections
+// instead (renderer_render_ray_reflections): the reflected ray is traced
+// through the scene's TLAS and its hit is shaded, so off-screen and hidden
+// surfaces reflect too.
 DEFAULT_SSR_MAX_DISTANCE :: f32(30)
 DEFAULT_SSR_THICKNESS :: f32(0.5)
 DEFAULT_SSR_MAX_ROUGHNESS :: f32(0.6)
@@ -75,14 +80,23 @@ renderer_ssr_rtv :: proc(index: int) -> d3d12.CPU_DESCRIPTOR_HANDLE {
 // Whether this frame traces reflections: also needs last frame's image.
 renderer_ssr_active :: proc() -> bool {
     r := &g_renderer
-    return r.ssr_enabled && r.ssr_history_valid
+    return r.ssr_enabled && r.ssr_history_valid && !renderer_ray_reflections_active()
 }
 
+// Whether the lit pass gets reflections this frame, from rays or SSR.
+renderer_reflections_active :: proc() -> bool {
+    return renderer_ray_reflections_active() || renderer_ssr_active()
+}
+
+// Ray-traced or screen-space reflections into the reflection target, which
+// the lit pass blends over the probes' and environment's specular.
 renderer_render_ssr :: proc() {
     r := &g_renderer
 
     renderer_begin_gpu_pass(.SSR)
-    if renderer_ssr_active() {
+    if renderer_ray_reflections_active() {
+        renderer_render_ray_reflections()
+    } else if renderer_ssr_active() {
         barrier := d3d12.RESOURCE_BARRIER{Type = .TRANSITION}
         barrier.Transition = {
             pResource = r.ssr_texture,
@@ -115,4 +129,40 @@ renderer_render_ssr :: proc() {
         r.command_list->ResourceBarrier(1, &barrier)
     }
     renderer_end_gpu_pass(.SSR)
+}
+
+// One reflected ray per pixel through the TLAS (PSRayReflections), shaded
+// where it hits with what the lit pass binds: lights and their clusters,
+// shadow maps, probes, volumes and the environment.
+renderer_render_ray_reflections :: proc() {
+    r := &g_renderer
+    barrier := resource_transition(r.ssr_texture, {.PIXEL_SHADER_RESOURCE}, {.RENDER_TARGET})
+    r.command_list->ResourceBarrier(1, &barrier)
+
+    rtv := renderer_ssr_rtv(1)
+    r.command_list->OMSetRenderTargets(1, &rtv, false, nil)
+    heaps := []^d3d12.IDescriptorHeap{r.srv_heap}
+    r.command_list->SetDescriptorHeaps(1, raw_data(heaps))
+    r.command_list->SetGraphicsRootSignature(r.root_signature)
+    r.command_list->SetPipelineState(r.ray_reflection_pipeline_state)
+    renderer_bind_cbv(.Frame_Constants, renderer_frame_cb_address())
+    renderer_bind_srv(.Surface, r.surface_srv_index)
+    renderer_bind_srv(.Depth, r.depth_srv_index)
+    renderer_bind_objects()
+    renderer_bind_srv(.Texture_T1, r.shadow_srv_index)
+    renderer_bind_srv(.Shadow_Atlas, r.shadow_atlas_srv_index)
+    renderer_bind_buffer_srv(.Shadow_Tiles, renderer_shadow_tile_address())
+    renderer_bind_srv(.Irradiance, r.irradiance_srv_index)
+    renderer_bind_srv(.Prefiltered, r.prefilter_srv_index)
+    renderer_bind_buffer_srv(.Lights, renderer_light_buffer_address())
+    renderer_bind_buffer_srv(.Cluster_Lights, r.cluster_buffer->GetGPUVirtualAddress())
+    renderer_bind_probes()
+    renderer_bind_ray_tracing()
+    r.command_list->RSSetViewports(1, &r.viewport)
+    r.command_list->RSSetScissorRects(1, &r.scissor_rect)
+    r.command_list->IASetPrimitiveTopology(.TRIANGLELIST)
+    r.command_list->DrawInstanced(3, 1, 0, 0)
+
+    barrier = resource_transition(r.ssr_texture, {.RENDER_TARGET}, {.PIXEL_SHADER_RESOURCE})
+    r.command_list->ResourceBarrier(1, &barrier)
 }

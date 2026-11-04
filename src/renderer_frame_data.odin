@@ -579,7 +579,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
                 opacity = opacity,
                 textures = texture_indices,
             }
-            renderer_write_ray_instance(data.draw_count, model, mesh, submesh_index, submesh.first_index, cutout, draw.casts_shadow)
+            renderer_write_ray_instance(data.draw_count, model, mesh, submesh_index, submesh.first_index, cutout, material.double_sided, draw.casts_shadow)
             data.draw_count += 1
         }
     }
@@ -715,7 +715,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         ssr_max_distance = r.ssr_max_distance,
         ssr_thickness = r.ssr_thickness,
         ssr_max_roughness = r.ssr_max_roughness,
-        ssr_enabled = u32(renderer_ssr_active()),
+        ssr_enabled = u32(renderer_reflections_active()),
         ssr_stochastic = u32(r.post_anti_aliasing == .TAA),
         ssr_frame = u32(r.frame_counter),
         cluster_screen_size = {f32(r.width), f32(r.height)},

@@ -578,3 +578,50 @@ displays this frame's raw SSR output at tone mapping, before TAA, so the
 noise shows; it does not replace the image SSR reads next frame. Blended
 surfaces get no SSR, and nothing off screen or hidden behind a foreground
 object can be reflected.
+
+## Ray-traced reflections
+
+On GPUs with DXR 1.1, reflections come from rays instead of SSR
+(**Ray-traced reflections (instead of SSR)** in Renderer controls, on by
+default). The rays are traced against the scene itself, so they reflect what
+is off screen or hidden behind other objects, and what SSR could not tell
+apart. The pass (`PSRayReflections` in `scene.hlsl`) writes the same target
+as SSR, and the lit pass blends it in the same way.
+
+1. **The ray**: a full-screen pass after the light clusters reads each
+   pixel's depth and the prepass's normal and roughness. It turns them into a
+   world position and normal, and reflects the view ray about the normal. With
+   TAA, the direction is drawn from the GGX lobe, as for SSR, so rough
+   surfaces blur over frames. Pixels at or above **Reflection max roughness**
+   (SSR's setting, default 0.6) are skipped and keep the probes' and
+   environment's specular.
+2. **Tracing**: an inline ray query over every draw finds the closest hit.
+   Back faces are culled, as the rasterizer culls them, except on
+   double-sided surfaces. Cutouts are alpha-tested as for shadow rays.
+3. **Shading the hit** (`ShadeRayHit`): the hit triangle's vertices are read
+   through the raw mesh buffers, and its normal and texture coordinates are
+   interpolated. The material is read as in the lit pass, at a mip that grows
+   with the ray's length. Normal maps are skipped. Lighting at the hit:
+   - the sun, with a shadow ray of its own;
+   - point and spot lights, with their shadow-atlas shadows. They come from
+     the hit's light cluster when the hit is on screen, and from every light
+     in view otherwise;
+   - ambient light from the sky, probes and irradiance volumes, as in the lit
+     pass (no GTAO);
+   - emission. Light markers show their flat color.
+4. **Miss**: the ray left the scene, so it reads the environment's
+   prefiltered light along its direction. That is the sky without its sun:
+   the reflecting surface's own sun highlight already adds the sun.
+5. **Confidence**: 1, fading out between 60% and 100% of the max roughness.
+   On rough surfaces a reflection's luminance is capped at 16, so a rare
+   bright hit does not flicker through TAA.
+
+Compared with SSR, the reflections are of this frame, with no screen-edge
+fade or thickness guess. Their surfaces are shaded more simply than the lit
+pass shades them: no normal maps, no GTAO, and only one bounce, since a
+reflected surface shows probes rather than its own reflections. **Show
+reflections only** shows them as it does SSR. In Sponza with a high sun at
+1920 × 1080, the pass took 0.73 ms against SSR's 0.30 ms. Most of Sponza is
+rougher than 0.6 and is skipped. Outdoors, the glossy ground now reflects the
+sky and the objects wherever they are, where SSR left black gaps (things off
+screen) for the environment to fill.
