@@ -6,11 +6,12 @@ README](../README.md) covers building and running.
 
 - [Frame structure](frame.md): the main loop, frames in flight, the order of
   GPU passes, per-frame data, instanced batching, GPU frustum, occlusion and
-  meshlet culling with indirect draws, bindless textures,
-  the depth prepass, the root signature, GPU timings, named events for GPU
+  meshlet culling with indirect draws, bindless textures, ray-tracing
+  structures, the depth prepass, the root signature, GPU timings, named events for GPU
   captures, and shader hot-reload.
 - [Lighting](lighting.md): surface shading, materials, the sun, point and spot
-  lights, clustered lighting, shadows, image-based lighting and the sky,
+  lights, clustered lighting, shadows (cascaded and ray-traced), image-based
+  lighting and the sky,
   reflection probes, irradiance volumes, volumetric fog, GTAO, and
   screen-space reflections.
 - [Post-processing](post_processing.md): TAA and sharpening, FXAA, auto
@@ -51,6 +52,7 @@ README](../README.md) covers building and running.
 | `src/renderer_frame_data.odin` | Per-frame draws, batching, GPU culling, constants, light buffer, TAA jitter |
 | `src/renderer_scene_pass.odin` | Sky, lit opaque and blended passes; tone mapping, FXAA/sharpen, UI |
 | `src/renderer_shadow.odin` | Sun cascades, spot and point light shadow maps |
+| `src/renderer_raytracing.odin` | DXR 1.1 support check, mesh BLASes, the frame's TLAS |
 | `src/renderer_ao.odin` | Depth prepass and GTAO |
 | `src/renderer_ssr.odin` | Screen-space reflections |
 | `src/renderer_lights.odin` | Clustered lighting |

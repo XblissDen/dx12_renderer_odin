@@ -21,6 +21,12 @@
 // Each cascade blends into the next over this last fraction of its depth range.
 #define SHADOW_CASCADE_BLEND_FRACTION 0.1f
 
+// Defined (to 1) by the renderer on GPUs with DXR 1.1: a pipeline whose
+// shaders use ray queries cannot be created on others.
+#ifndef RAY_TRACING
+#define RAY_TRACING 0
+#endif
+
 // A point or spot light (renderer.odin's GpuLight).
 struct GpuLight
 {
@@ -185,6 +191,13 @@ cbuffer FrameConstants : register(b4)
 
     // The light views drawn into the shadow atlas this frame (VSShadow).
     float4x4 shadow_view_projection[SHADOW_TILE_VIEWS];
+
+    // Ray tracing (renderer_raytracing.odin): nonzero traces the sun's
+    // shadows instead of reading the cascades, spreading the rays over a
+    // cone of this tangent (zero: hard shadows).
+    uint  ray_shadows;
+    float ray_sun_tan;
+    float2 _ray_pad;
 };
 
 // The visible point and spot lights (light_count of them), and each light
@@ -945,6 +958,100 @@ uint CaptureCascade(float3 world_pos)
     return cascade;
 }
 
+#if RAY_TRACING
+// Ray tracing (renderer_raytracing.odin): this frame's TLAS, one instance per
+// draw (instance index = draw index), and per instance what a cutout hit
+// needs to find its texture coordinates.
+RaytracingAccelerationStructure g_scene_bvh : register(t14);
+struct GpuRayInstance
+{
+    uint vertex_buffer; // Raw views in the SRV heap (g_mesh_buffers).
+    uint index_buffer;
+    uint first_index;   // The submesh's first index; primitives count from it.
+    uint _pad;
+};
+StructuredBuffer<GpuRayInstance> g_ray_instances : register(t15);
+// The whole SRV heap again, as raw buffers.
+ByteAddressBuffer g_mesh_buffers[] : register(t0, space1);
+#define RAY_MASK_SHADOW_CASTER 0x1u
+// renderer.odin's Vertex: 48 bytes, texture coordinates at byte 24.
+#define VERTEX_STRIDE 48u
+#define VERTEX_TEXCOORD_OFFSET 24u
+
+// Whether a ray stops at a cutout's candidate hit: the triangle's texture
+// coordinates at the hit, interpolated, read the albedo's alpha (at the top
+// mip, as the shadow maps' alpha test does up close).
+bool RayHitsCutout(uint instance, uint primitive, float2 barycentrics)
+{
+    GpuRayInstance ray_instance = g_ray_instances[instance];
+    ObjectData object = g_objects[instance];
+    ByteAddressBuffer indices = g_mesh_buffers[NonUniformResourceIndex(ray_instance.index_buffer)];
+    ByteAddressBuffer vertices = g_mesh_buffers[NonUniformResourceIndex(ray_instance.vertex_buffer)];
+    uint3 corners = indices.Load3((ray_instance.first_index + primitive * 3u) * 4u);
+    float2 uv0 = asfloat(vertices.Load2(corners.x * VERTEX_STRIDE + VERTEX_TEXCOORD_OFFSET));
+    float2 uv1 = asfloat(vertices.Load2(corners.y * VERTEX_STRIDE + VERTEX_TEXCOORD_OFFSET));
+    float2 uv2 = asfloat(vertices.Load2(corners.z * VERTEX_STRIDE + VERTEX_TEXCOORD_OFFSET));
+    float2 uv = uv0 * (1.0f - barycentrics.x - barycentrics.y) + uv1 * barycentrics.x + uv2 * barycentrics.y;
+    float alpha = g_textures[NonUniformResourceIndex(object.albedo_texture)].SampleLevel(
+        g_material_sampler, uv * object.uv_scale, 0
+    ).a;
+    return alpha >= object.alpha_cutoff;
+}
+
+// Two uniform numbers per pixel and frame (a PCG hash), for spreading rays.
+float2 RayNoise(float2 pixel)
+{
+    uint state = (uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + fog_frame * 26699u) | 1u;
+    float2 result;
+    [unroll]
+    for (uint i = 0; i < 2u; ++i)
+    {
+        state = state * 747796405u + 2891336453u;
+        uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+        result[i] = float((word >> 22u) ^ word) / 4294967296.0f;
+    }
+    return result;
+}
+
+// Whether the sun reaches this point: one ray toward it, among the shadow
+// casters. The ray starts off the surface along its geometric normal (more
+// further from the camera, as positions get coarser), and with TAA it aims
+// at a random point of the sun's disc, so neighbouring pixels and frames
+// average into soft edges that widen with distance from the caster.
+float SunRayVisibility(float3 world_pos, float3 geometric_normal, float3 sun_L, float2 pixel, float view_distance)
+{
+    float3 direction = sun_L;
+    if (ray_sun_tan > 0.0f)
+    {
+        float2 noise = RayNoise(pixel);
+        float3 helper = abs(sun_L.y) < 0.99f ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
+        float3 tangent = normalize(cross(helper, sun_L));
+        float3 bitangent = cross(sun_L, tangent);
+        float radius = sqrt(noise.x) * ray_sun_tan;
+        float angle = noise.y * 6.2831853f;
+        direction = normalize(sun_L + (tangent * cos(angle) + bitangent * sin(angle)) * radius);
+    }
+
+    RayDesc ray;
+    ray.Origin = world_pos + geometric_normal * (0.002f + 0.0005f * view_distance);
+    ray.Direction = direction;
+    ray.TMin = 0.0f;
+    ray.TMax = 1.0e4f;
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> query;
+    query.TraceRayInline(g_scene_bvh, RAY_FLAG_NONE, RAY_MASK_SHADOW_CASTER, ray);
+    while (query.Proceed())
+    {
+        // Only cutouts are non-opaque; opaque hits end the search at once.
+        if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
+            RayHitsCutout(query.CandidateInstanceIndex(), query.CandidatePrimitiveIndex(), query.CandidateTriangleBarycentrics()))
+        {
+            query.CommitNonOpaqueTriangleHit();
+        }
+    }
+    return query.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0f : 1.0f;
+}
+#endif
+
 float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
 {
     // Albedo SRVs are _SRGB, so the sampler returns filtered linear values.
@@ -1066,7 +1173,19 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
     }
     if (capture_view != 0u) cascade = CaptureCascade(input.world_pos);
 
+    float view_distance = length(view_position - input.world_pos);
     float sun_visibility = 1.0f;
+#if RAY_TRACING
+    // A ray instead of the cascades: exact at any distance, no bias to tune.
+    // Surfaces facing away from the sun get no sunlight either way.
+    if (ray_shadows != 0u)
+    {
+        sun_visibility = geometric_n_dot_l > 0.0f
+            ? SunRayVisibility(input.world_pos, geometric_normal, sun_L, input.position.xy, view_distance)
+            : 0.0f;
+    }
+    else
+#endif
     if (cascade < SHADOW_CASCADE_COUNT)
     {
         sun_visibility = CascadeVisibility(
@@ -1092,14 +1211,14 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
     }
 
     // The shadow map covers the view up to the shadow distance; fade out
-    // before its edge instead of cutting off along a visible line.
-    float view_distance = length(view_position - input.world_pos);
+    // before its edge instead of cutting off along a visible line. Rays have
+    // no such edge.
     float shadow_fade = saturate(
         (view_distance - shadow_fade_start) /
         max(shadow_fade_end - shadow_fade_start, 0.0001f)
     );
     // A capture's distances are from the probe, not the camera the fade is for.
-    if (capture_view != 0u) shadow_fade = 0.0f;
+    if (capture_view != 0u || ray_shadows != 0u) shadow_fade = 0.0f;
     sun_visibility = lerp(sun_visibility, 1.0f, shadow_fade);
 
     float3 sun_radiance = sun_color * sun_intensity * sun_visibility;

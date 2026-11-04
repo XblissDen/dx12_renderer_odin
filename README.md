@@ -10,8 +10,9 @@ written in Odin on DirectX 12, with a Dear ImGui interface.
   panoramas, with the panorama's sun extracted as a shadowed light;
   box-projected reflection probes captured from the scene; and irradiance
   volumes for bounced diffuse light.
-- **Shadows**: four cascaded sun shadow maps, and a cached shadow atlas for up
-  to 64 spot and point lights, each sized by how large it looks on screen.
+- **Shadows**: ray-traced sun shadows with soft edges (DXR 1.1 inline ray
+  queries) or four cascaded shadow maps, and a cached shadow atlas for up to
+  64 spot and point lights, each sized by how large it looks on screen.
 - **Screen-space and volumetric effects**: ground-truth ambient occlusion (GTAO),
   reflections (SSR), and volumetric fog with light shafts.
 - **Post-processing**: TAA with sharpening or FXAA, auto exposure, bloom, and
@@ -44,7 +45,9 @@ Requirements:
 - Visual Studio or Build Tools with **Desktop development with C++** and a
   Windows SDK.
 - A GPU and driver supporting shader model 6.6 (DirectX 12; most GPUs from
-  2018 on, with a current driver).
+  2018 on, with a current driver). Ray-traced shadows also need DXR 1.1
+  (NVIDIA RTX, AMD RX 6000 and Intel Arc or newer); other GPUs use the
+  cascades.
 
 From the project root:
 

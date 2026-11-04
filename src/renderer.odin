@@ -53,6 +53,7 @@ GPU_Pass :: enum u32{
     Culling,
     Occlusion,
     Probe_Capture,
+    Ray_Structures,
 }
 
 // As the Profiler panel and GPU captures name the passes.
@@ -62,6 +63,7 @@ GPU_PASS_NAMES := [GPU_Pass]string{
     .Depth_Prepass = "Depth prepass", .GTAO = "GTAO + blur", .FXAA = "FXAA / sharpen", .TAA = "TAA resolve",
     .Auto_Exposure = "Auto exposure", .SSR = "SSR", .Light_Clusters = "Light clusters", .Fog = "Volumetric fog",
     .Culling = "GPU culling", .Occlusion = "Occlusion culling", .Probe_Capture = "Probe capture",
+    .Ray_Structures = "Ray structures",
 }
 
 Vertex :: struct {
@@ -102,6 +104,11 @@ GpuMesh :: struct {
     // triangles from; 0 until renderer_rebuild_meshlets.
     first_meshlet: u32,
     index_srv_index: u32,
+    // Ray tracing (renderer_raytracing.odin): the vertex buffer's raw SRV,
+    // and the submeshes' BLASes, in one buffer at these offsets.
+    vertex_srv_index: u32,
+    blas: ^d3d12.IResource,
+    blas_offsets: []u64,
 }
 
 GpuTexture :: struct {resource: ^d3d12.IResource, srv_index: u32}
@@ -211,10 +218,19 @@ FrameConstants :: struct #align(256) {
 
     // The light views drawn into the shadow atlas this frame (VSShadow).
     shadow_view_projection: [SHADOW_TILE_VIEWS]alg.Matrix4f32,
+
+    // Ray tracing (renderer_raytracing.odin): nonzero traces the sun's
+    // shadows instead of reading the cascades, spreading the rays over a
+    // cone of this tangent (zero: hard shadows).
+    ray_shadows: u32,
+    ray_sun_tan: f32,
+    _ray_pad: [2]f32,
 }
 
 #assert(SHADOW_CASCADE_COUNT == 4) // Packed as float4 rows in scene.hlsl.
 #assert(size_of(FrameConstants) == 2816)
+// Right after the atlas views, as in scene.hlsl's cbuffer.
+#assert(offset_of(FrameConstants, ray_shadows) == offset_of(FrameConstants, shadow_view_projection) + SHADOW_TILE_VIEWS * 64)
 
 // Written per draw, into this frame's part of the object buffer (g_objects,
 // t20): one per submesh of each entity, read by instance.
@@ -542,6 +558,8 @@ Renderer :: struct {
     probes: Probes,
     // Irradiance volumes, captured like probes (renderer_probes.odin).
     volumes: IrradianceVolumes,
+    // DXR 1.1 support, settings and structures (renderer_raytracing.odin).
+    ray_tracing: RayTracing,
 
     // Volumetric fog (renderer_fog.odin): the settings, the cell volumes (two
     // written in turn, then the integrated one) with their SRVs and UAVs, and
@@ -727,6 +745,8 @@ renderer_compile_shader_set :: proc() -> (error: string) {
 
         args := make([dynamic]win32.wstring, context.temp_allocator)
         for arg in ([]string{"-E", parts[1], "-T", parts[2], "-HV", "2021"}) do append(&args, win32.utf8_to_wstring(arg))
+        // Ray queries only where the GPU can create pipelines that use them.
+        if g_renderer.ray_tracing.supported do append(&args, win32.utf8_to_wstring("-DRAY_TRACING=1"))
         when ODIN_DEBUG {
             for arg in ([]string{"-Zi", "-Qembed_debug", "-Od"}) do append(&args, win32.utf8_to_wstring(arg))
         }
@@ -1098,6 +1118,8 @@ renderer_init :: proc() {
     dx_check(dxc.CreateInstance(dxc.Utils_CLSID, dxc.IUtils_UUID, &r.shader_utils))
 
     renderer_create_timestamp_resources()
+    // Before any shader compiles: it decides whether they use ray queries.
+    renderer_init_ray_tracing()
 }
 
 // The single root signature every pass uses. Passes bind by slot name; the
@@ -1130,6 +1152,9 @@ Root_Slot :: enum u32 {
     Probe_Maps,          // t11: the reflection probes' prefiltered cubes
     Volumes,             // t12: root SRV, this frame's irradiance volumes (GpuIrradianceVolume)
     Volume_Atlas,        // t13: the irradiance volumes' cells
+    Scene_BVH,           // t14: root SRV, this frame's TLAS (ray tracing only)
+    Ray_Instances,       // t15: root SRV, this frame's GpuRayInstance table
+    Mesh_Buffers,        // t0, space1 onwards: the whole SRV heap as raw buffers (mesh vertices and indices)
 }
 
 // SRV: a root shader-resource view of a buffer, bound by GPU address.
@@ -1172,6 +1197,9 @@ ROOT_LAYOUT := [Root_Slot]Root_Param{
     .Probe_Maps          = {.Table, 11, 1, .PIXEL},
     .Volumes             = {.SRV, 12, 0, .PIXEL},
     .Volume_Atlas        = {.Table, 13, 1, .PIXEL},
+    .Scene_BVH           = {.SRV, 14, 0, .PIXEL},
+    .Ray_Instances       = {.SRV, 15, 0, .PIXEL},
+    .Mesh_Buffers        = {.Table, 0, SRV_HEAP_CAPACITY, .PIXEL}, // In register space 1.
 }
 
 // Binds this frame's objects and instance lists, and the bindless textures
@@ -1249,6 +1277,8 @@ renderer_create_root_signature :: proc() {
                     RangeType = .SRV,
                     NumDescriptors = layout.count,
                     BaseShaderRegister = layout.register,
+                    // The raw view of the heap must not overlap the textures'.
+                    RegisterSpace = 1 if slot == .Mesh_Buffers else 0,
                 }
                 param.ParameterType = .DESCRIPTOR_TABLE
                 param.DescriptorTable = {NumDescriptorRanges = 1, pDescriptorRanges = &ranges[slot]}
@@ -1987,6 +2017,9 @@ renderer_rebuild_meshlets :: proc() {
     lists := []^d3d12.ICommandList{r.command_list}
     r.command_queue->ExecuteCommandLists(u32(len(lists)), raw_data(lists))
     renderer_wait_for_gpu()
+
+    // New meshes also need their ray-tracing structures.
+    renderer_build_mesh_structures()
 }
 
 // Frees a removed asset's GPU data; the GPU must be idle.
@@ -1994,6 +2027,7 @@ renderer_release_mesh :: proc(handle: MeshHandle) {
     mesh := &g_renderer.meshes[handle]
     if mesh.vertex_buffer != nil do mesh.vertex_buffer->Release()
     if mesh.index_buffer != nil do mesh.index_buffer->Release()
+    renderer_release_mesh_structures(mesh)
     mesh^ = {}
 }
 
@@ -2112,6 +2146,7 @@ renderer_render_frame :: proc(scene: ^Scene) {
     renderer_begin_frame()
 
     frame := renderer_prepare_frame(scene)
+    renderer_build_scene_tlas(frame.draw_count)
     renderer_cull_draws(frame)
 
     draws := frame.draws[:frame.draw_count]
@@ -2252,6 +2287,7 @@ renderer_destroy :: proc(){
     for &mesh in r.meshes[1:] {
         if mesh.vertex_buffer != nil do mesh.vertex_buffer->Release()
         if mesh.index_buffer != nil do mesh.index_buffer->Release()
+        renderer_release_mesh_structures(&mesh)
     }
 
     for texture in r.textures[1:] {
@@ -2280,6 +2316,7 @@ renderer_destroy :: proc(){
     renderer_release_light_clusters()
     renderer_release_fog()
     renderer_release_probes()
+    renderer_release_ray_tracing()
     r.ssr_rtv_heap->Release()
     r.selection_root_signature->Release()
     r.selection_mask->Release()

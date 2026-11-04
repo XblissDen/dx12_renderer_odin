@@ -489,7 +489,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         uniform_scale := min(axis_scales[0], axis_scales[1], axis_scales[2]) > max_scale * 0.999
 
         mesh := scene.mesh_renderers[i].mesh
-        for submesh in g_assets.meshes[mesh].data.submeshes {
+        for submesh, submesh_index in g_assets.meshes[mesh].data.submeshes {
             if data.draw_count == MAX_DRAWS {
                 r.culling_stats.draws_dropped = true
                 break entities
@@ -579,6 +579,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
                 opacity = opacity,
                 textures = texture_indices,
             }
+            renderer_write_ray_instance(data.draw_count, model, mesh, submesh_index, submesh.first_index, cutout, draw.casts_shadow)
             data.draw_count += 1
         }
     }
@@ -681,6 +682,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     cluster_depth_scale, cluster_depth_bias := light_cluster_depth_params(CAMERA_NEAR_CLIP, camera_far_clip(camera))
     shadow_view_projection: [SHADOW_TILE_VIEWS]alg.Matrix4f32
     for view, i in r.shadow_tile_views[:r.shadow_tile_view_count] do shadow_view_projection[i] = view.view_projection
+    ray_shadows, ray_sun_tan := renderer_ray_shadow_constants()
     constants := FrameConstants{
         view = view,
         projection = rendered_proj,
@@ -735,6 +737,8 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         volume_count = u32(r.volumes.count),
         volume_show = u32(r.volumes.show),
         shadow_view_projection = shadow_view_projection,
+        ray_shadows = ray_shadows,
+        ray_sun_tan = ray_sun_tan,
     }
     r.frame_cb_mapped_data[r.frame_slot] = constants
     if capturing do renderer_write_probe_capture_constants(constants, sky^, camera_far_clip(camera))
@@ -780,9 +784,11 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     view_frustums: [CULL_VIEW_COUNT]Frustum
     view_frustums[0] = camera_frustum
     view_active: [SHADOW_VIEW_COUNT]bool
+    // With ray-traced sun shadows only the fog still reads the cascades.
+    cascades_drawn := !renderer_ray_shadows_active() || renderer_fog_active()
     for cascade in 0..<SHADOW_CASCADE_COUNT {
         view_frustums[1 + cascade] = cascade_frustums[cascade]
-        view_active[cascade] = true
+        view_active[cascade] = cascades_drawn
     }
     for view, i in r.shadow_tile_views[:r.shadow_tile_view_count] {
         view_frustums[1 + SHADOW_CASCADE_COUNT + i] = frustum_from_matrix(view.view_projection)

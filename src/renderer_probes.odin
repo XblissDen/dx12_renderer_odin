@@ -719,6 +719,7 @@ renderer_render_probe_capture :: proc(draws: []Draw, face_batches: [PROBE_FACES]
     renderer_bind_buffer_srv(.Lights, renderer_light_buffer_address())
     renderer_bind_buffer_srv(.Cluster_Lights, r.cluster_buffer->GetGPUVirtualAddress())
     renderer_bind_probes()
+    renderer_bind_ray_tracing()
 
     frame_constants := p.frame_constant_buffer->GetGPUVirtualAddress() + u64(r.frame_slot) * PROBE_FACES * size_of(FrameConstants)
     sky_constants := p.sky_constant_buffer->GetGPUVirtualAddress() + u64(r.frame_slot) * PROBE_FACES * size_of(SkyConstants)

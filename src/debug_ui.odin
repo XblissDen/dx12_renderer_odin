@@ -367,6 +367,18 @@ debug_ui_exposure_controls :: proc() -> (changed: bool) {
 debug_ui_lighting_controls :: proc() {
     r := &g_renderer
     ui_separator()
+    rt := &r.ray_tracing
+    if rt.supported {
+        ui_checkbox("Ray-traced sun shadows", &rt.shadows)
+        if rt.shadows {
+            ui_slider_float("Sun size (degrees)", &rt.sun_angle, 0, MAX_SUN_ANGLE)
+            if r.post_anti_aliasing != .TAA do debug_ui_text("Soft shadow edges need TAA.")
+        }
+        text_buffer: [96]u8
+        debug_ui_text(fmt.bprintf(text_buffer[:], "Mesh structures: %.1f MB", f64(rt.blas_bytes) / (1024 * 1024)))
+    } else {
+        debug_ui_text("Ray tracing: this GPU lacks DXR 1.1.")
+    }
     debug_ui_text("Sun shadows (bias in shadow-map texels)")
     ui_slider_float("Shadow distance", &r.shadow_distance, MIN_SHADOW_DISTANCE, MAX_SHADOW_DISTANCE)
     ui_slider_float("Shadow bias", &r.shadow_bias_constant, 0, MAX_SHADOW_BIAS)

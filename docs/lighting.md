@@ -166,6 +166,53 @@ shader; cutouts and blended surfaces (where alpha ≥ 0.5) run the alpha test.
 - **Show shadow cascades** tints receivers red, green, blue and yellow by
   cascade.
 
+### Sun: ray-traced shadows
+
+On GPUs with DXR 1.1 (ray-tracing tier 1.1), the sun's shadows come from
+rays instead of the cascades (**Ray-traced sun shadows** in Renderer
+controls, on by default). The lit pass's pixel shader casts one ray per pixel
+toward the sun with an **inline ray query** (`SunRayVisibility` in
+`scene.hlsl`): a `RayQuery` object, `TraceRayInline`, then a loop over
+candidate hits. There are no ray-tracing pipelines or shader tables. See
+[Frame structure](frame.md#ray-tracing-structures) for what the rays are
+traced against.
+
+- **The ray** starts off the surface along its geometric normal, by 2 mm plus
+  0.5 mm per meter from the camera, and stops at the first hit (any hit
+  shadows). Surfaces facing away from the sun get no sunlight without a ray.
+  Only draws that cast shadows are considered (unlit light markers are left
+  out, through the instance mask).
+- **Cutouts**: draws with cutout or blended materials are non-opaque
+  instances. For each candidate hit on one, the shader finds the triangle's
+  three vertices through the raw views of the mesh's index and vertex
+  buffers, interpolates their texture coordinates at the hit, and tests the
+  albedo's alpha against the material's cutoff, as the shadow maps' alpha
+  test does. The hit counts only if the alpha passes, so leaves cast
+  leaf-shaped shadows.
+- **Soft edges**: with TAA, each ray aims at a random point on the sun's
+  disc (**Sun size**, the angular radius, default 0.27°, the real sun's).
+  Neighbouring pixels and frames then average into a penumbra that is sharp
+  where the shadow touches its caster and widens with distance from it.
+  Without TAA the noise would stay, so the rays aim at the sun's center and
+  the shadows are hard.
+- **Compared with the cascades**:
+  - no resolution limit, so thin and distant casters keep their shadows;
+  - no depth bias, so no acne and no light leaking under thin overhangs;
+  - no shadow distance, and no cascade seams;
+  - probe and irradiance volume captures trace the same rays, so a capture
+    far from the camera gets correct sun shadows.
+- **Cost**: in Sponza at 1920 × 1080 with a high sun, the lit pass took
+  0.32 ms longer (0.61 → 0.93 ms), plus 0.06 ms to build the frame's TLAS.
+  With fog off, the cascades are no longer drawn, which saved 0.27 ms (Shadow
+  0.31 → 0.04 ms), so the frame cost about the same.
+- **What still uses the cascades**: volumetric fog's light shafts. While fog
+  is on, the cascades are still drawn for it. Point and spot lights keep the
+  shadow atlas.
+
+On GPUs without DXR 1.1, the shaders are compiled without `RAY_TRACING`
+(a pipeline using ray queries cannot be created there), the switch is
+replaced by a note, and the cascades are used as before.
+
 ### Spot and point lights: the shadow atlas
 
 Spot and point light shadows share one 4096² depth atlas

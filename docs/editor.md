@@ -36,7 +36,8 @@ textures and draws onto the back buffer after tone mapping and anti-aliasing,
 so text stays sharp.
 
 - **Renderer controls**: shader reload status, exposure, bloom, tone mapping,
-  anti-aliasing, the environment, shadows, GTAO, SSR, reflection probes,
+  anti-aliasing, the environment, shadows (with **Ray-traced sun shadows**
+  and **Sun size** on GPUs with DXR 1.1), GTAO, SSR, reflection probes,
   irradiance volumes (with **Show diffuse ambient light only**), light
   clusters, fog, and the frustum, occlusion and meshlet culling switches. **Show ImGui demo** opens
   ImGui's own demo window.

@@ -44,8 +44,9 @@ frame never overwrites them while an earlier one still reads them.
 
 | Pass | What it does | Details |
 | --- | --- | --- |
+| Ray structures | With ray-traced sun shadows: builds the frame's TLAS over every draw | [below](#ray-tracing-structures) |
 | GPU culling | Compute pass testing draws against every view's frustum, and the camera's large meshes meshlet by meshlet, filling in the shadow views' calls and the camera's early ones | [below](#gpu-culling) |
-| Shadows | Sun cascades, then the shadow atlas tiles of lights that changed (at most 28 views) | [Lighting](lighting.md#shadows) |
+| Shadows | Sun cascades (unless rays replace them and fog is off), then the shadow atlas tiles of lights that changed (at most 28 views) | [Lighting](lighting.md#shadows) |
 | Probe capture | On frames that capture a reflection probe: its six faces, their mips, and the prefiltered levels. On frames that capture an irradiance volume cell: the faces, their mips, and the projection to spherical harmonics | [Lighting](lighting.md#reflection-probes), [volumes](lighting.md#irradiance-volumes) |
 | Depth prepass | Depth, motion vectors, and the surface buffer (normal, roughness): the camera's early calls, then the depth pyramid and the late cull, then its late calls | [below](#depth-prepass) |
 | GTAO | Ambient occlusion from depth and the prepass normals, then a depth-aware blur | [Lighting](lighting.md#ambient-occlusion-gtao) |
@@ -320,6 +321,38 @@ The heap holds 65,536 descriptors, render targets and environment maps
 included. The rest is room for textures, and importing reports when it is
 full.
 
+### Ray-tracing structures
+
+On GPUs with DXR 1.1, shaders trace rays with inline ray queries
+(`src/renderer_raytracing.odin`). They walk two levels of acceleration
+structures, trees of bounding boxes that the GPU's ray-tracing hardware
+traverses:
+
+- **Bottom level (BLAS)**, one per submesh: its triangles, from the mesh's
+  vertex buffer (positions) and its part of the index buffer. They are built
+  when meshes load or import, together with the meshlets
+  (`renderer_build_mesh_structures`). Each build gets room for the worst
+  case. Its compacted size is then read back, and it is copied into a buffer
+  of exactly that size. A mesh's submeshes share one buffer. All of the
+  catalog's meshes, Sponza included, take 16.3 MB.
+- **Top level (TLAS)**, rebuilt every frame (**Ray structures** in the GPU
+  timings, about 0.06 ms in Sponza): one instance per draw, in draw order,
+  so a hit's instance index is its draw's index in `g_objects`. Each instance
+  places its submesh's BLAS by the draw's world matrix and carries:
+  - a mask: shadow casters, or the rest;
+  - a flag: opaque, or non-opaque for cutouts, whose alpha the shader tests
+    on each candidate hit;
+  - no facing culling, since a shadow ray from outside a closed mesh may
+    meet its back faces first.
+
+`renderer_prepare_frame` writes the instances (`renderer_write_ray_instance`)
+into a per-frame upload buffer next to the object data. It also writes a
+small table per instance: the raw SRVs of the mesh's vertex and index
+buffers, and the submesh's first index. Cutout hits read their texture
+coordinates through these. The shaders see the whole SRV heap a second time
+as raw buffers, `g_mesh_buffers[]` in register space 1, beside the
+`g_textures[]` view of the same heap.
+
 ## Depth prepass
 
 Opaque and cutout surfaces are drawn once without lighting before anything
@@ -368,6 +401,8 @@ assigns registers:
 | Texture T8, Depth | t8, t9 | AO or motion vectors; scene depth |
 | Probes, Probe maps | t10, t11 | Root SRV, this frame's reflection probes; their prefiltered cube map array |
 | Volumes, Volume atlas | t12, t13 | Root SRV, this frame's irradiance volumes; their cells' 3D texture |
+| Scene BVH, Ray instances | t14, t15 | Root SRVs, this frame's TLAS and its per-instance table (DXR 1.1 GPUs only) |
+| Mesh buffers | t0 onwards, space 1 | The whole SRV heap again, as raw buffers (mesh vertices and indices for ray hits) |
 | Textures | t22 onwards | The whole SRV heap, the bindless texture array |
 | Exposure buffer | t16 | Root SRV, the automatic exposure |
 | Reflections | t17 | SSR result |
