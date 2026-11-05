@@ -11,9 +11,9 @@ package main
 // A ray query in a shader (RayQuery, TraceRayInline) walks them and reports
 // hits; there are no ray-tracing pipelines or shader tables. The lit pass
 // uses them for the sun's shadows (scene.hlsl, SunRayVisibility), the
-// reflection pass for reflections (PSRayReflections, renderer_ssr.odin), and
-// dynamic irradiance volumes for their probes (PSVolumeRays,
-// renderer_probes.odin).
+// reflection pass for reflections (PSRayReflections, renderer_ssr.odin), the
+// AO pass for ambient occlusion (PSRtao, renderer_ao.odin), and dynamic
+// irradiance volumes for their probes (PSVolumeRays, renderer_probes.odin).
 //
 // GPUs without DXR 1.1 keep the cascaded shadow maps: the shaders are then
 // compiled without RAY_TRACING, since a pipeline using ray queries cannot be
@@ -48,6 +48,10 @@ RAY_INSTANCE_DOUBLE_SIDED :: 0x1
 // The sun's angular radius by default: the real sun's, about 0.27 degrees.
 DEFAULT_SUN_ANGLE :: f32(0.27)
 MAX_SUN_ANGLE :: f32(3)
+// Ray-traced AO's rays per pixel: the 4 x 4 blur gathers 16 pixels' worth,
+// and the history up to 16 frames'.
+DEFAULT_AO_RAYS :: 1
+MAX_AO_RAYS :: 16
 
 RayTracing :: struct {
     // DXR 1.1 is available, and the setting to use it for the sun's shadows.
@@ -58,6 +62,10 @@ RayTracing :: struct {
     sun_angle: f32,
     // Ray-traced reflections in place of SSR (renderer_ssr.odin).
     reflections: bool,
+    // Ray-traced ambient occlusion in place of GTAO (renderer_ao.odin), and
+    // its rays per pixel.
+    ambient_occlusion: bool,
+    ao_rays: i32,
 
     device: ^d3d12.IDevice5,
     command_list: ^d3d12.IGraphicsCommandList4,
@@ -96,6 +104,8 @@ renderer_init_ray_tracing :: proc() {
     rt.supported = true
     rt.shadows = true
     rt.reflections = true
+    rt.ambient_occlusion = true
+    rt.ao_rays = DEFAULT_AO_RAYS
 
     inputs := d3d12.BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS{
         Type = .TOP_LEVEL,
@@ -136,6 +146,12 @@ renderer_ray_shadows_active :: proc() -> bool {
 renderer_ray_reflections_active :: proc() -> bool {
     rt := &g_renderer.ray_tracing
     return rt.supported && rt.reflections
+}
+
+// Whether this frame's ambient occlusion comes from rays rather than GTAO.
+renderer_ray_ao_active :: proc() -> bool {
+    r := &g_renderer
+    return r.ray_tracing.supported && r.ray_tracing.ambient_occlusion && r.ao_enabled
 }
 
 renderer_release_mesh_structures :: proc(mesh: ^GpuMesh) {
@@ -335,7 +351,8 @@ renderer_build_scene_tlas :: proc(instance_count: int) {
     r := &g_renderer
     rt := &r.ray_tracing
     rt.instance_count = instance_count
-    rt.built = renderer_ray_shadows_active() || renderer_ray_reflections_active() || renderer_dynamic_volumes_active()
+    rt.built = renderer_ray_shadows_active() || renderer_ray_reflections_active() ||
+               renderer_dynamic_volumes_active() || renderer_ray_ao_active()
     // Timed every frame, like every pass (zero when nothing is built).
     renderer_begin_gpu_pass(.Ray_Structures)
     defer renderer_end_gpu_pass(.Ray_Structures)

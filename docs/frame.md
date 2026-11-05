@@ -44,12 +44,12 @@ frame never overwrites them while an earlier one still reads them.
 
 | Pass | What it does | Details |
 | --- | --- | --- |
-| Ray structures | With ray-traced shadows, reflections or dynamic volumes: builds the frame's TLAS over every draw | [below](#ray-tracing-structures) |
+| Ray structures | With ray-traced shadows, reflections, ambient occlusion or dynamic volumes: builds the frame's TLAS over every draw | [below](#ray-tracing-structures) |
 | GPU culling | Compute pass testing draws against every view's frustum, and the camera's large meshes meshlet by meshlet, filling in the shadow views' calls and the camera's early ones | [below](#gpu-culling) |
 | Shadows | Sun cascades (unless rays replace them and fog is off), then the shadow atlas tiles of lights that changed (at most 28 views) | [Lighting](lighting.md#shadows) |
 | Probe capture | On frames that capture a reflection probe: its six faces, their mips, and the prefiltered levels. On frames that capture an irradiance volume cell: the faces, their mips, and the projection to spherical harmonics | [Lighting](lighting.md#reflection-probes), [volumes](lighting.md#irradiance-volumes) |
 | Depth prepass | Depth, motion vectors, and the surface buffer (normal, roughness): the camera's early calls, then the depth pyramid and the late cull, then its late calls | [below](#depth-prepass) |
-| GTAO | Ambient occlusion from depth and the prepass normals, then a depth-aware blur | [Lighting](lighting.md#ambient-occlusion-gtao) |
+| AO + blur | Ambient occlusion: ray-traced (DXR 1.1) or GTAO from depth and the prepass normals, then a depth-aware blur; ray-traced AO is then averaged with its history | [Lighting](lighting.md#ambient-occlusion-gtao), [RTAO](lighting.md#ray-traced-ambient-occlusion-rtao) |
 | Light clusters | Compute pass listing the lights that reach each view cluster | [Lighting](lighting.md#clustered-lighting) |
 | Dynamic GI | Dynamic irradiance volumes (DXR 1.1): clears probes that start over, traces a batch of probes' rays, blends them into the probes' maps and moves probes out of geometry | [Lighting](lighting.md#dynamic-volumes) |
 | Reflections | Ray-traced reflections (DXR 1.1), or SSR: reflections traced through depth, read from last frame's image. After the light clusters, which ray hits use | [Lighting](lighting.md#ray-traced-reflections), [SSR](lighting.md#screen-space-reflections-ssr) |

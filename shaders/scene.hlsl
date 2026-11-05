@@ -198,7 +198,8 @@ cbuffer FrameConstants : register(b4)
     // cone of this tangent (zero: hard shadows).
     uint  ray_shadows;
     float ray_sun_tan;
-    float2 _ray_pad;
+    uint  ao_ray_count;     // Ray-traced AO: rays per pixel,
+    uint  ao_history_valid; // and whether last frame's AO can be averaged in.
 };
 
 // The visible point and spot lights (light_count of them), and each light
@@ -1600,6 +1601,108 @@ float PSGtao(FullscreenInput input) : SV_TARGET
 
     return pow(saturate(visibility), ao_intensity);
 }
+
+#if RAY_TRACING
+// Ray-traced ambient occlusion (renderer_ao.odin), in place of GTAO: from
+// the surface, ao_ray_count rays spread with the cosine over the hemisphere
+// around the prepass's normal, each tested against the scene for anything
+// within ao_radius. The share that escapes is the cosine-weighted visibility
+// GTAO estimates, but from the scene itself rather than the depth buffer, so
+// what is off screen or hidden behind other surfaces occludes too. Hits fade
+// out over the last 61.5% of the radius, as GTAO's samples do.
+//
+// The rays of the 16 pixels of each 4 x 4 block take turns through one
+// stratified set of 16 x ao_ray_count directions (a Fibonacci lattice), which
+// PSAoBlur's 4 x 4 average then gathers. The set shifts every frame, and
+// PSAoAccumulate averages the frames.
+float PSRtao(FullscreenInput input) : SV_TARGET
+{
+    uint width, height;
+    g_depth.GetDimensions(width, height);
+    int2 pixel = int2(input.position.xy);
+    if (g_depth.Load(int3(pixel, 0)) >= 1.0f) return 1.0f; // Sky.
+
+    float3 view_pos = ViewPositionAt(pixel, float2(width, height));
+    float3 P = view_position + mul((float3x3)view, view_pos);
+    float3 N = normalize(mul((float3x3)view, g_surface.Load(int3(pixel, 0)).xyz));
+    float3 helper = abs(N.y) < 0.99f ? float3(0, 1, 0) : float3(1, 0, 0);
+    float3 T = normalize(cross(helper, N));
+    float3 B = cross(N, T);
+
+    uint count = max(ao_ray_count, 1u);
+    uint total = 16u * count;
+    uint block_index = uint(AO_NOISE_PATTERN[(pixel.y & 3) * 4 + (pixel.x & 3)]);
+    // An R2 sequence shift per frame, which PSAoAccumulate averages.
+    float2 shift = frac(float(fog_frame % 256u) * float2(0.7548777f, 0.5698403f));
+
+    RayDesc ray;
+    ray.Origin = P + N * (0.002f + 0.0005f * length(view_pos));
+    ray.TMin = 0.0f;
+    ray.TMax = ao_radius;
+    float falloff_start = (1.0f - GTAO_FALLOFF_RANGE) * ao_radius;
+    float visibility = 0.0f;
+    for (uint i = 0u; i < count; ++i)
+    {
+        uint s = block_index * count + i;
+        float u1 = frac((float(s) + 0.5f) / float(total) + shift.x);
+        float u2 = frac(float(s) * 0.618034f + shift.y);
+        // Cosine-weighted: uniform on the disc, lifted onto the hemisphere.
+        float radius = sqrt(u1);
+        float phi = 2.0f * PI * u2;
+        ray.Direction = T * (radius * cos(phi)) + B * (radius * sin(phi)) + N * sqrt(1.0f - u1);
+
+        RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> query;
+        query.TraceRayInline(g_scene_bvh, RAY_FLAG_NONE, RAY_MASK_SHADOW_CASTER, ray);
+        while (query.Proceed())
+        {
+            if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
+                RayHitsCutout(query.CandidateInstanceIndex(), query.CandidatePrimitiveIndex(), query.CandidateTriangleBarycentrics()))
+            {
+                query.CommitNonOpaqueTriangleHit();
+            }
+        }
+        visibility += query.CommittedStatus() == COMMITTED_TRIANGLE_HIT
+            ? saturate((query.CommittedRayT() - falloff_start) / (ao_radius - falloff_start))
+            : 1.0f;
+    }
+    return pow(visibility / float(count), ao_intensity);
+}
+
+// Ray-traced AO's history (renderer_ao.odin): this frame's blurred AO
+// (g_ao_current), averaged with last frame's at the same surface. That is
+// found through the motion vectors, and trusted only if the depth stored
+// there is the depth this point had last frame (within 5%); otherwise the
+// surface was hidden (or off screen) and starts over. Up to
+// AO_HISTORY_FRAMES frames are averaged. Output: AO, view depth, and the
+// frames averaged.
+#define AO_HISTORY_FRAMES 16.0f
+Texture2D<float> g_ao_current : register(t1);
+Texture2D<float4> g_ao_history : register(t0);
+
+float4 PSAoAccumulate(FullscreenInput input) : SV_TARGET
+{
+    uint width, height;
+    g_depth.GetDimensions(width, height);
+    float2 size = float2(width, height);
+    int2 pixel = int2(input.position.xy);
+    if (g_depth.Load(int3(pixel, 0)) >= 1.0f) return float4(1.0f, 0.0f, 0.0f, 0.0f);
+
+    float current = g_ao_current.Load(int3(pixel, 0));
+    float3 view_pos = ViewPositionAt(pixel, size);
+    float3 P = view_position + mul((float3x3)view, view_pos);
+    float2 previous_uv = (float2(pixel) + 0.5f) / size - g_velocity.Load(int3(pixel, 0));
+    if (ao_history_valid == 0u || any(previous_uv < 0.0f) || any(previous_uv > 1.0f))
+    {
+        return float4(current, view_pos.z, 1.0f, 0.0f);
+    }
+    // The nearest texel: filtering would mix depths across silhouettes.
+    float4 history = g_ao_history.Load(int3(int2(previous_uv * size), 0));
+    float previous_depth = mul(float4(P, 1.0f), previous_view_projection).w;
+    bool same_surface = abs(history.y - previous_depth) < 0.05f * previous_depth;
+    float frames = same_surface ? min(history.z + 1.0f, AO_HISTORY_FRAMES) : 1.0f;
+    return float4(lerp(history.x, current, 1.0f / frames), view_pos.z, frames, 0.0f);
+}
+#endif
 
 // 4x4 average that skips pixels on other surfaces (by relative depth), which
 // removes the noise pattern without blurring across silhouettes.

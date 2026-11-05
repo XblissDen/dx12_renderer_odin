@@ -1,12 +1,19 @@
 package main
 
 import d3d12 "vendor:directx/d3d12"
+import dxgi "vendor:directx/dxgi"
 
 // The depth prepass, and ambient occlusion: GTAO (PSGtao in scene.hlsl)
 // finds how much of the sky each pixel sees from the depth and the prepass's
 // normals, and a depth-aware blur averages out its noise. The lit pass then
-// darkens only ambient (sky) light with the result.
-AO_TARGET_COUNT :: 2 // [0] raw, [1] blurred
+// darkens only ambient (sky) light with the result. On GPUs with DXR 1.1,
+// ray-traced AO (PSRtao) replaces GTAO: a few rays per pixel against the
+// scene itself, into the same target and through the same blur.
+// [0] raw, [1] blurred, then ray-traced AO's history, two written in turn
+// (AO, view depth, frames averaged), on GPUs with DXR 1.1 only.
+AO_TARGET_COUNT :: 4
+AO_HISTORY_FIRST :: 2
+AO_HISTORY_FORMAT :: dxgi.FORMAT.R16G16B16A16_FLOAT
 DEFAULT_AO_RADIUS :: f32(1.0)
 DEFAULT_AO_INTENSITY :: f32(2.0)
 MIN_AO_RADIUS :: f32(0.05)
@@ -45,6 +52,12 @@ renderer_create_ao_targets :: proc() {
     clear_value.Color = {1, 1, 1, 1}
 
     for i in 0..<AO_TARGET_COUNT {
+        if i >= AO_HISTORY_FIRST {
+            if !r.ray_tracing.supported do break
+            desc.Format = AO_HISTORY_FORMAT
+            clear_value.Format = AO_HISTORY_FORMAT
+            clear_value.Color = {1, 0, 0, 0}
+        }
         dx_check(r.device->CreateCommittedResource(
             &heap_props,
             {},
@@ -56,8 +69,10 @@ renderer_create_ao_targets :: proc() {
         ))
         r.device->CreateRenderTargetView(r.ao_targets[i], nil, descriptor_handle(r.ao_rtv_heap, .RTV, u32(i)))
 
-        renderer_write_srv(r.ao_targets[i], .R8_UNORM, r.ao_srv_start + u32(i))
+        renderer_write_srv(r.ao_targets[i], desc.Format, r.ao_srv_start + u32(i))
     }
+    // The old history belongs to the old size.
+    r.ao_history_valid = false
 
     renderer_write_srv(r.depth_buffer, .R32_FLOAT, r.depth_srv_index)
 }
@@ -152,11 +167,40 @@ renderer_render_gtao :: proc() {
         renderer_bind_srv(.Surface, r.surface_srv_index)
 
         // Raw occlusion, then the blur reads it (t8) and writes the final map.
-        renderer_ao_fullscreen(0, r.gtao_pipeline_state)
+        // Rays test cutouts' alpha, through the objects and their textures.
+        ray_traced := renderer_ray_ao_active()
+        if ray_traced {
+            renderer_bind_objects()
+            renderer_bind_ray_tracing()
+            renderer_ao_fullscreen(0, r.rtao_pipeline_state)
+        } else {
+            renderer_ao_fullscreen(0, r.gtao_pipeline_state)
+        }
         renderer_bind_srv(.Texture_T8, r.ao_srv_start)
         renderer_ao_fullscreen(1, r.ao_blur_pipeline_state)
+
+        // Ray-traced AO: averaged with last frame's (t0) at the same surface
+        // (motion vectors at t8), into the other history target.
+        if ray_traced {
+            previous := AO_HISTORY_FIRST + r.ao_history_current
+            r.ao_history_current = 1 - r.ao_history_current
+            renderer_bind_srv(.Texture_T1, r.ao_srv_start + 1)
+            renderer_bind_srv(.Texture_T0, r.ao_srv_start + u32(previous))
+            renderer_bind_srv(.Texture_T8, r.velocity_srv_index)
+            renderer_ao_fullscreen(AO_HISTORY_FIRST + r.ao_history_current, r.ao_accumulate_pipeline_state)
+        }
     }
     renderer_end_gpu_pass(.GTAO)
+    // Kept only while every frame adds to it.
+    r.ao_history_valid = renderer_ray_ao_active()
+}
+
+// The SRV of the AO the lit pass reads: the history with ray-traced AO, the
+// blurred map with GTAO.
+renderer_ao_srv :: proc() -> u32 {
+    r := &g_renderer
+    if renderer_ray_ao_active() do return r.ao_srv_start + u32(AO_HISTORY_FIRST + r.ao_history_current)
+    return r.ao_srv_start + 1
 }
 
 renderer_ao_fullscreen :: proc(target_index: int, pso: ^d3d12.IPipelineState) {

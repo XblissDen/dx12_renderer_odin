@@ -15,8 +15,9 @@ written in Odin on DirectX 12, with a Dear ImGui interface.
   queries) or four cascaded shadow maps, and a cached shadow atlas for up to
   64 spot and point lights, each sized by how large it looks on screen.
 - **Reflections**: ray-traced (DXR 1.1), or screen-space (SSR) on other GPUs.
-- **Screen-space and volumetric effects**: ground-truth ambient occlusion
-  (GTAO), and volumetric fog with light shafts.
+- **Ambient occlusion and fog**: ray-traced ambient occlusion (or
+  ground-truth AO, GTAO, on other GPUs), and volumetric fog with light
+  shafts.
 - **Post-processing**: TAA with sharpening or FXAA, auto exposure, bloom, and
   ACES, AgX or Reinhard tone mapping.
 - **Assets**: OBJ and glTF 2.0 import with materials (normal, roughness and
@@ -47,9 +48,10 @@ Requirements:
 - Visual Studio or Build Tools with **Desktop development with C++** and a
   Windows SDK.
 - A GPU and driver supporting shader model 6.6 (DirectX 12; most GPUs from
-  2018 on, with a current driver). Ray-traced shadows and reflections need DXR 1.1
-  (NVIDIA RTX, AMD RX 6000 and Intel Arc or newer); other GPUs use the
-  cascades and SSR.
+  2018 on, with a current driver). Ray tracing (shadows, reflections,
+  ambient occlusion, dynamic irradiance volumes) needs DXR 1.1 (NVIDIA RTX,
+  AMD RX 6000 and Intel Arc or newer); other GPUs use the cascades, SSR,
+  GTAO and baked volumes.
 
 From the project root:
 

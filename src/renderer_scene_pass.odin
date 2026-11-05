@@ -107,7 +107,7 @@ renderer_render_scene_pass :: proc(draws: []Draw, batches, late_batches, transpa
     renderer_bind_srv(.Irradiance, r.irradiance_srv_index)
     renderer_bind_srv(.Prefiltered, r.prefilter_srv_index)
     // Blurred ambient occlusion (ignored by the shader while disabled).
-    renderer_bind_srv(.Texture_T8, r.ao_srv_start + 1)
+    renderer_bind_srv(.Texture_T8, renderer_ao_srv())
     // Screen-space reflections (likewise ignored while off).
     renderer_bind_srv(.Reflections, r.ssr_srv_index)
 

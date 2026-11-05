@@ -386,8 +386,15 @@ debug_ui_lighting_controls :: proc() {
     ui_checkbox("Show shadow cascades", &r.shadow_show_cascades)
 
     ui_separator()
-    ui_checkbox("Ambient occlusion (GTAO)", &r.ao_enabled)
+    ui_checkbox("Ambient occlusion", &r.ao_enabled)
     if r.ao_enabled {
+        // Ray-traced AO replaces GTAO and shares its radius and intensity.
+        rt := &r.ray_tracing
+        if rt.supported do ui_checkbox("Ray-traced AO (instead of GTAO)", &rt.ambient_occlusion)
+        if renderer_ray_ao_active() {
+            rays := f32(rt.ao_rays)
+            if ui_slider_float("AO rays per pixel", &rays, 1, MAX_AO_RAYS) do rt.ao_rays = clamp(i32(math.round(rays)), 1, MAX_AO_RAYS)
+        }
         ui_slider_float("AO radius", &r.ao_radius, MIN_AO_RADIUS, MAX_AO_RADIUS)
         ui_slider_float("AO intensity", &r.ao_intensity, 0, MAX_AO_INTENSITY)
         ui_checkbox("Show AO only", &r.ao_show)

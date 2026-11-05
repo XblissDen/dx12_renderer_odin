@@ -37,7 +37,9 @@ so text stays sharp.
 
 - **Renderer controls**: shader reload status, exposure, bloom, tone mapping,
   anti-aliasing, the environment, shadows (with **Ray-traced sun shadows**
-  and **Sun size** on GPUs with DXR 1.1), GTAO, reflections (ray-traced on
+  and **Sun size** on GPUs with DXR 1.1), ambient occlusion (ray-traced
+  with **AO rays per pixel** on GPUs with DXR 1.1, otherwise GTAO),
+  reflections (ray-traced on
   GPUs with DXR 1.1, otherwise SSR), reflection probes,
   irradiance volumes (dynamic or baked, with **Show diffuse ambient light
   only**), light

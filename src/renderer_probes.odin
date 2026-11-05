@@ -1017,7 +1017,7 @@ renderer_render_probe_capture :: proc(draws: []Draw, face_batches: [PROBE_FACES]
     renderer_bind_buffer_srv(.Shadow_Tiles, renderer_shadow_tile_address())
     renderer_bind_srv(.Irradiance, r.irradiance_srv_index)
     renderer_bind_srv(.Prefiltered, r.prefilter_srv_index)
-    renderer_bind_srv(.Texture_T8, r.ao_srv_start + 1)
+    renderer_bind_srv(.Texture_T8, renderer_ao_srv())
     renderer_bind_srv(.Reflections, r.ssr_srv_index)
     renderer_bind_buffer_srv(.Lights, renderer_light_buffer_address())
     renderer_bind_buffer_srv(.Cluster_Lights, r.cluster_buffer->GetGPUVirtualAddress())

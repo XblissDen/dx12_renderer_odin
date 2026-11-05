@@ -61,7 +61,7 @@ GPU_Pass :: enum u32{
 GPU_PASS_NAMES := [GPU_Pass]string{
     .Shadow = "Shadow", .Scene = "Scene", .Bloom_Prefilter = "Bloom prefilter",
     .Bloom_Downsample = "Bloom downsample", .Bloom_Upsample = "Bloom upsample", .Post_Process = "Post + UI",
-    .Depth_Prepass = "Depth prepass", .GTAO = "GTAO + blur", .FXAA = "FXAA / sharpen", .TAA = "TAA resolve",
+    .Depth_Prepass = "Depth prepass", .GTAO = "AO + blur", .FXAA = "FXAA / sharpen", .TAA = "TAA resolve",
     .Auto_Exposure = "Auto exposure", .SSR = "Reflections", .Light_Clusters = "Light clusters", .Fog = "Volumetric fog",
     .Culling = "GPU culling", .Occlusion = "Occlusion culling", .Probe_Capture = "Probe capture",
     .Ray_Structures = "Ray structures", .Dynamic_GI = "Dynamic GI",
@@ -226,7 +226,10 @@ FrameConstants :: struct #align(256) {
     // cone of this tangent (zero: hard shadows).
     ray_shadows: u32,
     ray_sun_tan: f32,
-    _ray_pad: [2]f32,
+    // Ray-traced ambient occlusion (renderer_ao.odin): rays per pixel, and
+    // whether last frame's AO can be averaged in.
+    ao_ray_count: u32,
+    ao_history_valid: u32,
 }
 
 #assert(SHADOW_CASCADE_COUNT == 4) // Packed as float4 rows in scene.hlsl.
@@ -525,9 +528,16 @@ Renderer :: struct {
     // Raw (noisy) and blurred occlusion, plus their RTVs.
     ao_targets: [AO_TARGET_COUNT]^d3d12.IResource,
     ao_rtv_heap: ^d3d12.IDescriptorHeap,
+    // Ray-traced AO's history: which of its two targets holds this frame's,
+    // and whether last frame wrote one (renderer_ao.odin).
+    ao_history_current: int,
+    ao_history_valid: bool,
+    ao_accumulate_pipeline_state: ^d3d12.IPipelineState,
     ao_srv_start, depth_srv_index: u32,
     depth_prepass_pipeline_states: [Draw_Variant]^d3d12.IPipelineState,
     gtao_pipeline_state: ^d3d12.IPipelineState,
+    // Ray-traced AO, in place of GTAO (DXR 1.1 GPUs only).
+    rtao_pipeline_state: ^d3d12.IPipelineState,
     ao_blur_pipeline_state: ^d3d12.IPipelineState,
 
     // Screen-space reflections (renderer_ssr.odin).
@@ -873,7 +883,7 @@ renderer_pipeline_slots :: proc() -> []^^d3d12.IPipelineState {
         &r.post_pipeline_state, &r.fxaa_pipeline_state, &r.sharpen_pipeline_state,
         &r.taa_resolve_pipeline_state, &r.sky_pipeline_state,
         &r.irradiance_pipeline_state, &r.prefilter_pipeline_state,
-        &r.gtao_pipeline_state, &r.ao_blur_pipeline_state, &r.ssr_pipeline_state, &r.ray_reflection_pipeline_state,
+        &r.gtao_pipeline_state, &r.rtao_pipeline_state, &r.ao_accumulate_pipeline_state, &r.ao_blur_pipeline_state, &r.ssr_pipeline_state, &r.ray_reflection_pipeline_state,
         &r.cluster_pipeline_state, &r.cull_pipeline_state, &r.cull_meshlet_pipeline_state, &r.hiz_pipeline_state,
         &r.fog_inject_pipeline_state, &r.fog_integrate_pipeline_state, &r.fog_apply_pipeline_state,
         &r.selection_pipeline_state, &r.selection_outline_pipeline_state,
@@ -1636,6 +1646,10 @@ renderer_create_pipelines :: proc() {
     // GTAO's pixel shaders live in scene.hlsl to share its frame constants.
     renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSGtao", .R8_UNORM, &r.gtao_pipeline_state)
     renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSAoBlur", .R8_UNORM, &r.ao_blur_pipeline_state)
+    if r.ray_tracing.supported {
+        renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSRtao", .R8_UNORM, &r.rtao_pipeline_state)
+        renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSAoAccumulate", AO_HISTORY_FORMAT, &r.ao_accumulate_pipeline_state)
+    }
     renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSSsr", SSR_FORMAT, &r.ssr_pipeline_state)
     if r.ray_tracing.supported {
         renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSRayReflections", SSR_FORMAT, &r.ray_reflection_pipeline_state)
@@ -1875,7 +1889,7 @@ renderer_resize:: proc(width, height: u32){
 
     r.hdr_texture->Release()
     r.ldr_texture->Release()
-    for target in r.ao_targets do target->Release()
+    for target in r.ao_targets do if target != nil do target->Release()
     renderer_release_taa_targets()
     renderer_release_ssr_targets()
     renderer_release_oit_targets()
@@ -2343,7 +2357,7 @@ renderer_destroy :: proc(){
     r.bloom_texture->Release()
     r.bloom_rtv_heap->Release()
 
-    for target in r.ao_targets do target->Release()
+    for target in r.ao_targets do if target != nil do target->Release()
     r.ao_rtv_heap->Release()
     renderer_release_auto_exposure()
 

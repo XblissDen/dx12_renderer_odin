@@ -645,6 +645,41 @@ Reflections use the plain value, through the specular occlusion above. The
 pass costs about 0.9 ms at 1280 × 720 in Sponza, against 0.7 ms for the SSAO
 it replaced.
 
+### Ray-traced ambient occlusion (RTAO)
+
+On GPUs with DXR 1.1, rays replace GTAO (**Ray-traced AO (instead of
+GTAO)** in Renderer controls, on by default; GTAO stays on other GPUs). The
+result is the same quantity, the share of a cosine-weighted hemisphere that
+is open within **AO radius**, but measured against the scene rather than the
+depth buffer. Occluders off screen or behind other surfaces count, and there
+are no halos where depth jumps. Radius, intensity, the multi-bounce fit and
+**Show AO only** work as for GTAO.
+
+1. **Rays** (`PSRtao` in `scene.hlsl`): from each pixel's depth and the
+   prepass's normal, **AO rays per pixel** rays (default 1) leave the surface,
+   spread with the cosine over the hemisphere, and look for any hit within
+   the radius (cutouts alpha-tested). A hit counts fully within the first
+   38.5% of the radius and fades out over the rest, as GTAO's samples do.
+   - **Stratified:** the 16 pixels of each 4 × 4 block take turns through
+     one set of 16 directions per ray, spread evenly over the hemisphere (a
+     Fibonacci lattice), so the blur below gathers 16 different directions.
+   - **Shifted:** the set moves each frame (an R2 sequence), so frames
+     sample different directions.
+2. **Blur**: the same 4 × 4 depth-aware average as GTAO.
+3. **History** (`PSAoAccumulate`): the blurred AO is averaged with last
+   frame's at the same surface, found through the motion vectors, over up to
+   16 frames. The history stores each pixel's view depth. If last frame's
+   depth there is not where this point was last frame (within 5%), the
+   surface was hidden or off screen, and it starts over from this frame
+   alone. Two history targets are written in turn, and the lit pass reads the
+   newest.
+
+With the history, one ray per pixel is enough: in Sponza at 1080p the AO pass
+(rays, blur and history) takes about 0.56 ms against GTAO's 0.92 ms. Without
+a history, the 4 × 4 blur alone left visible grain at one ray, and two rays
+cost 1.14 ms. The rays themselves cost about 0.5 ms per ray per pixel, so
+more rays mainly help moving views, where the history restarts.
+
 ## Screen-space reflections (SSR)
 
 SSR replaces the environment's reflection with what is actually on screen,

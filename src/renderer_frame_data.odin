@@ -740,6 +740,8 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         shadow_view_projection = shadow_view_projection,
         ray_shadows = ray_shadows,
         ray_sun_tan = ray_sun_tan,
+        ao_ray_count = u32(r.ray_tracing.ao_rays),
+        ao_history_valid = u32(r.ao_history_valid),
     }
     r.frame_cb_mapped_data[r.frame_slot] = constants
     if capturing do renderer_write_probe_capture_constants(constants, sky^, camera_far_clip(camera))
