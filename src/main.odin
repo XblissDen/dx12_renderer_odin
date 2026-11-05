@@ -84,6 +84,7 @@ main :: proc(){
         editor_process_asset_import()
         editor_update_picking(&g_scene)
         scene_update(&g_scene, dt)
+        renderer_advance_sky(dt)
         renderer_render_frame(&g_scene)
 
         elapsed_for_fps += dt

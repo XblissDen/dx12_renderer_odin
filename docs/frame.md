@@ -44,6 +44,7 @@ frame never overwrites them while an earlier one still reads them.
 
 | Pass | What it does | Details |
 | --- | --- | --- |
+| Sky and IBL | With the physical sky, when it changed: its lookup tables (if the haze changed), its panorama, then the irradiance and prefiltered maps baked from it | [Lighting](lighting.md#physical-sky) |
 | Ray structures | With ray-traced shadows, reflections, ambient occlusion or dynamic volumes: builds the frame's TLAS over every draw | [below](#ray-tracing-structures) |
 | GPU culling | Compute pass testing draws against every view's frustum, and the camera's large meshes meshlet by meshlet, filling in the shadow views' calls and the camera's early ones | [below](#gpu-culling) |
 | Shadows | Sun cascades, then the shadow atlas tiles of lights that changed (at most 28 views); either is skipped while rays replace it and fog is off | [Lighting](lighting.md#shadows) |

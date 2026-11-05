@@ -87,7 +87,7 @@ renderer_render_scene_pass :: proc(draws: []Draw, batches, late_batches, transpa
     r.command_list->SetDescriptorHeaps(1, raw_data(sky_heaps))
 
     renderer_bind_cbv(.Sky_Constants, renderer_sky_cb_address())
-    renderer_bind_srv(.Texture_T0, r.environment_srv_index)
+    renderer_bind_srv(.Texture_T0, renderer_background_srv())
 
     r.command_list->RSSetViewports(1, &r.viewport)
     r.command_list->RSSetScissorRects(1, &r.scissor_rect)

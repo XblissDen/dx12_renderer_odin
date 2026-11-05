@@ -1,5 +1,6 @@
 // The background behind the scene: the HDR panorama seen in the camera's
-// direction, or a solid color. Drawn first into the HDR target.
+// direction, or a solid color. Drawn first into the HDR target. The physical
+// sky's panorama leaves its sun out; its disc is drawn here.
 
 #include "common.hlsl"
 
@@ -21,6 +22,12 @@ cbuffer SkyConstants : register(b2)
     float2 _pad1;
     float3 background_color;
     uint background_mode;
+    // The physical sky's sun disc: toward it, the cosine of its angular
+    // radius, its radiance, and nonzero to draw it.
+    float3 sun_direction;
+    float sun_cos_radius;
+    float3 sun_radiance;
+    uint sun_disc;
 };
 
 struct VSOutput
@@ -43,6 +50,13 @@ float4 PSMain(VSOutput input) : SV_TARGET
         sky_forward + screen_x * sky_right + screen_y * sky_up
     );
 
+    // The disc's edge is smoothed over about a pixel.
+    float sun_cos = dot(direction, sun_direction);
+    float sun_edge = max(fwidth(sun_cos), 1.0e-7f);
+    float3 sun = sun_disc != 0u
+        ? sun_radiance * saturate((sun_cos - sun_cos_radius) / sun_edge + 0.5f)
+        : 0.0f;
+
     direction = EnvironmentRotate(direction, environment_sin, environment_cos);
     float2 uv = DirectionToUV(direction);
 
@@ -59,5 +73,6 @@ float4 PSMain(VSOutput input) : SV_TARGET
     float2 uv_dx = float2(angle_x / (2.0f * PI), 0.0f);
     float2 uv_dy = float2(0.0f, angle_y / PI);
 
-    return float4(g_environment.SampleGrad(g_sampler, uv, uv_dx, uv_dy).rgb * background_brightness, 1.0f);
+    float3 color = g_environment.SampleGrad(g_sampler, uv, uv_dx, uv_dy).rgb + sun;
+    return float4(color * background_brightness, 1.0f);
 }

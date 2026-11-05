@@ -358,8 +358,10 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     sky := &r.sky_cb_mapped_data[r.frame_slot]
     objects := r.object_mapped[int(r.frame_slot) * MAX_DRAWS:]
     cull_bounds := r.cull_bounds_mapped[int(r.frame_slot) * MAX_DRAWS:]
-    environment_sin := math.sin(math.to_radians(r.environment_settings.rotation_degrees))
-    environment_cos := math.cos(math.to_radians(r.environment_settings.rotation_degrees))
+    // The physical sky is drawn in world space, with no panorama rotation.
+    rotation := r.environment_settings.rotation_degrees if r.environment_settings.source == .HDRI else 0
+    environment_sin := math.sin(math.to_radians(rotation))
+    environment_cos := math.cos(math.to_radians(rotation))
 
     // With auto-exposure, the compensation multiplies the GPU-side exposure.
     post.auto_exposure = u32(r.auto_exposure.enabled)
@@ -396,6 +398,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     sky.environment_cos = environment_cos
     sky.background_color = r.environment_settings.background_color
     sky.background_mode = r.environment_settings.background_mode
+    renderer_sky_sun_disc(sky)
 
     view := camera_view_matrix(camera, camera_position)
     proj := camera_projection(camera, f32(r.width) / f32(r.height))
@@ -455,6 +458,10 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     // the scene in place of the scene sun's own values.
     if hdri_sun, ok := renderer_hdri_sun(); ok {
         sun = hdri_sun
+    }
+    // Likewise the physical sky's sun, from the time of day.
+    if sky_sun, ok := renderer_sky_sun(); ok {
+        sun = sky_sun
     }
 
     // The shadow volume depends on caster bounds, so gather every draw first

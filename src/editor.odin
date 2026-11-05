@@ -676,6 +676,16 @@ editor_draw_directional_light_controls :: proc(scene: ^Scene, index: int) {
         ))
         return
     }
+    if sky_sun, ok := renderer_sky_sun(); ok {
+        text_buffer: [128]u8
+        debug_ui_text("Driven by the physical sky's time of day. Clear")
+        debug_ui_text("\"Sun from sky\" in Renderer controls to edit these.")
+        debug_ui_text(fmt.bprintf(
+            text_buffer[:], "Intensity %.2f | Color %.2f %.2f %.2f",
+            sky_sun.intensity, sky_sun.color.r, sky_sun.color.g, sky_sun.color.b,
+        ))
+        return
+    }
 
     editor_color(scene, index, .Sun_Color, "Light color")
     editor_slider(scene, index, .Sun_Intensity, "Intensity", 0.0, 10.0)

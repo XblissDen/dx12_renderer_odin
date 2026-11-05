@@ -1037,7 +1037,7 @@ renderer_render_probe_capture :: proc(draws: []Draw, face_batches: [PROBE_FACES]
         r.command_list->OMSetRenderTargets(1, &rtv, false, nil)
         r.command_list->SetPipelineState(r.sky_pipeline_state)
         renderer_bind_cbv(.Sky_Constants, sky_constants + u64(face) * size_of(SkyConstants))
-        renderer_bind_srv(.Texture_T0, r.environment_srv_index)
+        renderer_bind_srv(.Texture_T0, renderer_background_srv())
         r.command_list->DrawInstanced(3, 1, 0, 0)
 
         r.command_list->OMSetRenderTargets(1, &rtv, false, &dsv)

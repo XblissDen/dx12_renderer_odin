@@ -59,7 +59,7 @@ README](../README.md) covers building and running.
 | `src/renderer_fog.odin` | Volumetric fog |
 | `src/renderer_taa.odin` | TAA targets and resolve |
 | `src/renderer_post.odin` | HDR/LDR targets, bloom, auto exposure |
-| `src/renderer_environment.odin` | HDR panoramas, sun extraction, IBL baking |
+| `src/renderer_environment.odin` | HDR panoramas, sun extraction, IBL baking, the physical sky |
 | `src/renderer_probes.odin` | Reflection probes and irradiance volumes: slots, captures, prefiltering, cell scheduling, dynamic probe updates |
 | `src/renderer_selection.odin` | Selection outline and debug lines |
 | `src/texture_mips.odin`, `src/texture_cache.odin` | Mip chains; BC7/BC5/BC4/BC6H compression and the texture cache |
@@ -72,6 +72,7 @@ README](../README.md) covers building and running.
 | `shaders/auto_exposure.hlsl` | Luminance histogram and exposure adaptation |
 | `shaders/cull.hlsl` | GPU frustum, occlusion and meshlet culling, the depth pyramid |
 | `shaders/sky.hlsl`, `irradiance.hlsl`, `environment_prefilter.hlsl` | Sky, IBL baking, reflection probe filtering |
+| `shaders/atmosphere.hlsl` | The physical sky's lookup tables and panorama |
 | `shaders/irradiance_volume.hlsl` | Baked irradiance volume cells: projection to spherical harmonics |
 | `shaders/dynamic_volume.hlsl`, `volumes.hlsl` | Dynamic volumes: blending rays into probes, relocation; the volumes' shared layout |
 | `shaders/common.hlsl` | Code the shaders share: PI and the panorama mapping |

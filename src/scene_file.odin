@@ -13,8 +13,8 @@ SCENE_FILE_PATH :: "scene.json"
 // 9: blending. 10: auto-exposure. 11: light ranges, spot lights.
 // 12: spot light shadows. 13: point light shadows. 14: orbit centers.
 // 15: TAA sharpening. 16: parents. 17: reflection probes.
-// 18: irradiance volumes. 19: light source radii.
-SCENE_FILE_VERSION :: 19
+// 18: irradiance volumes. 19: light source radii. 20: physical sky.
+SCENE_FILE_VERSION :: 20
 
 ScenePostSettings :: struct{
     exposure: f32,
@@ -474,6 +474,9 @@ scene_file_build :: proc(scene: ^Scene, entities: ^[dynamic]SceneFileEntity, com
         }
         append(entities, entity)
     }
+    // A running sky clock changes the time of day by itself.
+    environment := g_renderer.environment_settings
+    if compare && environment.sky.time_speed != 0 do environment.sky.time_of_day = 0
 
     return SceneFile{
         version = SCENE_FILE_VERSION,
@@ -486,7 +489,7 @@ scene_file_build :: proc(scene: ^Scene, entities: ^[dynamic]SceneFileEntity, com
             anti_aliasing = g_renderer.post_anti_aliasing,
             sharpness = g_renderer.post_sharpness,
         },
-        environment = g_renderer.environment_settings,
+        environment = environment,
         shadow = SceneShadowSettings{
             bias_constant = g_renderer.shadow_bias_constant,
             bias_slope = g_renderer.shadow_bias_slope,
@@ -684,6 +687,8 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
         environment.ambient_intensity = defaults.ambient_intensity
         environment.background_color = defaults.background_color
     }
+    // Saved before the physical sky: its settings start at the defaults.
+    if environment.sky == {} do environment.sky = DEFAULT_SKY
     if !renderer_environment_settings_valid(environment) do return false, "Invalid environment settings."
     auto_exposure := file.auto_exposure.? or_else AutoExposureSettings{
         enabled = false,

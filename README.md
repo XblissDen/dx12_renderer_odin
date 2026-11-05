@@ -7,7 +7,9 @@ written in Odin on DirectX 12, with a Dear ImGui interface.
 
 - **Lighting**: metallic-roughness PBR; one sun plus up to 1024 point and spot
   lights shaded through clustered lighting; image-based lighting from HDR
-  panoramas, with the panorama's sun extracted as a shadowed light;
+  panoramas, with the panorama's sun extracted as a shadowed light, or from
+  a physically based sky and atmosphere with time of day and haze, which
+  rebuilds the sun and the lighting as it changes;
   box-projected reflection probes captured from the scene; and irradiance
   volumes for bounced diffuse light, updated live by rays (DDGI-style) or
   baked from captures.

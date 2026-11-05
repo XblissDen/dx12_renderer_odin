@@ -56,6 +56,7 @@ GPU_Pass :: enum u32{
     Ray_Structures,
     Dynamic_GI,
     Reflection_Denoise,
+    Sky,
 }
 
 // As the Profiler panel and GPU captures name the passes.
@@ -66,6 +67,7 @@ GPU_PASS_NAMES := [GPU_Pass]string{
     .Auto_Exposure = "Auto exposure", .SSR = "Reflections", .Light_Clusters = "Light clusters", .Fog = "Volumetric fog",
     .Culling = "GPU culling", .Occlusion = "Occlusion culling", .Probe_Capture = "Probe capture",
     .Ray_Structures = "Ray structures", .Dynamic_GI = "Dynamic GI", .Reflection_Denoise = "Reflection denoise",
+    .Sky = "Sky and IBL",
 }
 
 Vertex :: struct {
@@ -335,9 +337,17 @@ SkyConstants :: struct #align(256) {
     _pad1: [2]f32,
     background_color: [3]f32,
     background_mode: BackgroundMode,
+    // The physical sky's sun disc, drawn over its panorama (which leaves the
+    // sun out): the direction toward it, the cosine of its angular radius,
+    // its radiance, and nonzero to draw it.
+    sun_direction: [3]f32,
+    sun_cos_radius: f32,
+    sun_radiance: [3]f32,
+    sun_disc: u32,
 }
 
 #assert(size_of(SkyConstants) == 256)
+#assert(offset_of(SkyConstants, sun_direction) == 80) // sky.hlsl's cbuffer
 
 // For environment_prefilter.hlsl: the panorama's prefiltered levels, and the
 // reflection probes' downsample and prefilter draws (renderer_probes.odin).
@@ -637,6 +647,8 @@ Renderer :: struct {
     // from (without its sun when that was extracted); lights the fog.
     environment_average_radiance: [3]f32,
     environment_sun_asset: EnvironmentHandle,
+    // The physical sky (renderer_environment.odin).
+    sky: Sky,
     sky_pipeline_state: ^d3d12.IPipelineState,
 
     sky_constant_buffer: ^d3d12.IResource,
@@ -911,6 +923,7 @@ renderer_pipeline_slots :: proc() -> []^^d3d12.IPipelineState {
         &r.irradiance_pipeline_state, &r.prefilter_pipeline_state,
         &r.gtao_pipeline_state, &r.rtao_pipeline_state, &r.ao_accumulate_pipeline_state, &r.ao_blur_pipeline_state, &r.ssr_pipeline_state, &r.ray_reflection_pipeline_state,
         &r.reflection_filter_pipeline_state, &r.reflection_accumulate_pipeline_state,
+        &r.sky.transmittance_pipeline, &r.sky.multiple_scattering_pipeline, &r.sky.panorama_pipeline,
         &r.cluster_pipeline_state, &r.cull_pipeline_state, &r.cull_meshlet_pipeline_state, &r.hiz_pipeline_state,
         &r.fog_inject_pipeline_state, &r.fog_integrate_pipeline_state, &r.fog_apply_pipeline_state,
         &r.selection_pipeline_state, &r.selection_outline_pipeline_state,
@@ -1005,6 +1018,9 @@ renderer_poll_shaders :: proc() {
 
     r.shader_stamp = stamp
     renderer_reload_shaders()
+    // The physical sky's tables and panorama come from the shaders too.
+    r.sky.dirty = true
+    r.sky.table_haze = -1
     if r.shader_error == "" && environment != r.environment_shader_stamp {
         r.environment_shader_stamp = environment
         if _, pending := r.environment_pending.?; !pending {
@@ -1670,6 +1686,9 @@ renderer_create_pipelines :: proc() {
     renderer_create_fullscreen_pso(fullscreen, "shaders/sky.hlsl", "PSMain", .R16G16B16A16_FLOAT, &r.sky_pipeline_state)
     renderer_create_fullscreen_pso(fullscreen, "shaders/irradiance.hlsl", "PSMain", .R16G16B16A16_FLOAT, &r.irradiance_pipeline_state)
     renderer_create_fullscreen_pso(fullscreen, "shaders/environment_prefilter.hlsl", "PSMain", .R16G16B16A16_FLOAT, &r.prefilter_pipeline_state)
+    renderer_create_fullscreen_pso(fullscreen, "shaders/atmosphere.hlsl", "PSTransmittance", SKY_FORMAT, &r.sky.transmittance_pipeline)
+    renderer_create_fullscreen_pso(fullscreen, "shaders/atmosphere.hlsl", "PSMultipleScattering", SKY_FORMAT, &r.sky.multiple_scattering_pipeline)
+    renderer_create_fullscreen_pso(fullscreen, "shaders/atmosphere.hlsl", "PSSkyPanorama", SKY_FORMAT, &r.sky.panorama_pipeline)
 
     // GTAO's pixel shaders live in scene.hlsl to share its frame constants.
     renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSGtao", .R8_UNORM, &r.gtao_pipeline_state)
@@ -2015,6 +2034,7 @@ renderer_load_textures :: proc(){
     for index in environment_slots {
         r.device->CreateShaderResourceView(nil, &null_desc, renderer_srv_cpu(index))
     }
+    renderer_create_sky()
     r.textures = make([]GpuTexture, len(g_assets.textures))
     for i in 1..<len(g_assets.textures) do r.textures[i].srv_index = renderer_alloc_srv()
 
@@ -2214,6 +2234,8 @@ renderer_render_frame :: proc(scene: ^Scene) {
     renderer_begin_frame()
 
     frame := renderer_prepare_frame(scene)
+    // Before anything reads the IBL maps the physical sky may rebuild.
+    renderer_update_sky()
     renderer_build_scene_tlas(frame.draw_count)
     renderer_cull_draws(frame)
 
@@ -2388,6 +2410,7 @@ renderer_destroy :: proc(){
     renderer_release_fog()
     renderer_release_probes()
     renderer_release_ray_tracing()
+    renderer_release_sky()
     r.ssr_rtv_heap->Release()
     r.selection_root_signature->Release()
     r.selection_mask->Release()

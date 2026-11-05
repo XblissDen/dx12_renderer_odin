@@ -93,7 +93,9 @@ surface writes the motion vector TAA follows
 
 There is always exactly one directional light. Its direction, color and
 intensity come from the scene's sun entity, or, with HDRI lighting and **Sun
-from HDRI** on, from the sun found in the panorama ([below](#sun-from-the-hdri)).
+from HDRI** on, from the sun found in the panorama ([below](#sun-from-the-hdri)),
+or, with the physical sky and **Sun from sky** on, from the time of day
+([below](#physical-sky)).
 It casts the cascaded shadows described under [Shadows](#shadows).
 
 ## Point and spot lights
@@ -366,6 +368,74 @@ the lighting mode. Each pixel reads the panorama at the mip matching the angle
 the pixel covers, not from UV derivatives. Derivatives go wrong where the
 panorama's U wraps around and near the poles, both of which would show the
 smallest mip.
+
+### Physical sky
+
+Instead of an HDRI, the panorama can be a physically based sky
+(**Environment: Physical sky** in Renderer controls), after Hillaire's "A
+Scalable and Production Ready Sky and Atmosphere Rendering Technique" (2020),
+in `shaders/atmosphere.hlsl` and `src/renderer_environment.odin`. It follows
+the sun through the day, and everything lit by the sky is rebuilt from it.
+
+- **The atmosphere**: Earth's, in kilometers: a 6360 km planet under 100 km
+  of air. Air scatters blue more than red (Rayleigh), falling off over 8 km;
+  haze (aerosols) scatters strongly forward and absorbs a little (Mie,
+  Cornette-Shanks phase, g = 0.8), falling off over 1.2 km; ozone absorbs in
+  a layer around 25 km, which keeps twilight skies blue. **Haze** multiplies
+  the aerosol density (1: a clear day; more whitens the horizon and dims
+  and reddens the sun).
+- **The sun's path**: an equinox day. The sun rises due east (+X) at 6:00,
+  is highest at noon toward −Z, (90° − **Latitude**) above the horizon,
+  and sets due west at 18:00. **Sun heading** turns the path about the
+  vertical. **Time of day** sets the hour; **Time speed** runs the clock (hours
+  per second, negative runs it backwards), and the shown **Sun elevation**
+  follows. **Sun intensity** is the sun's irradiance above the atmosphere.
+- **Lookup tables**, redrawn only when the haze changes:
+  - transmittance (256 × 64): how much light gets out to space from each
+    height in each direction, in Bruneton's parameterization, which keeps
+    precision near the horizon;
+  - multiple scattering (32 × 32): the light scattered twice or more, per
+    height and sun angle. Following Hillaire, the second-order light arriving
+    at a point is averaged over 64 directions with an isotropic phase, along
+    with the share of light a point scatters back to itself; every further
+    order scales by that share again, so all orders sum in one division. The
+    ground (albedo 0.3) reflects light into it.
+- **The panorama** (1024 × 512 and 8 mips, each drawn at its own size): from
+  20 m above the ground, each direction marches 32 steps (longer with
+  distance, where the air thins) to space or the ground. Each step adds the
+  sunlight scattered toward the viewer (single scattering with both phase
+  functions, unless the planet shadows that point, plus the multiple-scattering
+  table), dimmed by the air in between. Rays that reach the ground add the
+  sunlight it reflects. The sun's disc is left out, like an extracted HDRI
+  sun: the background draws it, at the ray-traced sun's size (**Sun size**,
+  0.27° by default), with its radiance (the sun's irradiance at the ground
+  over the disc's solid angle).
+- **The sun light**: with **Sun from sky** on, the scene's sun takes the
+  sky's direction, its intensity, and as its color the atmosphere's
+  transmittance toward it, computed on the CPU the same way. Low suns come out
+  orange and dim, and none is left once it sets.
+- **Rebuilding the lighting**: whenever the sky changes, the panorama is
+  drawn again, then baked into the irradiance and prefiltered maps inside the
+  frame, as for an HDRI but with 64 samples per prefiltered texel instead of
+  1024 (the panorama is smooth without its sun, and the footprint-based mips
+  cover each lobe). The fog's sky light, the panorama's average radiance, is
+  read back from the irradiance map a few frames later. The ray-traced sun's
+  shadows, reflections and dynamic GI follow the new sun and sky by
+  themselves; dynamic volumes keep their probes and adapt over about a
+  second. Reflection probes are captured again every 3 seconds while the sky
+  keeps changing and once it has settled for half a second; baked volumes
+  only once it settles (a capture takes seconds). While the clock runs, the
+  unsaved-changes check ignores the time of day.
+- **Cost** at 1920 × 1080: nothing while the sky stands still. With the clock
+  running, the sky and its maps are rebuilt every frame in 0.65 ms (the **Sky
+  and IBL** row in the GPU timings).
+- **Limits**: no aerial perspective (distant objects are not hazed by the
+  atmosphere; volumetric fog does that within its range), no moon or stars
+  (night is black, apart from what auto exposure brings up), and no clouds.
+  The viewer stays at ground level, whatever the camera's height.
+
+Environment rotation does not apply to the physical sky: **Sun heading**
+orients it.
 
 ## Reflection probes
 

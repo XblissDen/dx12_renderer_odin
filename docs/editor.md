@@ -36,7 +36,8 @@ textures and draws onto the back buffer after tone mapping and anti-aliasing,
 so text stays sharp.
 
 - **Renderer controls**: shader reload status, exposure, bloom, tone mapping,
-  anti-aliasing, the environment, shadows (with **Ray-traced sun shadows**,
+  anti-aliasing, the environment (an HDRI panorama, or the physical sky with
+  its time of day, latitude, sun heading, haze and sun intensity), shadows (with **Ray-traced sun shadows**,
   **Sun size**, **Ray-traced light shadows** and **Light shadow rays per
   pixel** on GPUs with DXR 1.1), ambient occlusion (ray-traced
   with **AO rays per pixel** on GPUs with DXR 1.1, otherwise GTAO),
@@ -425,11 +426,12 @@ of Sponza, so the panel can check four times a second.
   entity slots now hold other entities and the old images show the old scene.
 - **Parents** are saved as positions in the file's entity list, and loading
   rejects cycles ([Hierarchy](hierarchy.md#scene-files)).
-- **Versions**: the format is at version 19. Newer settings are optional
+- **Versions**: the format is at version 20. Newer settings are optional
   sections or fields, and a file without one gets a default. Where a feature
   changed how existing scenes look, the default keeps the old look: Reinhard
   tone mapping, FXAA, no sharpening, auto exposure off, no volumetric fog,
   light ranges matching the old falloff, and orbits around the origin. Older
   lights load with shadows on, and with a source radius of 0 (exact
-  ray-traced shadows). Versions 1–5, which stored the component arrays
+  ray-traced shadows). Older environments keep their HDRI, with the physical
+  sky's defaults ready to switch to. Versions 1–5, which stored the component arrays
   directly, are converted on load.

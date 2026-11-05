@@ -496,8 +496,27 @@ debug_ui_environment_controls :: proc() {
     changed := false
     text_buffer: [128]u8
     ui_separator()
+    // The panorama behind the HDRI ambient and background modes.
+    source_labels := [2]cstring{"HDRI panorama", "Physical sky"}
+    source := i32(settings.source)
+    if ui_combo("Environment", &source, raw_data(source_labels[:]), i32(len(source_labels))) {
+        settings.source = EnvironmentSource(source)
+        changed = true
+    }
+    sky_source := settings.source == .Physical_Sky
+    if sky_source {
+        sky := &settings.sky
+        if ui_slider_float("Time of day (h)", &sky.time_of_day, 0, 24) do changed = true
+        if ui_slider_float("Time speed (h/s)", &sky.time_speed, -MAX_SKY_TIME_SPEED, MAX_SKY_TIME_SPEED) do changed = true
+        if ui_slider_float("Latitude (deg)", &sky.latitude, 0, 90) do changed = true
+        if ui_slider_float("Sun heading (deg)", &sky.heading, -180, 180) do changed = true
+        if ui_slider_float("Haze", &sky.haze, 0, MAX_SKY_HAZE) do changed = true
+        if ui_slider_float("Sun intensity", &sky.sun_intensity, 0, 30) do changed = true
+        toward := sky_sun_direction(sky^)
+        debug_ui_text(fmt.bprintf(text_buffer[:], "Sun elevation %.1f deg", math.to_degrees(math.asin(clamp(toward.y, -1, 1)))))
+    }
     debug_ui_text("Ambient lighting")
-    ambient_labels := [2]cstring{"HDRI", "Ambient Color"}
+    ambient_labels := [2]cstring{"Sky" if sky_source else "HDRI", "Ambient Color"}
     ambient_mode := i32(settings.ambient_mode)
     if ui_combo("Lighting mode", &ambient_mode, raw_data(ambient_labels[:]), i32(len(ambient_labels))) {
         settings.ambient_mode = AmbientLightingMode(ambient_mode)
@@ -508,13 +527,16 @@ debug_ui_environment_controls :: proc() {
         if ui_slider_float("Ambient intensity", &settings.ambient_intensity, 0, 8) do changed = true
     } else {
         if ui_slider_float("IBL intensity", &settings.intensity, 0, 8) do changed = true
-        sun_from_hdri := !settings.manual_sun
-        if ui_checkbox("Sun from HDRI", &sun_from_hdri) {
-            settings.manual_sun = !sun_from_hdri
+    }
+    // The panorama's sun drives the scene's (with HDRIs, only for HDRI lighting).
+    if sky_source || settings.ambient_mode == .HDRI {
+        sun_from_panorama := !settings.manual_sun
+        if ui_checkbox("Sun from sky" if sky_source else "Sun from HDRI", &sun_from_panorama) {
+            settings.manual_sun = !sun_from_panorama
             changed = true
         }
         sun := r.environment_sun
-        if !settings.manual_sun && r.environment_sun_asset == settings.asset {
+        if !sky_source && !settings.manual_sun && r.environment_sun_asset == settings.asset {
             if sun.found {
                 elevation := math.to_degrees(math.asin(clamp(sun.direction[1], -1, 1)))
                 debug_ui_text(fmt.bprintf(
@@ -527,7 +549,7 @@ debug_ui_environment_controls :: proc() {
         }
     }
 
-    background_labels := [2]cstring{"HDRI", "Solid Color"}
+    background_labels := [2]cstring{"Sky" if sky_source else "HDRI", "Solid Color"}
     background_mode := i32(settings.background_mode)
     if ui_combo("Background", &background_mode, raw_data(background_labels[:]), i32(len(background_labels))) {
         settings.background_mode = BackgroundMode(background_mode)
@@ -542,7 +564,7 @@ debug_ui_environment_controls :: proc() {
     // before enabling it. Selecting it here does not load an unused HDR file.
     preview: cstring = "Select environment"
     if assets_environment_valid(settings.asset) do preview = g_assets.environments[settings.asset].label
-    if ui_begin_combo("HDRI", preview) {
+    if !sky_source && ui_begin_combo("HDRI", preview) {
         for i in 1..<len(g_assets.environments) {
             ui_push_id(i32(i))
             if ui_selectable(g_assets.environments[i].label, settings.asset == EnvironmentHandle(i)) {
