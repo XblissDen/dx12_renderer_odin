@@ -530,7 +530,7 @@ editor_draw_point_light_controls :: proc(scene: ^Scene, index: int) {
     editor_drag_number(scene, index, .Point_Range, "Range", 0.05, 0.1, 1000.0)
     editor_checkbox(scene, index, .Point_Cast_Shadows, "Cast shadows")
     if light.cast_shadows {
-        editor_shadow_status(index, point = true)
+        editor_light_shadow_controls(scene, index, point = true)
     }
     editor_checkbox(scene, index, .Point_Orbit_Enabled, "Orbit enabled")
 
@@ -552,8 +552,22 @@ editor_draw_point_light_controls :: proc(scene: ^Scene, index: int) {
     }
 }
 
-// Whether a shadow-casting light has tiles in the shadow atlas, and their size.
-editor_shadow_status :: proc(index: int, point: bool) {
+// A shadow-casting light's source radius, and where its shadow comes from:
+// rays, or tiles in the shadow atlas (and their size).
+editor_light_shadow_controls :: proc(scene: ^Scene, index: int, point: bool) {
+    editor_drag_number(
+        scene, index, .Point_Source_Radius if point else .Spot_Source_Radius,
+        "Source radius", 0.005, 0, MAX_LIGHT_SOURCE_RADIUS,
+    )
+    if renderer_ray_light_shadows_active() {
+        if g_renderer.post_anti_aliasing == .TAA {
+            debug_ui_text("Shadow: ray traced, soft over the source radius")
+        } else {
+            debug_ui_text("Shadow: ray traced (soft edges need TAA)")
+        }
+        return
+    }
+    debug_ui_text("(The source radius softens ray-traced shadows only.)")
     text_buffer: [96]u8
     light := renderer_shadow_light_of(index, point)
     switch {
@@ -577,7 +591,7 @@ editor_draw_spot_light_controls :: proc(scene: ^Scene, index: int) {
     editor_drag_number(scene, index, .Spot_Outer_Angle, "Outer angle", 0.5, 1.0, 89.0, degrees = true)
     editor_checkbox(scene, index, .Spot_Cast_Shadows, "Cast shadows")
     if scene.spot_lights[index].cast_shadows {
-        editor_shadow_status(index, point = false)
+        editor_light_shadow_controls(scene, index, point = false)
     }
     debug_ui_text("Aim it with Rotation or the rotate gizmo (E):")
     debug_ui_text("it shines along the marker's base (local -Y).")

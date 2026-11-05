@@ -206,8 +206,8 @@ traced against.
   With fog off, the cascades are no longer drawn, which saved 0.27 ms (Shadow
   0.31 → 0.04 ms), so the frame cost about the same.
 - **What still uses the cascades**: volumetric fog's light shafts. While fog
-  is on, the cascades are still drawn for it. Point and spot lights keep the
-  shadow atlas.
+  is on, the cascades are still drawn for it. Point and spot lights have
+  rays of their own ([below](#spot-and-point-lights-ray-traced-shadows)).
 
 On GPUs without DXR 1.1, the shaders are compiled without `RAY_TRACING`
 (a pipeline using ray queries cannot be created there), the switch is
@@ -218,7 +218,9 @@ replaced by a note, and the cascades are used as before.
 Spot and point light shadows share one 4096² depth atlas
 (`src/renderer_shadow.odin`). Every shadow-casting light whose range reaches
 the view gets square tiles in it, so any number of lights can cast shadows, up
-to what fits (and 64 lights).
+to what fits (and 64 lights). On GPUs with DXR 1.1, rays replace it
+([below](#spot-and-point-lights-ray-traced-shadows)); it is then drawn only
+for volumetric fog.
 
 - **Views**: a spot light has one tile, a perspective view whose field of
   view is the outer cone and whose far plane is the range. A point light has
@@ -255,6 +257,57 @@ to what fits (and 64 lights).
 
 The Profiler shows how many spot and point lights hold tiles, how full the
 atlas is, and how many light views were drawn this frame.
+
+### Spot and point lights: ray-traced shadows
+
+On GPUs with DXR 1.1, point and spot light shadows come from rays instead of
+the atlas (**Ray-traced light shadows** in Renderer controls, on by default),
+traced like the sun's (`LightRayVisibility` in `scene.hlsl`). Every
+shadow-casting light gets exact shadows, however many there are.
+
+- **The ray** leaves the surface as the sun's does and heads for the light.
+  It stops short of the light by the atlas views' near distance (2 cm, or
+  0.1% of the range for long ranges), so a lamp shade fitted closely around
+  the light does not hide it. Surfaces facing away from the light (by their
+  geometric normal) get none of its light without a ray.
+- **Soft edges**: a light's **Source radius** (Inspector, default 0: exact
+  shadows) is the size of its glowing ball. With TAA, each ray aims at a
+  random point of the disc that ball shows the surface, so frames average
+  into a penumbra that widens with distance from the caster, as for the sun.
+  Each light has its own noise pattern, so overlapping penumbrae do not
+  shimmer together. Without TAA the rays aim at the light's center.
+- **Budget**: each light covering a pixel costs a ray, so a pixel traces at
+  most **Light shadow rays per pixel** (default 4, up to 8). First, one pass
+  over the pixel's light cluster ranks the shadow-casting lights by the light
+  each would give it unshadowed (luminance times falloff, cone and the
+  cosine to the light), keeping the largest few in registers. Only the
+  lights at or above the budget-th largest get rays; the weaker ones
+  are lit unshadowed there. With few lights in reach, every one gets a ray.
+- **Everywhere rays shade**: blended surfaces, probe captures, reflection
+  hits and dynamic GI probes' hits trace the same rays within the same
+  budget, so no light leaks through walls into reflections or bounced light.
+- **The atlas** is not drawn while rays replace it, unless volumetric fog is
+  on: the fog still reads it (its cells would need far more rays), so lights
+  keep their tiles for the fog alone. The Profiler then shows the atlas line
+  as unused, or as usual with fog.
+- **Compared with the atlas**: no tile sizes or atlas space, so small and
+  distant lights shadow as sharply as near ones; no depth bias, so contact
+  shadows stay attached (a wall relief lit from the side casts the thin
+  shadow the atlas lost to its bias); no redraws when lights or casters
+  move; soft edges sized by the light.
+- **Cost** at 1920 × 1080 in Sponza:
+  - 3 point lights reaching most of the view: the lit pass 1.44 → 1.69 ms,
+    reflections 1.17 → 1.33 ms; the source radius adds almost nothing
+    (1.70 ms). Nothing moved, so the atlas drew no tiles and the shadow
+    pass was 0.04 ms either way; moving lights would redraw theirs.
+  - 24 overlapping point lights (most pixels in reach of 4 to 16): the lit
+    pass took 2.28 ms with 1 ray per pixel, 4.04 with 4 and 4.89 with 8,
+    against 2.39 ms with the atlas, which fit only 16 of the lights and drew
+    24 light views every frame (0.18 ms) as they fought for room. 4 and 8
+    rays look the same there; 1 keeps only the strongest light's shadows.
+
+On GPUs without DXR 1.1, the atlas is used as before, and the source radius
+has no effect.
 
 ## Image-based lighting and the sky
 
@@ -418,7 +471,8 @@ the GPU timings):
    sphere (spherical Fibonacci) and turned by a random rotation each frame,
    so successive updates sample different directions. A ray's hit is shaded
    diffuse-only (`ShadeRayHit`): the sun with a shadow ray, point and spot
-   lights, and ambient light that includes the volumes themselves. Each
+   lights with theirs (or their atlas shadows without ray-traced light
+   shadows), and ambient light that includes the volumes themselves. Each
    update therefore carries light one bounce further, and the bounces add up
    over frames. A miss reads the sky, without its sun. A ray that hits the
    back of a one-sided surface records no light and a negative distance:
@@ -580,7 +634,8 @@ where shadows cut through sunlight or a spot light's cone
    - Density is **Fog density** (extinction per unit) at or below **Fog
      height**, falling off exponentially above it by **Fog height falloff**.
    - The sun, through its shadow cascades (one comparison per cell), and every
-     point and spot light in the cell's light cluster, with their shadow maps.
+     point and spot light in the cell's light cluster, with their shadow maps
+     (drawn for the fog even when rays shadow the surfaces).
      Each is weighted by the Henyey-Greenstein phase function with **Fog
      anisotropy** g. Positive g scatters forward, so fog glows towards a
      light in front of the camera.
@@ -738,7 +793,8 @@ as SSR, and the lit pass blends it in the same way.
    interpolated. The material is read as in the lit pass, at a mip that grows
    with the ray's length. Normal maps are skipped. Lighting at the hit:
    - the sun, with a shadow ray of its own;
-   - point and spot lights, with their shadow-atlas shadows. They come from
+   - point and spot lights, with shadow rays within the per-pixel budget (or
+     their atlas shadows without ray-traced light shadows). They come from
      the hit's light cluster when the hit is on screen, and from every light
      in view otherwise;
    - ambient light from the sky, probes and irradiance volumes, as in the lit

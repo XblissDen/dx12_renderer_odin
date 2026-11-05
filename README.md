@@ -11,9 +11,10 @@ written in Odin on DirectX 12, with a Dear ImGui interface.
   box-projected reflection probes captured from the scene; and irradiance
   volumes for bounced diffuse light, updated live by rays (DDGI-style) or
   baked from captures.
-- **Shadows**: ray-traced sun shadows with soft edges (DXR 1.1 inline ray
-  queries) or four cascaded shadow maps, and a cached shadow atlas for up to
-  64 spot and point lights, each sized by how large it looks on screen.
+- **Shadows**: ray-traced (DXR 1.1 inline ray queries) for the sun and every
+  point and spot light, soft over the sun's disc and each light's source
+  radius, with a per-pixel ray budget; on other GPUs, four cascaded shadow
+  maps and a cached shadow atlas for up to 64 spot and point lights.
 - **Reflections**: ray-traced (DXR 1.1), or screen-space (SSR) on other GPUs.
 - **Ambient occlusion and fog**: ray-traced ambient occlusion (or
   ground-truth AO, GTAO, on other GPUs), and volumetric fog with light

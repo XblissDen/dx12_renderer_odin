@@ -10,14 +10,15 @@ package main
 //     world matrix.
 // A ray query in a shader (RayQuery, TraceRayInline) walks them and reports
 // hits; there are no ray-tracing pipelines or shader tables. The lit pass
-// uses them for the sun's shadows (scene.hlsl, SunRayVisibility), the
-// reflection pass for reflections (PSRayReflections, renderer_ssr.odin), the
+// uses them for the sun's shadows (scene.hlsl, SunRayVisibility) and point
+// and spot lights' (LightRayVisibility), the reflection pass for reflections
+// (PSRayReflections, renderer_ssr.odin), the
 // AO pass for ambient occlusion (PSRtao, renderer_ao.odin), and dynamic
 // irradiance volumes for their probes (PSVolumeRays, renderer_probes.odin).
 //
-// GPUs without DXR 1.1 keep the cascaded shadow maps: the shaders are then
-// compiled without RAY_TRACING, since a pipeline using ray queries cannot be
-// created there.
+// GPUs without DXR 1.1 keep the cascaded shadow maps and the shadow atlas:
+// the shaders are then compiled without RAY_TRACING, since a pipeline using
+// ray queries cannot be created there.
 
 import "core:math"
 import alg "core:math/linalg"
@@ -52,6 +53,11 @@ MAX_SUN_ANGLE :: f32(3)
 // and the history up to 16 frames'.
 DEFAULT_AO_RAYS :: 1
 MAX_AO_RAYS :: 16
+// Point and spot light shadow rays per pixel: the lights giving a pixel the
+// most light get them, the rest are unshadowed there. The maximum must match
+// scene.hlsl's (the shader ranks lights in that many registers).
+DEFAULT_LIGHT_SHADOW_RAYS :: 4
+MAX_LIGHT_SHADOW_RAYS :: 8
 
 RayTracing :: struct {
     // DXR 1.1 is available, and the setting to use it for the sun's shadows.
@@ -60,6 +66,10 @@ RayTracing :: struct {
     // The sun's angular radius in degrees: shadow rays spread over its disc,
     // and TAA averages them into soft edges (without TAA they stay hard).
     sun_angle: f32,
+    // Ray-traced point and spot light shadows in place of the shadow atlas,
+    // and the most rays a pixel casts for them.
+    light_shadows: bool,
+    light_rays: i32,
     // Ray-traced reflections in place of SSR (renderer_ssr.odin).
     reflections: bool,
     // Ray-traced ambient occlusion in place of GTAO (renderer_ao.odin), and
@@ -103,6 +113,8 @@ renderer_init_ray_tracing :: proc() {
     }
     rt.supported = true
     rt.shadows = true
+    rt.light_shadows = true
+    rt.light_rays = DEFAULT_LIGHT_SHADOW_RAYS
     rt.reflections = true
     rt.ambient_occlusion = true
     rt.ao_rays = DEFAULT_AO_RAYS
@@ -140,6 +152,13 @@ renderer_release_ray_tracing :: proc() {
 renderer_ray_shadows_active :: proc() -> bool {
     rt := &g_renderer.ray_tracing
     return rt.supported && rt.shadows
+}
+
+// Whether this frame's point and spot light shadows come from rays rather
+// than the shadow atlas.
+renderer_ray_light_shadows_active :: proc() -> bool {
+    rt := &g_renderer.ray_tracing
+    return rt.supported && rt.light_shadows
 }
 
 // Whether this frame's reflections come from rays rather than SSR.
@@ -351,8 +370,9 @@ renderer_build_scene_tlas :: proc(instance_count: int) {
     r := &g_renderer
     rt := &r.ray_tracing
     rt.instance_count = instance_count
-    rt.built = renderer_ray_shadows_active() || renderer_ray_reflections_active() ||
-               renderer_dynamic_volumes_active() || renderer_ray_ao_active()
+    rt.built = renderer_ray_shadows_active() || renderer_ray_light_shadows_active() ||
+               renderer_ray_reflections_active() || renderer_dynamic_volumes_active() ||
+               renderer_ray_ao_active()
     // Timed every frame, like every pass (zero when nothing is built).
     renderer_begin_gpu_pass(.Ray_Structures)
     defer renderer_end_gpu_pass(.Ray_Structures)
@@ -397,4 +417,13 @@ renderer_ray_shadow_constants :: proc() -> (enabled: u32, sun_tan: f32) {
     if !renderer_ray_shadows_active() do return 0, 0
     if r.post_anti_aliasing != .TAA do return 1, 0
     return 1, math.tan(math.to_radians(r.ray_tracing.sun_angle))
+}
+
+// The frame constants' fields for point and spot light shadows: the rays per
+// pixel (zero: the shadow atlas), and whether they spread over the lights'
+// source radii (only with TAA, as for the sun).
+renderer_ray_light_constants :: proc() -> (rays: u32, soft: u32) {
+    r := &g_renderer
+    if !renderer_ray_light_shadows_active() do return 0, 0
+    return u32(clamp(r.ray_tracing.light_rays, 1, MAX_LIGHT_SHADOW_RAYS)), u32(r.post_anti_aliasing == .TAA)
 }

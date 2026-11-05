@@ -614,6 +614,8 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
                 radiance = point.color * point.intensity,
                 spot_offset = 1,
                 shadow_index = -1,
+                source_radius = point.source_radius,
+                flags = GPU_LIGHT_CASTS_SHADOW if point.cast_shadows else 0,
             }
         } else {
             spot := scene.spot_lights[i]
@@ -629,6 +631,8 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
                 spot_scale = scale,
                 spot_offset = -cos_outer * scale,
                 shadow_index = -1,
+                source_radius = spot.source_radius,
+                flags = GPU_LIGHT_CASTS_SHADOW if spot.cast_shadows else 0,
             }
         }
 
@@ -683,6 +687,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     shadow_view_projection: [SHADOW_TILE_VIEWS]alg.Matrix4f32
     for view, i in r.shadow_tile_views[:r.shadow_tile_view_count] do shadow_view_projection[i] = view.view_projection
     ray_shadows, ray_sun_tan := renderer_ray_shadow_constants()
+    ray_light_count, ray_light_soft := renderer_ray_light_constants()
     constants := FrameConstants{
         view = view,
         projection = rendered_proj,
@@ -742,6 +747,8 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         ray_sun_tan = ray_sun_tan,
         ao_ray_count = u32(r.ray_tracing.ao_rays),
         ao_history_valid = u32(r.ao_history_valid),
+        ray_light_count = ray_light_count,
+        ray_light_soft = ray_light_soft,
     }
     r.frame_cb_mapped_data[r.frame_slot] = constants
     if capturing do renderer_write_probe_capture_constants(constants, sky^, camera_far_clip(camera))

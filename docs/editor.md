@@ -36,8 +36,9 @@ textures and draws onto the back buffer after tone mapping and anti-aliasing,
 so text stays sharp.
 
 - **Renderer controls**: shader reload status, exposure, bloom, tone mapping,
-  anti-aliasing, the environment, shadows (with **Ray-traced sun shadows**
-  and **Sun size** on GPUs with DXR 1.1), ambient occlusion (ray-traced
+  anti-aliasing, the environment, shadows (with **Ray-traced sun shadows**,
+  **Sun size**, **Ray-traced light shadows** and **Light shadow rays per
+  pixel** on GPUs with DXR 1.1), ambient occlusion (ray-traced
   with **AO rays per pixel** on GPUs with DXR 1.1, otherwise GTAO),
   reflections (ray-traced on
   GPUs with DXR 1.1, otherwise SSR), reflection probes,
@@ -48,7 +49,8 @@ so text stays sharp.
 - **Profiler**: frame rate and frame time, the camera's and shadow views'
   draws and calls after culling (with how many were occluded), the camera's
   meshlets and triangles drawn out of those its large meshes hold, the shadow
-  atlas (lights holding tiles, how full it is, light views drawn this frame),
+  atlas (lights holding tiles, how full it is, light views drawn this frame;
+  unused while rays shadow the lights and fog is off),
   the point and spot lights in view, a warning when a frame had more draws than fit, and
   the [GPU timings](frame.md#gpu-timings) of every pass.
 - **Scene**: add models (a glTF model with several nodes as its node tree,
@@ -303,9 +305,14 @@ shade and cast shadows.
   horizontally at **Orbit radius**, and the center's y is the orbit's height.
   Turning orbit on sets the center so the light stays where it is. A
   duplicated orbiting light starts 45° further along.
-- **Cast shadows**: the light gets tiles in the shadow atlas, sized by how
-  large it looks on screen ([Lighting](lighting.md#spot-and-point-lights-the-shadow-atlas)).
-  The Inspector shows the tile size, or why the light has none.
+- **Cast shadows**: on GPUs with DXR 1.1, the light's shadows are ray traced
+  ([Lighting](lighting.md#spot-and-point-lights-ray-traced-shadows)).
+  Otherwise it gets tiles in the shadow atlas, sized by how large it looks on
+  screen ([Lighting](lighting.md#spot-and-point-lights-the-shadow-atlas)),
+  and the Inspector shows the tile size, or why the light has none.
+- **Source radius** (shown with Cast shadows): the size of the light's
+  glowing ball, over which ray-traced shadows soften (with TAA). 0, the
+  default, gives exact shadows. It does nothing for atlas shadows.
 - A scene can have up to 1024 point and spot lights together. Adding,
   duplicating, or undoing past that is refused with a note. The sun cannot be
   deleted.
@@ -418,10 +425,11 @@ of Sponza, so the panel can check four times a second.
   entity slots now hold other entities and the old images show the old scene.
 - **Parents** are saved as positions in the file's entity list, and loading
   rejects cycles ([Hierarchy](hierarchy.md#scene-files)).
-- **Versions**: the format is at version 18. Newer settings are optional
+- **Versions**: the format is at version 19. Newer settings are optional
   sections or fields, and a file without one gets a default. Where a feature
   changed how existing scenes look, the default keeps the old look: Reinhard
   tone mapping, FXAA, no sharpening, auto exposure off, no volumetric fog,
   light ranges matching the old falloff, and orbits around the origin. Older
-  lights load with shadows on. Versions 1–5, which stored the component arrays
+  lights load with shadows on, and with a source radius of 0 (exact
+  ray-traced shadows). Versions 1–5, which stored the component arrays
   directly, are converted on load.

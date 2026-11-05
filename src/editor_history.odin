@@ -34,6 +34,7 @@ EditorField :: enum {
     Point_Orbit_Speed,
     Point_Range,
     Point_Cast_Shadows,
+    Point_Source_Radius,
 
     Spot_Color,
     Spot_Intensity,
@@ -41,6 +42,7 @@ EditorField :: enum {
     Spot_Inner_Angle,
     Spot_Outer_Angle,
     Spot_Cast_Shadows,
+    Spot_Source_Radius,
 
     Probe_Blend_Distance,
     Probe_Box_Projection,
@@ -201,7 +203,8 @@ editor_field_exists :: proc(
              .Point_Orbit_Radius,
              .Point_Orbit_Speed,
              .Point_Range,
-             .Point_Cast_Shadows:
+             .Point_Cast_Shadows,
+             .Point_Source_Radius:
             return scene.has_point_light[index]
 
         case .Spot_Color,
@@ -209,7 +212,8 @@ editor_field_exists :: proc(
              .Spot_Range,
              .Spot_Inner_Angle,
              .Spot_Outer_Angle,
-             .Spot_Cast_Shadows:
+             .Spot_Cast_Shadows,
+             .Spot_Source_Radius:
             return scene.has_spot_light[index]
 
         case .Probe_Blend_Distance, .Probe_Box_Projection:
@@ -297,6 +301,8 @@ editor_value :: proc(
             return {scene.point_lights[index].range, 0, 0}
         case .Point_Cast_Shadows:
             return editor_bool_value(scene.point_lights[index].cast_shadows)
+        case .Point_Source_Radius:
+            return {scene.point_lights[index].source_radius, 0, 0}
         case .Spot_Color:
             return scene.spot_lights[index].color
         case .Spot_Intensity:
@@ -309,6 +315,8 @@ editor_value :: proc(
             return {scene.spot_lights[index].outer_angle, 0, 0}
         case .Spot_Cast_Shadows:
             return editor_bool_value(scene.spot_lights[index].cast_shadows)
+        case .Spot_Source_Radius:
+            return {scene.spot_lights[index].source_radius, 0, 0}
         case .Probe_Blend_Distance:
             return {scene.reflection_probes[index].blend_distance, 0, 0}
         case .Probe_Box_Projection:
@@ -412,6 +420,8 @@ editor_apply_value :: proc(
             scene.point_lights[index].range = max(value[0], 0.1)
         case .Point_Cast_Shadows:
             scene.point_lights[index].cast_shadows = value[0] != 0
+        case .Point_Source_Radius:
+            scene.point_lights[index].source_radius = clamp(value[0], 0, MAX_LIGHT_SOURCE_RADIUS)
         case .Spot_Color:
             scene.spot_lights[index].color = value
         case .Spot_Intensity:
@@ -427,6 +437,8 @@ editor_apply_value :: proc(
             light.outer_angle = clamp(value[0], max(light.inner_angle, math.to_radians(f32(1))), SPOT_MAX_ANGLE)
         case .Spot_Cast_Shadows:
             scene.spot_lights[index].cast_shadows = value[0] != 0
+        case .Spot_Source_Radius:
+            scene.spot_lights[index].source_radius = clamp(value[0], 0, MAX_LIGHT_SOURCE_RADIUS)
         case .Probe_Blend_Distance:
             scene.reflection_probes[index].blend_distance = max(value[0], 0)
         case .Probe_Box_Projection:

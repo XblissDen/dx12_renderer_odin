@@ -240,14 +240,17 @@ renderer_shadow_caster_hash :: proc(data: ^FrameDraws, center: alg.Vector3f32, r
 // SHADOW_TILE_VIEWS), and writes the GPU tiles of every drawn light. Lights
 // keep their tiles while their size stays about right, so unchanged ones
 // are never drawn again. When a light does not fit but outranks one holding
-// tiles, every tile is placed again in order of importance.
+// tiles, every tile is placed again in order of importance. Without the atlas
+// (renderer_shadow_atlas_used), every light gives its tiles back.
 renderer_update_shadow_atlas :: proc(scene: ^Scene, data: ^FrameDraws, camera_position: alg.Vector3f32, camera_frustum: Frustum) {
     r := &g_renderer
 
-    // Wanted: lights whose range reaches the view, by projected radius.
+    // Wanted: lights whose range reaches the view, by projected radius. None
+    // without the atlas, so the lights holding tiles give them back below.
     candidates := make([dynamic]ShadowCandidate, context.temp_allocator)
     pixels_per_radian := f32(r.height) * 0.5 / math.tan(CAMERA_FOV_Y * 0.5)
-    for i in 0..<scene.entity_count {
+    entity_count := scene.entity_count if renderer_shadow_atlas_used() else 0
+    for i in 0..<entity_count {
         if !scene.alive[i] || !scene.has_transform[i] do continue
         point := scene.has_point_light[i] && scene.point_lights[i].cast_shadows
         spot := scene.has_spot_light[i] && scene.spot_lights[i].cast_shadows
@@ -369,6 +372,12 @@ renderer_update_shadow_atlas :: proc(scene: ^Scene, data: ^FrameDraws, camera_po
         }
     }
 }
+// Whether anything reads the shadow atlas this frame: the lit pass, unless
+// rays replace it (renderer_ray_light_shadows_active), and the fog.
+renderer_shadow_atlas_used :: proc() -> bool {
+    return !renderer_ray_light_shadows_active() || renderer_fog_active()
+}
+
 // The atlas tiles of an entity's light, if it holds any.
 renderer_shadow_light_of :: proc(entity: int, point: bool) -> ^ShadowLight {
     r := &g_renderer

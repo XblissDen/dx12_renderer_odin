@@ -13,8 +13,8 @@ SCENE_FILE_PATH :: "scene.json"
 // 9: blending. 10: auto-exposure. 11: light ranges, spot lights.
 // 12: spot light shadows. 13: point light shadows. 14: orbit centers.
 // 15: TAA sharpening. 16: parents. 17: reflection probes.
-// 18: irradiance volumes.
-SCENE_FILE_VERSION :: 18
+// 18: irradiance volumes. 19: light source radii.
+SCENE_FILE_VERSION :: 19
 
 ScenePostSettings :: struct{
     exposure: f32,
@@ -268,6 +268,9 @@ scene_file_validate :: proc(scene: ^Scene) -> string{
 
             if !(scene.point_lights[i].range > 0 && scene.point_lights[i].range < 1e6) {
                 return "Invalid point light range."
+            }
+            if !light_source_radius_valid(scene.point_lights[i].source_radius) {
+                return "Invalid point light source radius."
             }
             light_count += 1
         }

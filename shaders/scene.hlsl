@@ -13,6 +13,9 @@
 // Shadow views; must match renderer_shadow.odin.
 #define SHADOW_CASCADE_COUNT 4
 #define SHADOW_TILE_VIEWS 28
+// The most point and spot light shadow rays per pixel; must match
+// renderer_raytracing.odin.
+#define MAX_LIGHT_SHADOW_RAYS 8u
 // Receivers look up a shadow map this many texels off their surface, along
 // the geometric normal, which removes most acne without a large depth bias:
 // sun cascades, and spot and point lights (texels at the receiver's
@@ -42,8 +45,12 @@ struct GpuLight
     // First tile in g_shadow_tiles (a point light's six faces follow), or -1.
     int    shadow_index;
     float  shadow_texel_scale; // Texel size per unit of distance along the axis.
-    float2 _light_pad;
+    // Ray-traced shadows: the light's source radius, and GPU_LIGHT_* flags.
+    float  source_radius;
+    uint   flags;
 };
+// GpuLight.flags: the light casts (ray-traced) shadows.
+#define GPU_LIGHT_CASTS_SHADOW 0x1u
 
 // Per-draw data (renderer.odin's ObjectData): one per submesh of each entity,
 // in g_objects. A draw call draws instances of one submesh; instance i is the
@@ -200,6 +207,10 @@ cbuffer FrameConstants : register(b4)
     float ray_sun_tan;
     uint  ao_ray_count;     // Ray-traced AO: rays per pixel,
     uint  ao_history_valid; // and whether last frame's AO can be averaged in.
+    // Point and spot light shadow rays per pixel (zero: the shadow atlas),
+    // and nonzero to spread them over the lights' source radii.
+    uint  ray_light_count;
+    uint  ray_light_soft;
 };
 
 // The visible point and spot lights (light_count of them), and each light
@@ -1092,30 +1103,9 @@ float2 RayNoise(float2 pixel)
     return result;
 }
 
-// Whether the sun reaches this point: one ray toward it, among the shadow
-// casters. The ray starts off the surface along its geometric normal (more
-// further from the camera, as positions get coarser), and with TAA it aims
-// at a random point of the sun's disc, so neighbouring pixels and frames
-// average into soft edges that widen with distance from the caster.
-float SunRayVisibility(float3 world_pos, float3 geometric_normal, float3 sun_L, float2 pixel, float view_distance)
+// Whether a shadow caster lies along the ray: the first hit ends the search.
+bool ShadowRayHits(RayDesc ray)
 {
-    float3 direction = sun_L;
-    if (ray_sun_tan > 0.0f)
-    {
-        float2 noise = RayNoise(pixel);
-        float3 helper = abs(sun_L.y) < 0.99f ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
-        float3 tangent = normalize(cross(helper, sun_L));
-        float3 bitangent = cross(sun_L, tangent);
-        float radius = sqrt(noise.x) * ray_sun_tan;
-        float angle = noise.y * 6.2831853f;
-        direction = normalize(sun_L + (tangent * cos(angle) + bitangent * sin(angle)) * radius);
-    }
-
-    RayDesc ray;
-    ray.Origin = world_pos + geometric_normal * (0.002f + 0.0005f * view_distance);
-    ray.Direction = direction;
-    ray.TMin = 0.0f;
-    ray.TMax = 1.0e4f;
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> query;
     query.TraceRayInline(g_scene_bvh, RAY_FLAG_NONE, RAY_MASK_SHADOW_CASTER, ray);
     while (query.Proceed())
@@ -1127,9 +1117,158 @@ float SunRayVisibility(float3 world_pos, float3 geometric_normal, float3 sun_L, 
             query.CommitNonOpaqueTriangleHit();
         }
     }
-    return query.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0f : 1.0f;
+    return query.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+}
+
+// Where a shadow ray leaves the surface: off it along its geometric normal,
+// more further from the camera, as positions get coarser.
+float3 ShadowRayOrigin(float3 world_pos, float3 geometric_normal, float view_distance)
+{
+    return world_pos + geometric_normal * (0.002f + 0.0005f * view_distance);
+}
+
+// A random offset within a disc of this radius facing along `axis`: square
+// root of one number for the distance from its center (an even spread over
+// its area), the other for the angle.
+float3 RayDiscOffset(float3 axis, float radius, float2 noise)
+{
+    float3 helper = abs(axis.y) < 0.99f ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
+    float3 tangent = normalize(cross(helper, axis));
+    float3 bitangent = cross(axis, tangent);
+    float angle = noise.y * 6.2831853f;
+    return (tangent * cos(angle) + bitangent * sin(angle)) * (sqrt(noise.x) * radius);
+}
+
+// Whether the sun reaches this point: one ray toward it, among the shadow
+// casters. With TAA it aims at a random point of the sun's disc, so
+// neighbouring pixels and frames average into soft edges that widen with
+// distance from the caster.
+float SunRayVisibility(float3 world_pos, float3 geometric_normal, float3 sun_L, float2 pixel, float view_distance)
+{
+    float3 direction = sun_L;
+    if (ray_sun_tan > 0.0f)
+    {
+        direction = normalize(sun_L + RayDiscOffset(sun_L, ray_sun_tan, RayNoise(pixel)));
+    }
+
+    RayDesc ray;
+    ray.Origin = ShadowRayOrigin(world_pos, geometric_normal, view_distance);
+    ray.Direction = direction;
+    ray.TMin = 0.0f;
+    ray.TMax = 1.0e4f;
+    return ShadowRayHits(ray) ? 0.0f : 1.0f;
+}
+
+// Whether a point or spot light reaches this point: one ray toward it, among
+// the shadow casters. It stops short of the light by its atlas views' near
+// distance, so a lamp shade wrapped closely around the light does not hide
+// it. With ray_light_soft, the ray aims at a random point of the light's
+// ball (the disc it shows this point), so frames average into soft edges.
+// `slot` (the light's place in the pixel's list) gives each light its own
+// noise, so overlapping penumbrae do not move together.
+float LightRayVisibility(GpuLight light, float3 world_pos, float3 geometric_normal, float2 pixel, float view_distance, uint slot)
+{
+    float3 origin = ShadowRayOrigin(world_pos, geometric_normal, view_distance);
+    float3 target = light.position;
+    if (ray_light_soft != 0u && light.source_radius > 0.0f)
+    {
+        float2 noise = RayNoise(pixel + float2(float(slot) * 17.0f, float(slot) * 59.0f));
+        target += RayDiscOffset(normalize(light.position - origin), light.source_radius, noise);
+    }
+    float3 to_target = target - origin;
+    float distance = length(to_target);
+
+    RayDesc ray;
+    ray.Origin = origin;
+    ray.Direction = to_target / max(distance, 0.000001f);
+    ray.TMin = 0.0f;
+    ray.TMax = max(distance - max(light.range * 0.001f, 0.02f), 0.0f);
+    return ShadowRayHits(ray) ? 0.0f : 1.0f;
+}
+
+// How much a light gives this point before shadows, as a luminance: the
+// ranking for which lights get shadow rays. Zero where the surface faces away
+// from it (by its geometric normal, as for the sun).
+float LightRayWeight(GpuLight light, float attenuation, float3 L, float3 geometric_normal)
+{
+    return dot(light.radiance, float3(0.2126f, 0.7152f, 0.0722f)) * attenuation *
+           saturate(dot(geometric_normal, L));
+}
+
+// The weight a shadow-casting light needs at this point to get a shadow ray
+// (LocalLightShadow): the ray_light_count-th largest LightRayWeight among the
+// lights reaching it, so only the strongest get rays and the rest stay
+// unshadowed here. Zero when they all fit. `count` lights: the cluster's at
+// cluster_base, or g_lights' first ones.
+float LightRayThreshold(uint cluster_base, uint count, bool clustered, float3 world_pos, float3 geometric_normal)
+{
+    // The largest weights so far, largest first, in one pass over the lights:
+    // each weight sinks through the list, swapping places with smaller ones.
+    // Constant indices keep the list in registers.
+    float strongest[MAX_LIGHT_SHADOW_RAYS];
+    [unroll]
+    for (uint k = 0u; k < MAX_LIGHT_SHADOW_RAYS; ++k) strongest[k] = 0.0f;
+    for (uint i = 0u; i < count; ++i)
+    {
+        GpuLight light = g_lights[clustered ? g_cluster_lights[cluster_base + 1u + i] : i];
+        float3 L;
+        float attenuation = LightAttenuation(light, light.position - world_pos, L);
+        float weight = (light.flags & GPU_LIGHT_CASTS_SHADOW) != 0u
+            ? LightRayWeight(light, attenuation, L, geometric_normal) : 0.0f;
+        [unroll]
+        for (uint k = 0u; k < MAX_LIGHT_SHADOW_RAYS; ++k)
+        {
+            float larger = max(strongest[k], weight);
+            weight = min(strongest[k], weight);
+            strongest[k] = larger;
+        }
+    }
+    // With fewer lights than rays the slot is still zero: every light gets one.
+    // Equal weights at the threshold all pass, so a tie can add a ray.
+    float threshold = 0.0f;
+    [unroll]
+    for (uint k = 0u; k < MAX_LIGHT_SHADOW_RAYS; ++k)
+    {
+        if (k + 1u == ray_light_count) threshold = strongest[k];
+    }
+    return threshold;
 }
 #endif
+
+// How much of a point or spot light reaches this point past shadow casters.
+// With ray_light_count set (DXR GPUs): a ray, for a shadow-casting light whose
+// LightRayWeight reaches `ray_threshold` (LightRayThreshold); none where the
+// surface faces away from the light; unshadowed past the pixel's budget.
+// Otherwise the shadow atlas. `slot` is the light's place in the pixel's
+// list (see LightRayVisibility). Single exit: see CascadeVisibility.
+float LocalLightShadow(GpuLight light, float attenuation, float3 L, float ray_threshold, float3 world_pos,
+                       float3 geometric_normal, float2 pixel, float view_distance, uint slot)
+{
+    float visibility = 1.0f;
+#if RAY_TRACING
+    [branch]
+    if (ray_light_count != 0u)
+    {
+        if ((light.flags & GPU_LIGHT_CASTS_SHADOW) != 0u)
+        {
+            float weight = LightRayWeight(light, attenuation, L, geometric_normal);
+            [branch]
+            if (weight <= 0.0f) visibility = 0.0f;
+            else if (weight >= ray_threshold) visibility = LightRayVisibility(light, world_pos, geometric_normal, pixel, view_distance, slot);
+        }
+    }
+    else
+#endif
+    if (light.spot_scale > 0.0f)
+    {
+        visibility = SpotShadowVisibility(light, world_pos, geometric_normal);
+    }
+    else
+    {
+        visibility = PointShadowVisibility(light, world_pos, geometric_normal);
+    }
+    return visibility;
+}
 
 float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
 {
@@ -1316,22 +1455,23 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
         cluster_base = LightClusterBase(input.position.xy, input.view_depth);
         cluster_light_count = g_cluster_lights[cluster_base];
     }
+    // Which of them get shadow rays (with ray-traced light shadows).
+    float light_ray_threshold = 0.0f;
+#if RAY_TRACING
+    if (ray_light_count != 0u)
+    {
+        light_ray_threshold = LightRayThreshold(cluster_base, cluster_light_count, capture_view == 0u, input.world_pos, geometric_normal);
+    }
+#endif
     for (uint i = 0; i < cluster_light_count; ++i)
     {
         GpuLight light = g_lights[capture_view != 0u ? i : g_cluster_lights[cluster_base + 1u + i]];
         float3 L;
         float attenuation = LightAttenuation(light, light.position - input.world_pos, L);
-        // Spot lights have a cone (spot_scale > 0); point lights have none.
-        float shadow = 1.0f;
-        [branch]
-        if (light.spot_scale > 0.0f)
-        {
-            shadow = SpotShadowVisibility(light, input.world_pos, geometric_normal);
-        }
-        else
-        {
-            shadow = PointShadowVisibility(light, input.world_pos, geometric_normal);
-        }
+        float shadow = LocalLightShadow(
+            light, attenuation, L, light_ray_threshold, input.world_pos, geometric_normal,
+            input.position.xy, view_distance, i
+        );
         float3 radiance = light.radiance * attenuation * shadow;
 
         result += EvaluateDirectLight(
@@ -2033,15 +2173,18 @@ float3 ShadeRayHit(RayDesc ray, uint instance, uint primitive, float2 barycentri
             clustered = true;
         }
     }
+    // With ray-traced light shadows, the hit's strongest lights get rays, as
+    // in the lit pass.
+    float hit_distance = length(P - view_position);
+    float light_ray_threshold = ray_light_count != 0u
+        ? LightRayThreshold(cluster_base, count, clustered, P, geometric_normal) : 0.0f;
     for (uint i = 0; i < count; ++i)
     {
         GpuLight light = g_lights[clustered ? g_cluster_lights[cluster_base + 1u + i] : i];
         float3 L;
         float attenuation = LightAttenuation(light, light.position - P, L);
         if (attenuation <= 0.0f) continue;
-        float shadow = light.spot_scale > 0.0f
-            ? SpotShadowVisibility(light, P, geometric_normal)
-            : PointShadowVisibility(light, P, geometric_normal);
+        float shadow = LocalLightShadow(light, attenuation, L, light_ray_threshold, P, geometric_normal, pixel, hit_distance, i);
         result += RayHitDirectLight(diffuse_only, N, V, L, albedo, roughness, metallic, light.radiance * attenuation * shadow);
     }
 

@@ -268,16 +268,21 @@ debug_ui_draw_profiler :: proc() {
             stats.gpu.shadow_calls,
             stats.shadow_total,
         ))
-        debug_ui_text(fmt.bprintf(
-            text_buffer[:],
-            "Shadow atlas: %d spot, %d point lights, %.0f%% full",
-            spot_shadow_count,
-            point_shadow_count,
-            f32(atlas_cells) * 100 / (SHADOW_ATLAS_CELLS * SHADOW_ATLAS_CELLS),
-        ))
+        if renderer_shadow_atlas_used() {
+            debug_ui_text(fmt.bprintf(
+                text_buffer[:],
+                "Shadow atlas: %d spot, %d point lights, %.0f%% full",
+                spot_shadow_count,
+                point_shadow_count,
+                f32(atlas_cells) * 100 / (SHADOW_ATLAS_CELLS * SHADOW_ATLAS_CELLS),
+            ))
+        } else {
+            debug_ui_text("Shadow atlas: unused (ray-traced light shadows)")
+        }
+        cascades_drawn := SHADOW_CASCADE_COUNT if !renderer_ray_shadows_active() || renderer_fog_active() else 0
         debug_ui_text(fmt.bprintf(
             text_buffer[:], "Shadow views drawn: %d cascades, %d atlas (the rest cached)",
-            SHADOW_CASCADE_COUNT, r.shadow_tile_view_count,
+            cascades_drawn, r.shadow_tile_view_count,
         ))
         debug_ui_text(fmt.bprintf(
             text_buffer[:], "Point and spot lights: %d in view of %d (clustered)",
@@ -373,6 +378,15 @@ debug_ui_lighting_controls :: proc() {
         if rt.shadows {
             ui_slider_float("Sun size (degrees)", &rt.sun_angle, 0, MAX_SUN_ANGLE)
             if r.post_anti_aliasing != .TAA do debug_ui_text("Soft shadow edges need TAA.")
+        }
+        // Point and spot lights: each light's softness is its source radius
+        // (Inspector).
+        ui_checkbox("Ray-traced light shadows", &rt.light_shadows)
+        if rt.light_shadows {
+            rays := f32(rt.light_rays)
+            if ui_slider_float("Light shadow rays per pixel", &rays, 1, MAX_LIGHT_SHADOW_RAYS) {
+                rt.light_rays = clamp(i32(math.round(rays)), 1, MAX_LIGHT_SHADOW_RAYS)
+            }
         }
         text_buffer: [96]u8
         debug_ui_text(fmt.bprintf(text_buffer[:], "Mesh structures: %.1f MB", f64(rt.blas_bytes) / (1024 * 1024)))

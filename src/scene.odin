@@ -43,9 +43,13 @@ PointLight :: struct{
     // Distance at which the light has faded out completely. Zero in scenes
     // saved before ranges existed; loading derives one (light_default_range).
     range: f32,
-    // Shadows come from the shadow atlas: a tile per cube face, sized by how
-    // large the light looks on screen.
+    // Shadows come from rays on GPUs with DXR 1.1, otherwise from the shadow
+    // atlas: a tile per cube face, sized by how large the light looks on
+    // screen.
     cast_shadows: bool,
+    // The radius of the light's glowing ball: ray-traced shadows soften over
+    // it (zero: exact). Absent in older files: zero.
+    source_radius: f32,
 }
 
 // Where an orbiting point light is at its current orbit angle.
@@ -72,9 +76,18 @@ SpotLight :: struct {
     // Half-angles of the cone in radians: full brightness inside the inner
     // angle, fading to none at the outer one.
     inner_angle, outer_angle: f32,
-    // Shadows come from a tile of the shadow atlas, sized by how large the
-    // light looks on screen.
+    // Shadows come from rays on GPUs with DXR 1.1, otherwise from a tile of
+    // the shadow atlas, sized by how large the light looks on screen.
     cast_shadows: bool,
+    // As PointLight's: ray-traced shadows soften over a disc this wide.
+    source_radius: f32,
+}
+
+// Source radii stay below this (in world units).
+MAX_LIGHT_SOURCE_RADIUS :: f32(10)
+
+light_source_radius_valid :: proc(radius: f32) -> bool {
+    return radius >= 0 && radius <= MAX_LIGHT_SOURCE_RADIUS
 }
 
 // The cone half-angle limit, just under 90 degrees.
@@ -95,7 +108,8 @@ spot_light_direction :: proc(world: alg.Matrix4f32) -> alg.Vector3f32 {
 spot_light_valid :: proc(light: SpotLight) -> bool {
     return light.intensity >= 0 && light.range > 0 && light.range < 1e6 &&
            light.inner_angle >= 0 && light.inner_angle <= light.outer_angle &&
-           light.outer_angle > 0 && light.outer_angle <= SPOT_MAX_ANGLE
+           light.outer_angle > 0 && light.outer_angle <= SPOT_MAX_ANGLE &&
+           light_source_radius_valid(light.source_radius)
 }
 
 // Reflections captured from the entity's position, used inside its box: the

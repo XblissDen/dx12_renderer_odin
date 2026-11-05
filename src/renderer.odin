@@ -90,8 +90,13 @@ GpuLight :: struct {
     shadow_index: i32,
     // World size of one shadow-map texel per unit of distance along the axis.
     shadow_texel_scale: f32,
-    _pad: [2]f32,
+    // Ray-traced shadows: the light's source radius, and GPU_LIGHT_* flags.
+    source_radius: f32,
+    flags: u32,
 }
+// The light casts shadows (ray-traced ones; atlas shadows follow shadow_index).
+GPU_LIGHT_CASTS_SHADOW :: u32(0x1)
+#assert(size_of(GpuLight) == 64)
 
 GpuMesh :: struct {
     vertex_buffer: ^d3d12.IResource,
@@ -230,6 +235,10 @@ FrameConstants :: struct #align(256) {
     // whether last frame's AO can be averaged in.
     ao_ray_count: u32,
     ao_history_valid: u32,
+    // Point and spot light shadow rays per pixel (zero: the shadow atlas),
+    // and nonzero to spread them over the lights' source radii.
+    ray_light_count: u32,
+    ray_light_soft: u32,
 }
 
 #assert(SHADOW_CASCADE_COUNT == 4) // Packed as float4 rows in scene.hlsl.
