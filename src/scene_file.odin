@@ -717,6 +717,7 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
     g_renderer.previous_model_frame = {}
     g_renderer.taa_history_valid = false
     g_renderer.ssr_history_valid = false
+    g_renderer.reflection_history_valid = false
     g_renderer.ao_history_valid = false
     g_renderer.fog_history_ready = false
 

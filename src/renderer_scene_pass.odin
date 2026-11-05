@@ -108,8 +108,8 @@ renderer_render_scene_pass :: proc(draws: []Draw, batches, late_batches, transpa
     renderer_bind_srv(.Prefiltered, r.prefilter_srv_index)
     // Blurred ambient occlusion (ignored by the shader while disabled).
     renderer_bind_srv(.Texture_T8, renderer_ao_srv())
-    // Screen-space reflections (likewise ignored while off).
-    renderer_bind_srv(.Reflections, r.ssr_srv_index)
+    // Reflections, denoised or not (likewise ignored while off).
+    renderer_bind_srv(.Reflections, renderer_reflection_srv())
 
     r.command_list->RSSetViewports(1, &r.viewport)
     r.command_list->RSSetScissorRects(1, &r.scissor_rect)
@@ -225,11 +225,12 @@ renderer_render_post_process :: proc(scene: ^Scene) {
     renderer_bind_cbv(.Post_Constants, renderer_post_cb_address())
     renderer_bind_buffer_srv(.Exposure_Buffer, r.exposure_buffer->GetGPUVirtualAddress())
     r.command_list->SetPipelineState(r.post_pipeline_state)
-    // "Show reflections only" tone maps this frame's raw SSR output instead
-    // (before TAA, so stochastic rays show their noise). It must not replace
-    // the scene color, which next frame's SSR reflects.
+    // "Show reflections only" tone maps the reflections the lit pass used
+    // instead: denoised, or this frame's raw ones (before TAA, so stochastic
+    // rays show their noise). It must not replace the scene color, which next
+    // frame's SSR reflects.
     show_reflections := r.ssr_show && renderer_reflections_active()
-    renderer_bind_srv(.Texture_T0, r.ssr_srv_index if show_reflections else r.scene_color_srv_index)
+    renderer_bind_srv(.Texture_T0, renderer_reflection_srv() if show_reflections else r.scene_color_srv_index)
     renderer_bind_srv(.Texture_T1, r.bloom_srv_start)
 
     r.command_list->RSSetViewports(1, &r.viewport)

@@ -53,6 +53,7 @@ frame never overwrites them while an earlier one still reads them.
 | Light clusters | Compute pass listing the lights that reach each view cluster | [Lighting](lighting.md#clustered-lighting) |
 | Dynamic GI | Dynamic irradiance volumes (DXR 1.1): clears probes that start over, traces a batch of probes' rays, blends them into the probes' maps and moves probes out of geometry | [Lighting](lighting.md#dynamic-volumes) |
 | Reflections | Ray-traced reflections (DXR 1.1), or SSR: reflections traced through depth, read from last frame's image. After the light clusters, which ray hits use | [Lighting](lighting.md#ray-traced-reflections), [SSR](lighting.md#screen-space-reflections-ssr) |
+| Reflection denoise | The reflections filtered in space, then averaged with their history at the same surface; the lit pass reads the result | [Lighting](lighting.md#reflection-denoiser) |
 | Volumetric fog | Compute passes lighting the fog's cells and integrating them front to back | [Lighting](lighting.md#volumetric-fog) |
 | Scene | Sky, then lit opaque surfaces, then blended surfaces (accumulated, then composited), then the fog, into the HDR target | [Lighting](lighting.md) |
 | TAA | Blends the frame into the reprojected history, in HDR | [Post-processing](post_processing.md#taa) |
@@ -409,7 +410,7 @@ assigns registers:
 | Dynamic volumes | t0–t2, space 2 | The dynamic volumes' irradiance, distance and probe atlases |
 | Textures | t22 onwards | The whole SRV heap, the bindless texture array |
 | Exposure buffer | t16 | Root SRV, the automatic exposure |
-| Reflections | t17 | Ray-traced or SSR reflections |
+| Reflections | t17 | Ray-traced or SSR reflections (denoised, for the lit pass) |
 | Lights, Cluster lights | t18, t19 | Root SRVs, the light buffer and cluster lists |
 | Objects, Instance draws | t20, t21 | Root SRVs, this frame's object data and the instance lists the cull pass wrote |
 

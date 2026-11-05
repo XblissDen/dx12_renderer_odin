@@ -761,11 +761,13 @@ where it can find it (`src/renderer_ssr.odin`, `TraceReflection` in
    probes') specular light with the SSR color by the confidence, before the
    usual BRDF and specular occlusion.
 
-With TAA, each pixel's ray is drawn from the GGX lobe with noise that changes
-every frame, and TAA's history averages them into blurred reflections on rough
-surfaces. Without TAA, rays are mirror reflections. **Show reflections only**
-displays this frame's raw SSR output at tone mapping, before TAA, so the
-noise shows; it does not replace the image SSR reads next frame. Blended
+With the [reflection denoiser](#reflection-denoiser) or TAA, each pixel's ray
+is drawn from the GGX lobe with noise that changes every frame, and the
+denoiser (or TAA's history) averages them into blurred reflections on rough
+surfaces. With neither, rays are mirror reflections. **Show reflections
+only** displays the reflections the lit pass uses at tone mapping (denoised,
+or this frame's raw ones, before TAA, so their noise shows); it does not
+replace the image SSR reads next frame. Blended
 surfaces get no SSR, and nothing off screen or hidden behind a foreground
 object can be reflected.
 
@@ -781,8 +783,8 @@ as SSR, and the lit pass blends it in the same way.
 1. **The ray**: a full-screen pass after the light clusters reads each
    pixel's depth and the prepass's normal and roughness. It turns them into a
    world position and normal, and reflects the view ray about the normal. With
-   TAA, the direction is drawn from the GGX lobe, as for SSR, so rough
-   surfaces blur over frames. Pixels at or above **Reflection max roughness**
+   the denoiser or TAA, the direction is drawn from the GGX lobe, as for SSR,
+   so rough surfaces blur over frames. Pixels at or above **Reflection max roughness**
    (SSR's setting, default 0.6) are skipped and keep the probes' and
    environment's specular.
 2. **Tracing**: an inline ray query over every draw finds the closest hit.
@@ -816,3 +818,53 @@ reflections only** shows them as it does SSR. In Sponza with a high sun at
 rougher than 0.6 and is skipped. Outdoors, the glossy ground now reflects the
 sky and the objects wherever they are, where SSR left black gaps (things off
 screen) for the environment to fill.
+
+## Reflection denoiser
+
+One ray per pixel, spread over a rough surface's GGX lobe, gives noisy
+reflections. TAA used to be the only thing averaging them, so without TAA
+rays fell back to mirror reflections (too sharp on rough surfaces), and when
+the camera moved fast TAA's history restarted and the noise showed. The
+denoiser (**Denoise reflections** in Renderer controls, on by default) has
+its own spatial filter and history, after either SSR or ray-traced
+reflections (`renderer_denoise_reflections` in `src/renderer_ssr.odin`, the
+**Reflection denoise** row in the GPU timings). The tracing passes also
+write each ray's hit distance (to a second target).
+
+1. **Spatial filter** (`PSReflectionFilter` in `scene.hlsl`): each pixel
+   averages 12 neighbours on a spiral that a per-pixel noise turns every
+   frame. The radius follows the reflection's real blur: a rough surface
+   spreads what it reflects over about α (GGX's, roughness²) radians at the
+   reflected thing, which the camera sees as α × hit distance ÷ (hit
+   distance + view depth). Reflections stay sharp where an object stands on
+   the reflecting floor and blur more for distant things and the sky, as
+   they do in reality. The radius is at most 24 pixels, and half as large
+   once the pixel's history holds 8 frames. Neighbours count by how alike
+   their surface is: on the same plane (within 2% of the depth), facing the
+   same way (more strictly on smooth surfaces), with similar roughness.
+   Pixels without reflections (the sky, surfaces past the max roughness) are
+   skipped. The hit distance comes from the history, where it is averaged
+   over frames, since a single ray's is as noisy as its color.
+2. **History** (`PSReflectionAccumulate`): the filtered result is averaged
+   with last frame's history at the same surface, found through the motion
+   vectors (bilinear) and trusted only where the depth matches (within 5%,
+   as for ray-traced AO). Smooth surfaces average up to 4 frames, rising to
+   32 at roughness 0.35, since a glossy reflection moves with the view, not
+   with the surface. Before blending, the history is clipped to this
+   frame's 3 × 3 neighbourhood (its mean ± 1 to 2 standard deviations,
+   wider on rougher surfaces), so a reflection that moved is dropped instead
+   of leaving a trail. Where there is no history (just uncovered, after a
+   camera cut or a scene load), the pixel starts again from its filtered
+   value, which the filter then blurs at full width.
+3. **The lit pass** reads the history in place of the raw reflections, and
+   **Show reflections only** shows it.
+
+**Results**: with FXAA, a floor of roughness 0.3 used to reflect the cubes
+as sharply as a mirror, with sparkles; it now shows smooth, contact-hardening
+reflections, as clean as with TAA. With the camera circling at about 5 m/s,
+the floor stays clean and trail-free. Fast-spinning glossy objects keep a
+little grain without TAA, since their own reflections change every frame and
+the clip drops most of their history. **Cost** at 1920 × 1080: 0.20 ms in
+Sponza, where most surfaces are too rough to reflect, and 0.37 ms with a
+glossy floor filling the view. The targets (hit distance, filtered result,
+two histories and two metas) take about 87 MB at that size.

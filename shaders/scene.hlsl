@@ -211,6 +211,8 @@ cbuffer FrameConstants : register(b4)
     // and nonzero to spread them over the lights' source radii.
     uint  ray_light_count;
     uint  ray_light_soft;
+    // The reflection denoiser can reproject last frame's history.
+    uint  reflection_history_valid;
 };
 
 // The visible point and spot lights (light_count of them), and each light
@@ -1901,10 +1903,21 @@ float SceneViewDepth(float2 uv, float2 size)
     return ViewDepthFromDevice(g_depth.Load(int3(pixel, 0)));
 }
 
+// What the reflection passes write: the color (premultiplied by confidence)
+// and confidence, and how far the ray went, for the denoiser
+// (REFLECTION_MISS_DISTANCE when it hit nothing).
+struct ReflectionOutput
+{
+    float4 color : SV_Target0;
+    float  hit_distance : SV_Target1;
+};
+#define REFLECTION_MISS_DISTANCE 1000.0f
+
 // Color (premultiplied) and confidence of the reflection at `pixel`; zero where the ray
 // leaves the screen or passes behind nothing. Single exit: see CascadeVisibility.
-float4 TraceReflection(int2 pixel, float2 size, float3 N, float surface_roughness)
+float4 TraceReflection(int2 pixel, float2 size, float3 N, float surface_roughness, out float hit_distance)
 {
+    hit_distance = REFLECTION_MISS_DISTANCE;
     float3 P = ViewPositionAt(pixel, size);
     float3 V = normalize(P); // From the camera to the surface.
 
@@ -1992,6 +2005,7 @@ float4 TraceReflection(int2 pixel, float2 size, float3 N, float surface_roughnes
 
         float2 hit_uv = lerp(start_uv, end_uv, high);
         int2 hit_pixel = clamp(int2(hit_uv * size), int2(0, 0), int2(size) - 1);
+        hit_distance = length(ViewPositionAt(hit_pixel, size) - P);
         // Where that surface was last frame, in the image being read.
         float2 previous_uv = hit_uv - g_velocity.Load(int3(hit_pixel, 0));
         float3 hit_normal = g_surface.Load(int3(hit_pixel, 0)).xyz;
@@ -2011,7 +2025,7 @@ float4 TraceReflection(int2 pixel, float2 size, float3 N, float surface_roughnes
     return result;
 }
 
-float4 PSSsr(FullscreenInput input) : SV_TARGET
+ReflectionOutput PSSsr(FullscreenInput input)
 {
     uint width, height;
     g_depth.GetDimensions(width, height);
@@ -2019,11 +2033,187 @@ float4 PSSsr(FullscreenInput input) : SV_TARGET
 
     // The prepass clears the sky to roughness 1, so this skips it too.
     float4 surface = g_surface.Load(int3(pixel, 0));
-    float4 result = 0.0f;
+    ReflectionOutput result;
+    result.color = 0.0f;
+    result.hit_distance = REFLECTION_MISS_DISTANCE;
     [branch]
     if (surface.w < ssr_max_roughness)
     {
-        result = TraceReflection(pixel, float2(width, height), normalize(surface.xyz), surface.w);
+        result.color = TraceReflection(pixel, float2(width, height), normalize(surface.xyz), surface.w, result.hit_distance);
+    }
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// Reflection denoiser (renderer_ssr.odin). One ray per pixel, spread over the
+// GGX lobe, leaves rough reflections noisy. PSReflectionFilter averages each
+// pixel with neighbours on the same surface, over the area its lobe blurs
+// the reflection across; PSReflectionAccumulate then averages that over
+// frames at the same surface. Neither needs TAA.
+//
+// Inputs besides the surface buffer, depth and motion vectors: the rays' hit
+// distances, last frame's history and its meta (view depth, frames
+// averaged, averaged hit distance), and g_reflections: the traced
+// reflections for the filter, the filtered ones for the history.
+Texture2D<float> g_reflection_hit : register(t2);
+Texture2D<float4> g_reflection_history : register(t0);
+Texture2D<float4> g_reflection_meta : register(t1);
+
+#define REFLECTION_FILTER_TAPS 12u
+#define REFLECTION_FILTER_MAX_RADIUS 24.0f
+// The filter's radius in pixels per radian of the reflection's blur.
+#define REFLECTION_FILTER_SCALE 1.0f
+// The most frames the history averages: few on mirror-like surfaces, whose
+// reflections move with the view rather than with the surface, many on rough
+// ones, whose blur hides that.
+#define REFLECTION_HISTORY_MIN_FRAMES 4.0f
+#define REFLECTION_HISTORY_MAX_FRAMES 32.0f
+
+struct ReflectionHistoryOutput
+{
+    float4 color : SV_Target0; // As g_reflections.
+    float4 meta : SV_Target1;  // View depth, frames averaged, hit distance.
+};
+
+// Last frame's meta for the surface at this pixel, found through the motion
+// vectors: kept only if the depth stored there is the depth this point had
+// last frame (within 5%), as for ray-traced AO. Frames (y) are 0 without one.
+// Also where the surface was, in last frame's UVs.
+float4 ReflectionPreviousMeta(int2 pixel, float2 size, float3 view_pos, out float2 previous_uv)
+{
+    previous_uv = (float2(pixel) + 0.5f) / size - g_velocity.Load(int3(pixel, 0));
+    float4 meta = 0.0f;
+    [branch]
+    if (reflection_history_valid != 0u && all(previous_uv >= 0.0f) && all(previous_uv <= 1.0f))
+    {
+        float4 previous = g_reflection_meta.Load(int3(int2(previous_uv * size), 0));
+        float3 P = view_position + mul((float3x3)view, view_pos);
+        float previous_depth = mul(float4(P, 1.0f), previous_view_projection).w;
+        if (previous.y > 0.0f && abs(previous.x - previous_depth) < 0.05f * previous_depth) meta = previous;
+    }
+    return meta;
+}
+
+float ReflectionMaxFrames(float roughness)
+{
+    return lerp(REFLECTION_HISTORY_MIN_FRAMES, REFLECTION_HISTORY_MAX_FRAMES, saturate(roughness / 0.35f));
+}
+
+// The spatial filter. A rough surface's reflection of something at distance
+// `hit` blurs over about alpha (GGX's) radians at it, which the camera sees
+// as alpha * hit / (hit + view depth) radians: sharp where the reflection
+// touches what it reflects, widest for distant things. The filter covers
+// that, at most REFLECTION_FILTER_MAX_RADIUS pixels, and half as far once
+// the history holds 8 frames. Taps lie on a spiral turned by per-pixel noise
+// that changes every frame, so the history averages them. Each counts by how
+// alike its surface is: on the same plane (within 2% of the depth), facing
+// the same way (sharper for smooth surfaces), with similar roughness.
+float4 PSReflectionFilter(FullscreenInput input) : SV_TARGET
+{
+    uint width, height;
+    g_depth.GetDimensions(width, height);
+    float2 size = float2(width, height);
+    int2 pixel = int2(input.position.xy);
+    float4 result = g_reflections.Load(int3(pixel, 0));
+    float4 surface = g_surface.Load(int3(pixel, 0));
+    [branch]
+    if (surface.w < ssr_max_roughness)
+    {
+        float roughness = surface.w;
+        float3 N = normalize(surface.xyz);
+        float3 view_pos = ViewPositionAt(pixel, size);
+        float2 previous_uv;
+        float4 meta = ReflectionPreviousMeta(pixel, size, view_pos, previous_uv);
+        // The history's hit distance where there is one: a single ray's is
+        // as noisy as its color.
+        float hit = meta.y > 0.0f ? meta.z : g_reflection_hit.Load(int3(pixel, 0));
+        float alpha = roughness * roughness;
+        float pixels_per_radian = size.y * 0.5f * projection[1][1];
+        float radius = REFLECTION_FILTER_SCALE * alpha * hit / (hit + view_pos.z) * pixels_per_radian;
+        radius = min(radius, REFLECTION_FILTER_MAX_RADIUS) * lerp(1.0f, 0.5f, saturate(meta.y / 8.0f));
+        [branch]
+        if (radius >= 1.0f)
+        {
+            float turn = InterleavedGradientNoise(float2(pixel) + float(ssr_frame % 64u) * 5.588238f) * 2.0f * PI;
+            float normal_power = lerp(64.0f, 8.0f, saturate(roughness * 2.0f));
+            float4 sum = result;
+            float weight_sum = 1.0f;
+            [unroll]
+            for (uint i = 0u; i < REFLECTION_FILTER_TAPS; ++i)
+            {
+                float distance = radius * sqrt((float(i) + 0.5f) / float(REFLECTION_FILTER_TAPS));
+                float angle = float(i) * 2.39996323f + turn;
+                int2 q = pixel + int2(round(float2(cos(angle), sin(angle)) * distance));
+                float4 q_surface = g_surface.Load(int3(clamp(q, int2(0, 0), int2(size) - 1), 0));
+                float3 q_pos = ViewPositionAt(clamp(q, int2(0, 0), int2(size) - 1), size);
+                float plane = abs(dot(q_pos - view_pos, N)) / view_pos.z;
+                float weight = saturate(1.0f - plane * 50.0f) *
+                    pow(saturate(dot(normalize(q_surface.xyz), N)), normal_power) *
+                    saturate(1.0f - abs(q_surface.w - roughness) / (0.05f + 0.25f * roughness));
+                // Off screen, or a pixel without reflections (the sky, or too rough).
+                if (any(q < 0) || any(q >= int2(size)) || q_surface.w >= ssr_max_roughness) weight = 0.0f;
+                sum += g_reflections.Load(int3(clamp(q, int2(0, 0), int2(size) - 1), 0)) * weight;
+                weight_sum += weight;
+            }
+            result = sum / weight_sum;
+        }
+    }
+    return result;
+}
+
+// The history: this frame's filtered reflections averaged with last frame's
+// history at the same surface (bilinear, at its position through the motion
+// vectors), over up to ReflectionMaxFrames frames. Glossy reflections move
+// with the view, not the surface, so the history is first clipped to the
+// spread (mean +- 1 to 2 standard deviations, wider on rougher surfaces) of
+// this frame's 3x3 neighbourhood: what moved away is dropped instead of
+// smearing. Where there is no history (just uncovered, or after a cut) it
+// starts from this frame's filtered value, which the filter then blurs wider.
+ReflectionHistoryOutput PSReflectionAccumulate(FullscreenInput input)
+{
+    uint width, height;
+    g_depth.GetDimensions(width, height);
+    float2 size = float2(width, height);
+    int2 pixel = int2(input.position.xy);
+    ReflectionHistoryOutput result;
+    result.color = g_reflections.Load(int3(pixel, 0));
+    result.meta = 0.0f;
+    float4 surface = g_surface.Load(int3(pixel, 0));
+    [branch]
+    if (surface.w < ssr_max_roughness)
+    {
+        float roughness = surface.w;
+        float3 view_pos = ViewPositionAt(pixel, size);
+        float2 previous_uv;
+        float4 meta = ReflectionPreviousMeta(pixel, size, view_pos, previous_uv);
+        float hit = g_reflection_hit.Load(int3(pixel, 0));
+        float frames = 1.0f;
+        [branch]
+        if (meta.y > 0.0f)
+        {
+            float4 mean = 0.0f;
+            float4 square = 0.0f;
+            [unroll]
+            for (int y = -1; y <= 1; ++y)
+            {
+                [unroll]
+                for (int x = -1; x <= 1; ++x)
+                {
+                    float4 c = g_reflections.Load(int3(clamp(pixel + int2(x, y), int2(0, 0), int2(size) - 1), 0));
+                    mean += c;
+                    square += c * c;
+                }
+            }
+            mean /= 9.0f;
+            float4 deviation = sqrt(max(square / 9.0f - mean * mean, 0.0f));
+            float spread = lerp(1.0f, 2.0f, saturate(roughness / 0.35f));
+            float4 history = g_reflection_history.SampleLevel(g_clamp_sampler, previous_uv, 0);
+            history = clamp(history, mean - spread * deviation, mean + spread * deviation);
+            frames = min(meta.y + 1.0f, ReflectionMaxFrames(roughness));
+            result.color = lerp(history, result.color, 1.0f / frames);
+            hit = lerp(meta.z, hit, 1.0f / frames);
+        }
+        result.meta = float4(view_pos.z, frames, hit, 0.0f);
     }
     return result;
 }
@@ -2199,14 +2389,17 @@ float3 ShadeRayHit(RayDesc ray, uint instance, uint primitive, float2 barycentri
 // or the environment's prefiltered light where it leaves the scene.
 // Premultiplied by confidence, which only fades out rough surfaces (left to
 // the probes and environment), so off-screen and hidden surfaces reflect too.
-float4 PSRayReflections(FullscreenInput input) : SV_TARGET
+ReflectionOutput PSRayReflections(FullscreenInput input)
 {
     uint width, height;
     g_depth.GetDimensions(width, height);
     int2 pixel = int2(input.position.xy);
     float4 surface = g_surface.Load(int3(pixel, 0));
+    ReflectionOutput result;
+    result.color = 0.0f;
+    result.hit_distance = REFLECTION_MISS_DISTANCE;
     // The prepass clears the sky to roughness 1, so this skips it too.
-    if (surface.w >= ssr_max_roughness) return 0.0f;
+    if (surface.w >= ssr_max_roughness) return result;
     float roughness = surface.w;
 
     // The surface buffer is in view space; rays go in world space.
@@ -2254,6 +2447,7 @@ float4 PSRayReflections(FullscreenInput input) : SV_TARGET
     [branch]
     if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
     {
+        result.hit_distance = query.CommittedRayT();
         color = ShadeRayHit(
             ray, query.CommittedInstanceIndex(), query.CommittedPrimitiveIndex(),
             query.CommittedTriangleBarycentrics(), query.CommittedRayT(),
@@ -2280,7 +2474,8 @@ float4 PSRayReflections(FullscreenInput input) : SV_TARGET
         color *= min(1.0f, RAY_REFLECTION_ROUGH_MAX / max(luminance, 1e-4f));
     }
     float confidence = 1.0f - smoothstep(0.6f * ssr_max_roughness, ssr_max_roughness, roughness);
-    return float4(color * confidence, confidence);
+    result.color = float4(color * confidence, confidence);
+    return result;
 }
 
 // ---------------------------------------------------------------------------

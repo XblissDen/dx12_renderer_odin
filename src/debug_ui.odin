@@ -222,7 +222,7 @@ debug_ui_draw_profiler :: proc() {
     r := &g_renderer
     text_buffer: [256]u8
     // Along the right edge of the window, wherever that is.
-    ui_next_window(max(f32(r.width) - 436, 16), 16, 420, 520)
+    ui_next_window(max(f32(r.width) - 436, 16), 16, 420, 545)
     if ui_begin_panel("Profiler") {
         debug_ui_text(fmt.bprintf(text_buffer[:], "FPS: %.0f | Frame: %.2f ms", r.fps, r.frame_ms))
         ui_separator()
@@ -430,6 +430,8 @@ debug_ui_lighting_controls :: proc() {
             ui_checkbox("Show reflections only", &r.ssr_show)
         }
     }
+    // Rays or SSR, filtered in space and averaged over frames.
+    if renderer_ray_reflections_active() || r.ssr_enabled do ui_checkbox("Denoise reflections", &r.reflection_denoise)
 
     ui_separator()
     probes := &r.probes

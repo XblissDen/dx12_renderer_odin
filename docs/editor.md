@@ -41,7 +41,7 @@ so text stays sharp.
   pixel** on GPUs with DXR 1.1), ambient occlusion (ray-traced
   with **AO rays per pixel** on GPUs with DXR 1.1, otherwise GTAO),
   reflections (ray-traced on
-  GPUs with DXR 1.1, otherwise SSR), reflection probes,
+  GPUs with DXR 1.1, otherwise SSR, with **Denoise reflections**), reflection probes,
   irradiance volumes (dynamic or baked, with **Show diffuse ambient light
   only**), light
   clusters, fog, and the frustum, occlusion and meshlet culling switches. **Show ImGui demo** opens

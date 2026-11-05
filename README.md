@@ -15,7 +15,9 @@ written in Odin on DirectX 12, with a Dear ImGui interface.
   point and spot light, soft over the sun's disc and each light's source
   radius, with a per-pixel ray budget; on other GPUs, four cascaded shadow
   maps and a cached shadow atlas for up to 64 spot and point lights.
-- **Reflections**: ray-traced (DXR 1.1), or screen-space (SSR) on other GPUs.
+- **Reflections**: ray-traced (DXR 1.1), or screen-space (SSR) on other GPUs,
+  with a denoiser of their own (a spatial filter and a history), so rough
+  reflections are clean without TAA.
 - **Ambient occlusion and fog**: ray-traced ambient occlusion (or
   ground-truth AO, GTAO, on other GPUs), and volumetric fog with light
   shafts.

@@ -721,7 +721,8 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         ssr_thickness = r.ssr_thickness,
         ssr_max_roughness = r.ssr_max_roughness,
         ssr_enabled = u32(renderer_reflections_active()),
-        ssr_stochastic = u32(r.post_anti_aliasing == .TAA),
+        // TAA or the denoiser averages the noise of rays spread over the lobe.
+        ssr_stochastic = u32(r.post_anti_aliasing == .TAA || r.reflection_denoise),
         ssr_frame = u32(r.frame_counter),
         cluster_screen_size = {f32(r.width), f32(r.height)},
         cluster_depth_scale = cluster_depth_scale,
@@ -749,6 +750,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         ao_history_valid = u32(r.ao_history_valid),
         ray_light_count = ray_light_count,
         ray_light_soft = ray_light_soft,
+        reflection_history_valid = u32(r.reflection_history_valid),
     }
     r.frame_cb_mapped_data[r.frame_slot] = constants
     if capturing do renderer_write_probe_capture_constants(constants, sky^, camera_far_clip(camera))

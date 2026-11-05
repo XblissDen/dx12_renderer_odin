@@ -55,6 +55,7 @@ GPU_Pass :: enum u32{
     Probe_Capture,
     Ray_Structures,
     Dynamic_GI,
+    Reflection_Denoise,
 }
 
 // As the Profiler panel and GPU captures name the passes.
@@ -64,7 +65,7 @@ GPU_PASS_NAMES := [GPU_Pass]string{
     .Depth_Prepass = "Depth prepass", .GTAO = "AO + blur", .FXAA = "FXAA / sharpen", .TAA = "TAA resolve",
     .Auto_Exposure = "Auto exposure", .SSR = "Reflections", .Light_Clusters = "Light clusters", .Fog = "Volumetric fog",
     .Culling = "GPU culling", .Occlusion = "Occlusion culling", .Probe_Capture = "Probe capture",
-    .Ray_Structures = "Ray structures", .Dynamic_GI = "Dynamic GI",
+    .Ray_Structures = "Ray structures", .Dynamic_GI = "Dynamic GI", .Reflection_Denoise = "Reflection denoise",
 }
 
 Vertex :: struct {
@@ -239,6 +240,8 @@ FrameConstants :: struct #align(256) {
     // and nonzero to spread them over the lights' source radii.
     ray_light_count: u32,
     ray_light_soft: u32,
+    // The reflection denoiser can reproject last frame's history.
+    reflection_history_valid: u32,
 }
 
 #assert(SHADOW_CASCADE_COUNT == 4) // Packed as float4 rows in scene.hlsl.
@@ -568,6 +571,17 @@ Renderer :: struct {
     ray_reflection_pipeline_state: ^d3d12.IPipelineState,
     // Last frame's scene color holds an image of this size to reflect.
     ssr_history_valid: bool,
+    // The reflection denoiser (renderer_ssr.odin): whether it runs, its
+    // targets (REFLECTION_TARGET_*, with SRVs from reflection_srv_start),
+    // which history and meta target this frame writes, whether last frame's
+    // can be reprojected, and its two passes.
+    reflection_denoise: bool,
+    reflection_targets: [REFLECTION_TARGET_COUNT]^d3d12.IResource,
+    reflection_srv_start: u32,
+    reflection_current: int,
+    reflection_history_valid: bool,
+    reflection_filter_pipeline_state: ^d3d12.IPipelineState,
+    reflection_accumulate_pipeline_state: ^d3d12.IPipelineState,
 
     // Clustered lighting (renderer_lights.odin): per-frame-slot light buffers
     // (mapped), each cluster's light list, and the pass that builds them.
@@ -896,6 +910,7 @@ renderer_pipeline_slots :: proc() -> []^^d3d12.IPipelineState {
         &r.taa_resolve_pipeline_state, &r.sky_pipeline_state,
         &r.irradiance_pipeline_state, &r.prefilter_pipeline_state,
         &r.gtao_pipeline_state, &r.rtao_pipeline_state, &r.ao_accumulate_pipeline_state, &r.ao_blur_pipeline_state, &r.ssr_pipeline_state, &r.ray_reflection_pipeline_state,
+        &r.reflection_filter_pipeline_state, &r.reflection_accumulate_pipeline_state,
         &r.cluster_pipeline_state, &r.cull_pipeline_state, &r.cull_meshlet_pipeline_state, &r.hiz_pipeline_state,
         &r.fog_inject_pipeline_state, &r.fog_integrate_pipeline_state, &r.fog_apply_pipeline_state,
         &r.selection_pipeline_state, &r.selection_outline_pipeline_state,
@@ -1027,6 +1042,7 @@ renderer_init :: proc() {
     r.ssr_max_distance = DEFAULT_SSR_MAX_DISTANCE
     r.ssr_thickness = DEFAULT_SSR_THICKNESS
     r.ssr_max_roughness = DEFAULT_SSR_MAX_ROUGHNESS
+    r.reflection_denoise = true
 
     r.fog = renderer_default_fog_settings()
     r.probes.enabled = true
@@ -1662,9 +1678,20 @@ renderer_create_pipelines :: proc() {
         renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSRtao", .R8_UNORM, &r.rtao_pipeline_state)
         renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSAoAccumulate", AO_HISTORY_FORMAT, &r.ao_accumulate_pipeline_state)
     }
-    renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSSsr", SSR_FORMAT, &r.ssr_pipeline_state)
+    // Reflections write their color and confidence, and the hit distance
+    // the denoiser sizes its filter by; the denoiser's history pass writes
+    // the history and its meta (renderer_ssr.odin).
+    reflection := fullscreen
+    reflection.NumRenderTargets = 2
+    reflection.RTVFormats[1] = REFLECTION_HIT_FORMAT
+    accumulate := fullscreen
+    accumulate.NumRenderTargets = 2
+    accumulate.RTVFormats[1] = SSR_FORMAT
+    renderer_create_fullscreen_pso(reflection, "shaders/scene.hlsl", "PSSsr", SSR_FORMAT, &r.ssr_pipeline_state)
+    renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSReflectionFilter", SSR_FORMAT, &r.reflection_filter_pipeline_state)
+    renderer_create_fullscreen_pso(accumulate, "shaders/scene.hlsl", "PSReflectionAccumulate", SSR_FORMAT, &r.reflection_accumulate_pipeline_state)
     if r.ray_tracing.supported {
-        renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSRayReflections", SSR_FORMAT, &r.ray_reflection_pipeline_state)
+        renderer_create_fullscreen_pso(reflection, "shaders/scene.hlsl", "PSRayReflections", SSR_FORMAT, &r.ray_reflection_pipeline_state)
         renderer_create_fullscreen_pso(fullscreen, "shaders/scene.hlsl", "PSVolumeRays", .R32G32B32A32_FLOAT, &r.volumes.ray_pipeline_state)
     }
     // Fog over the lit image: fog.rgb + scene * fog.a, keeping the scene's alpha.
@@ -1976,6 +2003,7 @@ renderer_load_textures :: proc(){
     r.depth_srv_index = renderer_alloc_srv()
     r.surface_srv_index = renderer_alloc_srv()
     r.ssr_srv_index = renderer_alloc_srv()
+    r.reflection_srv_start = renderer_alloc_srv(REFLECTION_TARGET_COUNT)
     r.oit_srv_start = renderer_alloc_srv(len(r.oit_targets))
     // These slots stay valid before an HDRI is loaded or its IBL maps are baked.
     null_desc := d3d12.SHADER_RESOURCE_VIEW_DESC{
