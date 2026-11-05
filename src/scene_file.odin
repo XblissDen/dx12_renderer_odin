@@ -134,9 +134,10 @@ LegacySceneFile :: struct {
     },
 }
 
-// Loaded names are allocated here and stay alive with the active scene.
-g_scene_file_arena: mem.Dynamic_Arena
-g_scene_file_arena_active: bool
+// Loaded names are allocated here and stay alive with the active scene (nil
+// until needed). On the heap, so the allocators handed out keep pointing at
+// it when it passes from the loader to here.
+g_scene_file_arena: ^mem.Dynamic_Arena
 
 // The file the scene was opened from or last saved to; empty while the
 // startup scene has never been saved.
@@ -145,9 +146,10 @@ g_scene_path: string
 g_scene_saved: []u8
 
 scene_file_destroy :: proc(){
-    if g_scene_file_arena_active{
-        mem.dynamic_arena_destroy(&g_scene_file_arena)
-        g_scene_file_arena_active = false
+    if g_scene_file_arena != nil {
+        mem.dynamic_arena_destroy(g_scene_file_arena)
+        free(g_scene_file_arena)
+        g_scene_file_arena = nil
     }
     delete(g_scene_path)
     g_scene_path = ""
@@ -179,14 +181,14 @@ scene_file_name :: proc() -> string {
 }
 
 scene_store_owned_name :: proc(name: string) -> (result: string, ok: bool) {
-    if !g_scene_file_arena_active {
-        mem.dynamic_arena_init(&g_scene_file_arena)
-        g_scene_file_arena_active = true
+    if g_scene_file_arena == nil {
+        g_scene_file_arena = new(mem.Dynamic_Arena)
+        mem.dynamic_arena_init(g_scene_file_arena)
     }
 
     copied, error := strings.clone(
         name,
-        mem.dynamic_arena_allocator(&g_scene_file_arena),
+        mem.dynamic_arena_allocator(g_scene_file_arena),
     )
 
     return copied, error == nil
@@ -527,12 +529,13 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
     defer g_asset_read_legacy = false
 
     // Decode into separate storage before changing the active scene.
-    arena: mem.Dynamic_Arena
-    mem.dynamic_arena_init(&arena)
+    arena := new(mem.Dynamic_Arena)
+    mem.dynamic_arena_init(arena)
 
     commited := false
     defer if !commited{
-        mem.dynamic_arena_destroy(&arena)
+        mem.dynamic_arena_destroy(arena)
+        free(arena)
     }
 
     file: SceneFile
@@ -540,7 +543,7 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
         data,
         &file,
         spec = .JSON,
-        allocator = mem.dynamic_arena_allocator(&arena),
+        allocator = mem.dynamic_arena_allocator(arena),
     )
     if decode_error != nil{
         return false, "Could not decode scene or resolve an asset ID."
@@ -548,7 +551,7 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
 
     if header.version <= 5 {
         legacy_entities, legacy_ok := scene_file_legacy_entities(
-            data, header.version, mem.dynamic_arena_allocator(&arena),
+            data, header.version, mem.dynamic_arena_allocator(arena),
         )
         if !legacy_ok {
             return false, "Could not decode scene or resolve an asset ID."
@@ -705,7 +708,6 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
     g_renderer.environment_status = ""
     scene_file_destroy()
     g_scene_file_arena = arena
-    g_scene_file_arena_active = true
     g_scene = staged^
     // The entity slots now hold other entities, so none has a last-frame
     // model matrix to move from, and every history shows the old scene.

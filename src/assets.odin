@@ -118,7 +118,9 @@ AssetRegistry :: struct {
     arena: mem.Dynamic_Arena,
     active: bool,
     catalog_path, catalog_text: string,
-    import_arenas: [dynamic]mem.Dynamic_Arena,
+    // Each import's allocations. On the heap, so the allocators handed out
+    // keep pointing at them.
+    import_arenas: [dynamic]^mem.Dynamic_Arena,
     meshes: [dynamic]MeshAsset,
     textures: [dynamic]TextureAsset,
     environments: [dynamic]EnvironmentAsset,
@@ -224,26 +226,42 @@ assets_is_gltf_path :: proc(path: string) -> bool {
 // catalog (assets.json); nothing changes unless every step succeeds. Runs
 // between the UI frame and rendering (editor_process_asset_import), as it
 // waits for the GPU and replaces the renderer's mesh and texture arrays.
+// The message (an error, or a note on success) is in the caller's temporary
+// memory.
 assets_import :: proc(request: AssetImportRequest) -> (model: MeshHandle, texture: TextureHandle, message: string) {
-    if request.path == "" do return 0, 0, "Choose a source file."
+    // The import's temporary memory, freed when it returns. Messages are often
+    // formatted there, so they are copied out first.
+    scratch: mem.Dynamic_Arena
+    mem.dynamic_arena_init(&scratch)
+    defer mem.dynamic_arena_destroy(&scratch)
+    caller_temp := context.temp_allocator
+    context.temp_allocator = mem.dynamic_arena_allocator(&scratch)
     if request.model && assets_is_gltf_path(request.path) {
         model, message = assets_import_gltf(request)
-        return model, 0, message
+    } else {
+        model, texture, message = assets_import_file(request)
     }
+    if message != "" do message = strings.clone(message, caller_temp) or_else panic("Import message allocation failed")
+    return
+}
+
+// An OBJ model or a PNG/JPEG texture, for assets_import.
+assets_import_file :: proc(request: AssetImportRequest) -> (model: MeshHandle, texture: TextureHandle, message: string) {
+    if request.path == "" do return 0, 0, "Choose a source file."
     extension := os.ext(request.path)
     valid_extension := strings.equal_fold(extension, ".obj") if request.model else
         strings.equal_fold(extension, ".png") || strings.equal_fold(extension, ".jpg") || strings.equal_fold(extension, ".jpeg")
     if !valid_extension do return 0, 0, "Choose an OBJ/glTF model or a PNG/JPEG texture."
     if !request.model && g_renderer.srv_next >= SRV_HEAP_CAPACITY do return 0, 0, "The texture descriptor heap is full."
 
-    scratch, owner: mem.Dynamic_Arena
-    mem.dynamic_arena_init(&scratch)
-    defer mem.dynamic_arena_destroy(&scratch)
-    context.temp_allocator = mem.dynamic_arena_allocator(&scratch)
-    mem.dynamic_arena_init(&owner)
+    owner := new(mem.Dynamic_Arena)
+    mem.dynamic_arena_init(owner)
     committed := false
-    defer if !committed do mem.dynamic_arena_destroy(&owner)
-    allocator := mem.dynamic_arena_allocator(&owner)
+    defer if !committed {
+        mem.dynamic_arena_destroy(owner)
+        free(owner)
+    }
+    allocator := mem.dynamic_arena_allocator(owner)
     id, destination := assets_import_id(request.path, request.model, request.usage)
     if os.make_directory_all(os.dir(destination)) != nil do return 0, 0, "Cannot create the project import folder."
     defer if !committed do os.remove(destination)
@@ -358,16 +376,17 @@ assets_import :: proc(request: AssetImportRequest) -> (model: MeshHandle, textur
 // and registers the model plus one texture per (image, use) in a single
 // catalog write. The packed metallic-roughness texture becomes a roughness
 // texture (green channel) and a metallic texture (blue channel). Nothing is
-// added, and the folder is removed again, unless every step succeeds.
+// added, and the folder is removed again, unless every step succeeds. For
+// assets_import.
 assets_import_gltf :: proc(request: AssetImportRequest) -> (model: MeshHandle, message: string) {
-    scratch, owner: mem.Dynamic_Arena
-    mem.dynamic_arena_init(&scratch)
-    defer mem.dynamic_arena_destroy(&scratch)
-    context.temp_allocator = mem.dynamic_arena_allocator(&scratch)
-    mem.dynamic_arena_init(&owner)
+    owner := new(mem.Dynamic_Arena)
+    mem.dynamic_arena_init(owner)
     committed := false
-    defer if !committed do mem.dynamic_arena_destroy(&owner)
-    allocator := mem.dynamic_arena_allocator(&owner)
+    defer if !committed {
+        mem.dynamic_arena_destroy(owner)
+        free(owner)
+    }
+    allocator := mem.dynamic_arena_allocator(owner)
 
     id, _ := assets_import_id(request.path, true, .albedo)
     folder := fmt.tprintf("models/imported/%s", id)
@@ -570,7 +589,7 @@ assets_import_gltf :: proc(request: AssetImportRequest) -> (model: MeshHandle, m
     g_assets.catalog_text = saved_text
 
     if len(gltf.warnings) > 0 {
-        message = fmt.aprintf("Imported with %d note(s): %s", len(gltf.warnings), gltf.warnings[0], allocator = allocator)
+        message = fmt.tprintf("Imported with %d note(s): %s", len(gltf.warnings), gltf.warnings[0])
     }
     return
 }
@@ -777,7 +796,10 @@ assets_destroy :: proc() {
     delete(g_assets.texture_ids)
     delete(g_assets.environment_ids)
     if g_assets.active do mem.dynamic_arena_destroy(&g_assets.arena)
-    for &arena in g_assets.import_arenas do mem.dynamic_arena_destroy(&arena)
+    for arena in g_assets.import_arenas {
+        mem.dynamic_arena_destroy(arena)
+        free(arena)
+    }
     delete(g_assets.import_arenas)
     delete(g_assets.catalog_text)
     g_assets = {}
@@ -1015,12 +1037,12 @@ assets_json_init :: proc() {
 assets_marshal_mesh :: proc(w: io.Writer, value: any, options: ^json.Marshal_Options) -> json.Marshal_Error {
     h := value.(MeshHandle)
     if h != 0 && !assets_mesh_valid(h) do return json.Marshal_Data_Error.Unsupported_Type
-    return json.marshal_to_writer(w, assets_mesh_id(h), options)
+    return json.marshal_to_writer(w, assets_mesh_id(h), options^)
 }
 assets_marshal_texture :: proc(w: io.Writer, value: any, options: ^json.Marshal_Options) -> json.Marshal_Error {
     h := value.(TextureHandle)
     if h != 0 && !assets_texture_valid(h) do return json.Marshal_Data_Error.Unsupported_Type
-    return json.marshal_to_writer(w, assets_texture_id(h), options)
+    return json.marshal_to_writer(w, assets_texture_id(h), options^)
 }
 assets_legacy_mesh_id :: proc(id: string) -> string {
     switch id {case "Cube": return "cube"; case "Pyramid": return "pyramid"; case "Barrel": return "barrel"}
@@ -1064,7 +1086,7 @@ assets_unmarshal_texture :: proc(parser: ^json.Parser, value: any) -> json.Unmar
 assets_marshal_environment :: proc(w: io.Writer, value: any, options: ^json.Marshal_Options) -> json.Marshal_Error {
     h := value.(EnvironmentHandle)
     if h != 0 && !assets_environment_valid(h) do return json.Marshal_Data_Error.Unsupported_Type
-    return json.marshal_to_writer(w, assets_environment_id(h), options)
+    return json.marshal_to_writer(w, assets_environment_id(h), options^)
 }
 
 assets_unmarshal_environment :: proc(parser: ^json.Parser, value: any) -> json.Unmarshal_Error {

@@ -306,6 +306,9 @@ PostConstants :: struct #align(256) {
     // times last frame's. TAA uses it where nothing was drawn.
     sky_reprojection: alg.Matrix4f32,
 }
+// Where post_process.hlsl's cbuffer has it (Odin before dev-2026-11 aligned
+// matrices to 32 bytes and put it at 64).
+#assert(offset_of(PostConstants, sky_reprojection) == 48)
 
 SkyConstants :: struct #align(256) {
     forward: [3]f32,

@@ -44,7 +44,7 @@ How each of these works is explained in **[docs/](docs/README.md)**.
 
 Requirements:
 
-- Odin on `PATH`.
+- Odin dev-2026-11 or later on `PATH`.
 - Visual Studio or Build Tools with **Desktop development with C++** and a
   Windows SDK.
 - A GPU and driver supporting shader model 6.6 (DirectX 12; most GPUs from

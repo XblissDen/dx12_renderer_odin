@@ -156,7 +156,6 @@ editor_process_asset_import :: proc() {
         material = material,
     })
     // A successful glTF import can still carry a note (e.g. skipped primitives).
-    // Copied: import errors are formatted in memory the import frees.
     if model != 0 {
         g_editor_model_to_add = model
         editor_import_status("Model imported. Use Add Model in the Scene panel.%s%s", "\n" if error != "" else "", error)

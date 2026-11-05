@@ -166,7 +166,7 @@ window_file_dialog :: proc(filter: win32.wstring, save: bool, start: string, out
     dialog := win32.OPENFILENAMEW{
         lStructSize = u32(size_of(win32.OPENFILENAMEW)),
         hwndOwner = g_hwnd,
-        lpstrFile = win32.wstring(raw_data(path[:])),
+        lpstrFile = raw_data(path[:]),
         nMaxFile = u32(len(path)),
         lpstrFilter = filter,
         lpstrInitialDir = win32.utf8_to_wstring(folder),

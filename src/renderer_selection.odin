@@ -16,9 +16,8 @@ SelectionConstants :: struct {
     camera_position: [3]f32, // Debug lines only.
 }
 
-// Odin aligns matrices to 32 bytes, so the struct (and the root constants)
-// end with 16 bytes past the shader's 80.
-#assert(size_of(SelectionConstants) == 96)
+// The shader's 80 bytes, which are also the root constants.
+#assert(size_of(SelectionConstants) == 80)
 SELECTION_ROOT_VALUE_COUNT :: u32(size_of(SelectionConstants) / size_of(f32))
 SELECTION_MASK_FORMAT :: dxgi.FORMAT.R16_UINT
 
