@@ -247,6 +247,9 @@ editor_draw_scene :: proc(scene: ^Scene){
         if ui_button("Add Point Light") do editor_add_point_light(scene)
         ui_same_line()
         if ui_button("Add Spot Light") do editor_add_spot_light(scene)
+        if ui_button("Add Rect Light") do editor_add_area_light(scene, .Rectangle)
+        ui_same_line()
+        if ui_button("Add Disc Light") do editor_add_area_light(scene, .Disc)
         ui_end_disabled()
         if scene_local_light_count(scene) >= MAX_LIGHTS {
             ui_same_line()
@@ -568,6 +571,11 @@ editor_light_shadow_controls :: proc(scene: ^Scene, index: int, point: bool) {
         return
     }
     debug_ui_text("(The source radius softens ray-traced shadows only.)")
+    editor_shadow_status(index, point)
+}
+
+// Whether a shadow-casting light has tiles in the shadow atlas, and their size.
+editor_shadow_status :: proc(index: int, point: bool) {
     text_buffer: [96]u8
     light := renderer_shadow_light_of(index, point)
     switch {
@@ -595,6 +603,27 @@ editor_draw_spot_light_controls :: proc(scene: ^Scene, index: int) {
     }
     debug_ui_text("Aim it with Rotation or the rotate gizmo (E):")
     debug_ui_text("it shines along the marker's base (local -Y).")
+}
+
+editor_draw_area_light_controls :: proc(scene: ^Scene, index: int) {
+    ui_separator()
+    debug_ui_text("Rect light" if scene.area_lights[index].shape == .Rectangle else "Disc light")
+
+    editor_color(scene, index, .Area_Color, "Light color")
+    editor_slider(scene, index, .Area_Intensity, "Intensity", 0.0, 50.0)
+    editor_drag_number(scene, index, .Area_Range, "Range", 0.05, 0.1, 1000.0)
+    editor_checkbox(scene, index, .Area_Two_Sided, "Two-sided")
+    editor_checkbox(scene, index, .Area_Cast_Shadows, "Cast shadows")
+    if scene.area_lights[index].cast_shadows {
+        if renderer_ray_light_shadows_active() {
+            debug_ui_text("Shadow: ray traced, soft over the light's shape")
+        } else {
+            // The atlas treats it as a point light at its center.
+            editor_shadow_status(index, point = true)
+        }
+    }
+    debug_ui_text("Scale x and z set its size; it shines along")
+    debug_ui_text("local -Y (Rotation or the rotate gizmo aims it).")
 }
 
 editor_draw_reflection_probe_controls :: proc(scene: ^Scene, index: int) {
@@ -776,6 +805,10 @@ editor_draw_inspector :: proc(scene: ^Scene) {
                 editor_draw_spot_light_controls(scene, index)
             }
 
+            if scene.has_area_light[index] {
+                editor_draw_area_light_controls(scene, index)
+            }
+
             if scene.has_reflection_probe[index] {
                 editor_draw_reflection_probe_controls(scene, index)
             }
@@ -789,7 +822,7 @@ editor_draw_inspector :: proc(scene: ^Scene) {
             }
 
             // A light's marker material follows the light; it is not edited.
-            if scene.has_material[index] && !scene.has_point_light[index] && !scene.has_spot_light[index] {
+            if scene.has_material[index] && !scene_has_local_light(scene, index) {
                 editor_draw_material_controls(scene, index)
             }
 

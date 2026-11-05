@@ -44,6 +44,12 @@ EditorField :: enum {
     Spot_Cast_Shadows,
     Spot_Source_Radius,
 
+    Area_Color,
+    Area_Intensity,
+    Area_Range,
+    Area_Two_Sided,
+    Area_Cast_Shadows,
+
     Probe_Blend_Distance,
     Probe_Box_Projection,
 
@@ -103,6 +109,7 @@ EditorEntitySnapshot :: struct {
     material_slots: MaterialSlots,
     point_light: Maybe(PointLight),
     spot_light: Maybe(SpotLight),
+    area_light: Maybe(AreaLight),
     reflection_probe: Maybe(ReflectionProbe),
     irradiance_volume: Maybe(IrradianceVolume),
     // Restored as a link even while the parent is not alive yet: undoing a
@@ -216,6 +223,9 @@ editor_field_exists :: proc(
              .Spot_Source_Radius:
             return scene.has_spot_light[index]
 
+        case .Area_Color, .Area_Intensity, .Area_Range, .Area_Two_Sided, .Area_Cast_Shadows:
+            return scene.has_area_light[index]
+
         case .Probe_Blend_Distance, .Probe_Box_Projection:
             return scene.has_reflection_probe[index]
 
@@ -317,6 +327,16 @@ editor_value :: proc(
             return editor_bool_value(scene.spot_lights[index].cast_shadows)
         case .Spot_Source_Radius:
             return {scene.spot_lights[index].source_radius, 0, 0}
+        case .Area_Color:
+            return scene.area_lights[index].color
+        case .Area_Intensity:
+            return {scene.area_lights[index].intensity, 0, 0}
+        case .Area_Range:
+            return {scene.area_lights[index].range, 0, 0}
+        case .Area_Two_Sided:
+            return editor_bool_value(scene.area_lights[index].two_sided)
+        case .Area_Cast_Shadows:
+            return editor_bool_value(scene.area_lights[index].cast_shadows)
         case .Probe_Blend_Distance:
             return {scene.reflection_probes[index].blend_distance, 0, 0}
         case .Probe_Box_Projection:
@@ -439,6 +459,16 @@ editor_apply_value :: proc(
             scene.spot_lights[index].cast_shadows = value[0] != 0
         case .Spot_Source_Radius:
             scene.spot_lights[index].source_radius = clamp(value[0], 0, MAX_LIGHT_SOURCE_RADIUS)
+        case .Area_Color:
+            scene.area_lights[index].color = value
+        case .Area_Intensity:
+            scene.area_lights[index].intensity = max(value[0], 0)
+        case .Area_Range:
+            scene.area_lights[index].range = max(value[0], 0.1)
+        case .Area_Two_Sided:
+            scene.area_lights[index].two_sided = value[0] != 0
+        case .Area_Cast_Shadows:
+            scene.area_lights[index].cast_shadows = value[0] != 0
         case .Probe_Blend_Distance:
             scene.reflection_probes[index].blend_distance = max(value[0], 0)
         case .Probe_Box_Projection:

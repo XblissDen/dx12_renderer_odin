@@ -55,7 +55,7 @@ README](../README.md) covers building and running.
 | `src/renderer_raytracing.odin` | DXR 1.1 support check, mesh BLASes, the frame's TLAS |
 | `src/renderer_ao.odin` | Depth prepass, GTAO, ray-traced AO and its history |
 | `src/renderer_ssr.odin` | Reflections: screen-space, or the ray-traced pass |
-| `src/renderer_lights.odin` | Clustered lighting |
+| `src/renderer_lights.odin` | Clustered lighting, the area lights' LTC table fit |
 | `src/renderer_fog.odin` | Volumetric fog |
 | `src/renderer_taa.odin` | TAA targets and resolve |
 | `src/renderer_post.odin` | HDR/LDR targets, bloom, auto exposure |

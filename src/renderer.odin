@@ -96,10 +96,19 @@ GpuLight :: struct {
     // Ray-traced shadows: the light's source radius, and GPU_LIGHT_* flags.
     source_radius: f32,
     flags: u32,
+    // Area lights: `direction` is half one edge (the shape's local X), and
+    // half_y half the other (local Z); area_shape is GPU_LIGHT_RECTANGLE or
+    // GPU_LIGHT_DISC (0 for point and spot lights).
+    half_y: [3]f32,
+    area_shape: u32,
 }
 // The light casts shadows (ray-traced ones; atlas shadows follow shadow_index).
 GPU_LIGHT_CASTS_SHADOW :: u32(0x1)
-#assert(size_of(GpuLight) == 64)
+// An area light that shines from both sides.
+GPU_LIGHT_TWO_SIDED :: u32(0x2)
+GPU_LIGHT_RECTANGLE :: u32(1)
+GPU_LIGHT_DISC :: u32(2)
+#assert(size_of(GpuLight) == 80)
 
 GpuMesh :: struct {
     vertex_buffer: ^d3d12.IResource,
@@ -244,6 +253,8 @@ FrameConstants :: struct #align(256) {
     ray_light_soft: u32,
     // The reflection denoiser can reproject last frame's history.
     reflection_history_valid: u32,
+    // Area lights' LTC tables in the bindless texture array (two in a row).
+    ltc_texture: u32,
 }
 
 #assert(SHADOW_CASCADE_COUNT == 4) // Packed as float4 rows in scene.hlsl.
@@ -649,6 +660,9 @@ Renderer :: struct {
     environment_sun_asset: EnvironmentHandle,
     // The physical sky (renderer_environment.odin).
     sky: Sky,
+    // Area lights' LTC tables (renderer_lights.odin): two consecutive SRVs.
+    ltc_textures: [2]^d3d12.IResource,
+    ltc_srv_start: u32,
     sky_pipeline_state: ^d3d12.IPipelineState,
 
     sky_constant_buffer: ^d3d12.IResource,
@@ -2054,6 +2068,7 @@ renderer_load_textures :: proc(){
             texture_data_destroy(&texture)
         }
     }
+    renderer_create_ltc_tables()
 }
 
 // Gathers every loaded mesh's meshlets into the meshlet buffer the cull pass
@@ -2411,6 +2426,7 @@ renderer_destroy :: proc(){
     renderer_release_probes()
     renderer_release_ray_tracing()
     renderer_release_sky()
+    for texture in r.ltc_textures do if texture != nil do texture->Release()
     r.ssr_rtv_heap->Release()
     r.selection_root_signature->Release()
     r.selection_mask->Release()

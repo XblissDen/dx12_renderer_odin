@@ -586,7 +586,10 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
                 opacity = opacity,
                 textures = texture_indices,
             }
-            renderer_write_ray_instance(data.draw_count, model, mesh, submesh_index, submesh.first_index, cutout, material.double_sided, draw.casts_shadow)
+            renderer_write_ray_instance(
+                data.draw_count, model, mesh, submesh_index, submesh.first_index, cutout, material.double_sided,
+                draw.casts_shadow, light_marker = scene.has_area_light[i],
+            )
             data.draw_count += 1
         }
     }
@@ -605,7 +608,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         if !scene.alive[i] || !scene.has_transform[i] {
             continue
         }
-        if !scene.has_point_light[i] && !scene.has_spot_light[i] {
+        if !scene_has_local_light(scene, i) {
             continue
         }
         r.scene_light_count += 1
@@ -623,6 +626,22 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
                 shadow_index = -1,
                 source_radius = point.source_radius,
                 flags = GPU_LIGHT_CASTS_SHADOW if point.cast_shadows else 0,
+            }
+        } else if scene.has_area_light[i] {
+            // Half its edges: the world matrix's X and Z axes (with the
+            // entity's scale), halved. Lit like a point light where nothing
+            // handles the shape (fog, ranking, clusters).
+            area := scene.area_lights[i]
+            light = GpuLight{
+                position = world_position,
+                range = area.range,
+                radiance = area.color * area.intensity,
+                spot_offset = 1,
+                direction = alg.Vector3f32{world[0, 0], world[1, 0], world[2, 0]} * 0.5,
+                half_y = alg.Vector3f32{world[0, 2], world[1, 2], world[2, 2]} * 0.5,
+                area_shape = GPU_LIGHT_RECTANGLE if area.shape == .Rectangle else GPU_LIGHT_DISC,
+                shadow_index = -1,
+                flags = (GPU_LIGHT_CASTS_SHADOW if area.cast_shadows else 0) | (GPU_LIGHT_TWO_SIDED if area.two_sided else 0),
             }
         } else {
             spot := scene.spot_lights[i]
@@ -643,7 +662,8 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
             }
         }
 
-        if atlas := renderer_shadow_light_of(i, scene.has_point_light[i]); atlas != nil && atlas.gpu_index >= 0 {
+        // Area lights hold atlas tiles as point lights at their center.
+        if atlas := renderer_shadow_light_of(i, !scene.has_spot_light[i]); atlas != nil && atlas.gpu_index >= 0 {
             light.shadow_index = i32(atlas.gpu_index)
             light.shadow_texel_scale = atlas.texel_scale
         }
@@ -758,6 +778,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
         ray_light_count = ray_light_count,
         ray_light_soft = ray_light_soft,
         reflection_history_valid = u32(r.reflection_history_valid),
+        ltc_texture = r.ltc_srv_start,
     }
     r.frame_cb_mapped_data[r.frame_slot] = constants
     if capturing do renderer_write_probe_capture_constants(constants, sky^, camera_far_clip(camera))

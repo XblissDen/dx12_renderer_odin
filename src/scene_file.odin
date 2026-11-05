@@ -14,7 +14,8 @@ SCENE_FILE_PATH :: "scene.json"
 // 12: spot light shadows. 13: point light shadows. 14: orbit centers.
 // 15: TAA sharpening. 16: parents. 17: reflection probes.
 // 18: irradiance volumes. 19: light source radii. 20: physical sky.
-SCENE_FILE_VERSION :: 20
+// 21: area lights.
+SCENE_FILE_VERSION :: 21
 
 ScenePostSettings :: struct{
     exposure: f32,
@@ -46,6 +47,8 @@ SceneFileEntity :: struct {
     point_light: Maybe(PointLight),
     // Version 11+.
     spot_light: Maybe(SpotLight),
+    // Version 21+.
+    area_light: Maybe(AreaLight),
     // Version 17+.
     reflection_probe: Maybe(ReflectionProbe),
     // Version 18+.
@@ -285,6 +288,16 @@ scene_file_validate :: proc(scene: ^Scene) -> string{
             light_count += 1
         }
 
+        if scene.has_area_light[i] {
+            if !scene.has_transform[i] {
+                return "Area light needs a Transform."
+            }
+            if !area_light_valid(scene.area_lights[i]) {
+                return "Invalid area light settings."
+            }
+            light_count += 1
+        }
+
         if scene.has_reflection_probe[i] {
             if !scene.has_transform[i] {
                 return "Reflection probe needs a Transform."
@@ -352,7 +365,7 @@ scene_file_validate :: proc(scene: ^Scene) -> string{
         return "Scene needs exactly one sun."
     }
     if light_count > MAX_LIGHTS{
-        return "Too many point and spot lights."
+        return "Too many point, spot and area lights."
     }
 
     return ""
@@ -451,6 +464,7 @@ scene_file_build :: proc(scene: ^Scene, entities: ^[dynamic]SceneFileEntity, com
         }
         if scene.has_point_light[i] do entity.point_light = scene.point_lights[i]
         if scene.has_spot_light[i] do entity.spot_light = scene.spot_lights[i]
+        if scene.has_area_light[i] do entity.area_light = scene.area_lights[i]
         if scene.has_reflection_probe[i] do entity.reflection_probe = scene.reflection_probes[i]
         if scene.has_irradiance_volume[i] do entity.irradiance_volume = scene.irradiance_volumes[i]
         if scene.has_directional_light[i] do entity.directional_light = scene.directional_lights[i]
@@ -599,6 +613,7 @@ scene_load_from_file :: proc(path: string) -> (ok: bool, message: string){
             if header.version <= 11 do light.cast_shadows = true
             scene_add_spot_light(staged, entity, light)
         }
+        if light, ok := source.area_light.?; ok do scene_add_area_light(staged, entity, light)
         if probe, ok := source.reflection_probe.?; ok do scene_add_reflection_probe(staged, entity, probe)
         if volume, ok := source.irradiance_volume.?; ok do scene_add_irradiance_volume(staged, entity, volume)
         if directional_light, ok := source.directional_light.?; ok do scene_add_directional_light(staged, entity, directional_light)

@@ -111,9 +111,62 @@ It casts the cascaded shadows described under [Shadows](#shadows).
 - **Markers**: each light has a small unlit marker mesh in its color (a cube
   for point lights, a pyramid for spot lights). Markers cast no shadows.
 
+## Area lights
+
+Rectangle and disc lights (**Add Rect Light**, **Add Disc Light** in the
+Scene panel) glow from a shape: the unit square, or the disc inside it, in the
+entity's local XZ plane, so **Scale** x and z set its size. They shine along
+local −Y, like spot lights, from one side unless **Two-sided**. Their marker is
+the shape itself (a quad or disc generated in code, `builtin.quad` and
+`builtin.disc`), in the light's color.
+
+- **Intensity** works as a point light's: on the light's axis, light falls off
+  as from a point light of that intensity, whatever the size. The radiance is
+  intensity ÷ area. The range fades the light out with the same window.
+- **Shading** integrates the BRDF over the shape, so highlights take its
+  shape: a long rectangle gives a long streak on a glossy floor, a disc a
+  round one, sharp on smooth surfaces and spreading as they get rougher. This
+  uses linearly transformed cosines (Heitz, Dupuy, Hill and Neubelt, 2016;
+  `EvaluateAreaLight` in `scene.hlsl`):
+  - for each roughness and view angle, a 3 × 3 matrix M turns a clamped
+    cosine into a lobe close to GGX's. Its inverse turns the light's shape
+    into cosine space, where the integral over a polygon is a sum over its
+    edges (the vector form factor);
+  - a disc is a 16-sided polygon;
+  - the horizon is handled as in Heitz's 2017 code: the polygon is replaced
+    by the sphere with the same vector form factor, whose integral clipped to
+    the horizon is exact (Frostbite's sphere-light formula);
+  - diffuse light is the same integral without the transform. Specular uses
+    the fitted lobe's magnitude (GGX's directional albedo) and its Fresnel
+    part: F0 × magnitude + (1 − F0) × Fresnel term.
+- **The table** (64 × 64, two RGBA float textures, reached through the
+  bindless texture array): fitted at startup by a port of Heitz's `fitLTC`
+  (`renderer_lights.odin`). For each entry, Nelder–Mead adjusts the lobe's
+  stretch and skew to minimize the cubed difference from GGX (with exact Smith
+  shadowing), sampled from both and weighted by multiple importance sampling.
+  Rows of one roughness run on worker threads. The fit takes about 6 seconds
+  on the first start and is cached in `cache/ltc_ggx.bin`; later starts read
+  it in a few milliseconds. Checked against GGX, the fitted lobes differ by
+  1–10% (relative L1) up to about 65° from the normal, and more at grazing
+  views, where LTC is known to be weakest.
+- **Shadows**: ray-traced light shadows aim each pixel's ray at a random
+  point of the shape (with TAA), so penumbrae widen with the light's size.
+  Without TAA they aim at the center. With the shadow atlas instead, an area
+  light casts a point light's six-face shadow from its center (hard).
+- **Reflections and GI**: reflection and dynamic GI probe rays skip area
+  lights' markers (an instance mask), since the shading already adds their
+  light. Otherwise a glossy surface would show the light twice. Their hits
+  are shaded with the same area-light integral.
+- **Approximations**: elsewhere an area light acts as a point light at its
+  center: in volumetric fog (which also lights behind a one-sided light), in
+  the light clusters (its range sphere), and in ranking shadow rays.
+- **Cost** at 1920 × 1080, with one light reaching the whole view (and its
+  shadow ray): the lit pass took 0.21 ms more for a rectangle and 0.34 ms for
+  a disc (0.37 → 0.57 and 0.71 ms).
+
 ## Clustered lighting
 
-A scene can have up to 1024 point and spot lights; a pixel shades only the
+A scene can have up to 1024 point, spot and area lights; a pixel shades only the
 few that can reach it (`src/renderer_lights.odin`).
 
 1. **Light buffer**: each frame, the CPU tests each light's range sphere

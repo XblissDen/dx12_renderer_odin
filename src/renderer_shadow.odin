@@ -136,10 +136,10 @@ renderer_shadow_light_views :: proc(scene: ^Scene, entity: int, point: bool, siz
     world := scene_world_matrix(scene, entity)
     position := alg.Vector3f32{world[0, 3], world[1, 3], world[2, 3]}
     if point {
-        light := scene.point_lights[entity]
+        range := scene_light_range(scene, entity)
         tan_half := f32(size) / f32(size - 2 * POINT_SHADOW_GUARD)
-        near := max(light.range * 0.001, 0.02)
-        views = cube_face_view_projections(position, near, light.range, 2 * math.atan(tan_half))
+        near := max(range * 0.001, 0.02)
+        views = cube_face_view_projections(position, near, range, 2 * math.atan(tan_half))
         return views, 2 * tan_half / f32(size)
     }
     light := scene.spot_lights[entity]
@@ -252,11 +252,13 @@ renderer_update_shadow_atlas :: proc(scene: ^Scene, data: ^FrameDraws, camera_po
     entity_count := scene.entity_count if renderer_shadow_atlas_used() else 0
     for i in 0..<entity_count {
         if !scene.alive[i] || !scene.has_transform[i] do continue
-        point := scene.has_point_light[i] && scene.point_lights[i].cast_shadows
+        // Area lights take a point light's six faces, from their center.
+        point := (scene.has_point_light[i] && scene.point_lights[i].cast_shadows) ||
+                 (scene.has_area_light[i] && scene.area_lights[i].cast_shadows)
         spot := scene.has_spot_light[i] && scene.spot_lights[i].cast_shadows
         if !point && !spot do continue
         position := scene_world_position(scene, i)
-        range := scene.point_lights[i].range if point else scene.spot_lights[i].range
+        range := scene_light_range(scene, i)
         bounds := WorldBounds{center = position, half_axes = {{range, 0, 0}, {0, range, 0}, {0, 0, range}}, valid = true}
         if r.frustum_culling_enabled && !frustum_intersects_bounds(camera_frustum, bounds) do continue
         distance := alg.length(position - camera_position)
@@ -326,7 +328,7 @@ renderer_update_shadow_atlas :: proc(scene: ^Scene, data: ^FrameDraws, camera_po
     changes := make([dynamic]Change, context.temp_allocator)
     for &light in r.shadow_lights[:r.shadow_light_count] {
         views, texel_scale := renderer_shadow_light_views(scene, light.entity, light.point, light.tiles[0].size)
-        range := scene.point_lights[light.entity].range if light.point else scene.spot_lights[light.entity].range
+        range := scene_light_range(scene, light.entity)
         caster_hash := renderer_shadow_caster_hash(data, scene_world_position(scene, light.entity), range)
         if light.drawn && light.view_projection == views && light.caster_hash == caster_hash do continue
         // Never drawn first; then bigger lights, and those waiting longer, so

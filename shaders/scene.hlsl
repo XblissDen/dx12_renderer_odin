@@ -48,9 +48,18 @@ struct GpuLight
     // Ray-traced shadows: the light's source radius, and GPU_LIGHT_* flags.
     float  source_radius;
     uint   flags;
+    // Area lights: `direction` is half one edge, half_y half the other;
+    // area_shape is GPU_LIGHT_RECTANGLE or GPU_LIGHT_DISC (0: point or spot).
+    // Elsewhere (fog, clusters, ray ranking) they count as point lights.
+    float3 half_y;
+    uint   area_shape;
 };
-// GpuLight.flags: the light casts (ray-traced) shadows.
+// GpuLight.flags: the light casts (ray-traced) shadows; an area light shines
+// from both sides.
 #define GPU_LIGHT_CASTS_SHADOW 0x1u
+#define GPU_LIGHT_TWO_SIDED 0x2u
+#define GPU_LIGHT_RECTANGLE 1u
+#define GPU_LIGHT_DISC 2u
 
 // Per-draw data (renderer.odin's ObjectData): one per submesh of each entity,
 // in g_objects. A draw call draws instances of one submesh; instance i is the
@@ -213,6 +222,9 @@ cbuffer FrameConstants : register(b4)
     uint  ray_light_soft;
     // The reflection denoiser can reproject last frame's history.
     uint  reflection_history_valid;
+    // Area lights' LTC tables in g_textures: the inverse matrices, then
+    // GGX's magnitude and Fresnel term.
+    uint  ltc_texture;
 };
 
 // The visible point and spot lights (light_count of them), and each light
@@ -692,6 +704,145 @@ float3 EvaluateDirectLight(
     return (diffuse + specular) * radiance * NdotL * step(0.00001f, NdotV);
 }
 
+// ---------------------------------------------------------------------------
+// Area lights, with linearly transformed cosines (Heitz et al. 2016; the
+// table is fitted in renderer_lights.odin). In a frame around the normal,
+// M^-1 (from the table, per roughness and view angle) turns GGX's lobe into a
+// clamped cosine, and the light's shape with it. The integral of a cosine
+// over a polygon has a closed form: its vector form factor, a sum over edges.
+// The horizon is handled as in Heitz's 2017 code: the shape is swapped for the
+// sphere with the same vector form factor, whose horizon-clipped integral is
+// exact (Lagarde and de Rousiers, "Moving Frostbite to PBR"). A disc is a
+// 16-sided polygon. Diffuse light is the same integral with no transform.
+#define LTC_SIZE 64.0f
+#define AREA_DISC_SIDES 16u
+
+// One edge's share of the vector form factor, for normalized vertices:
+// Heitz's fitted acos(x)/sqrt(1 - x^2), accurate to the horizon.
+float3 LtcEdge(float3 v1, float3 v2)
+{
+    float x = dot(v1, v2);
+    float y = abs(x);
+    float a = 0.8543985f + (0.4965155f + 0.0145206f * y) * y;
+    float b = 3.4175940f + (4.1616724f + y) * y;
+    float v = a / b;
+    float theta_sin_theta = x > 0.0f ? v : 0.5f * rsqrt(max(1.0f - x * x, 1.0e-7f)) - v;
+    return cross(v1, v2) * theta_sin_theta;
+}
+
+// The form factor, above the horizon (z > 0), of the sphere with this vector
+// form factor F: a cap of sin^2(half-angle) = |F| at elevation F.z / |F|.
+float LtcSphereFormFactor(float3 F)
+{
+    float length_f = length(F);
+    float result = 0.0f;
+    if (length_f > 1.0e-6f)
+    {
+        float cos_theta = clamp(F.z / length_f, -1.0f, 1.0f);
+        float sin_sigma_sq = min(length_f, 0.9999f);
+        if (cos_theta * cos_theta > sin_sigma_sq)
+        {
+            // Wholly above (or below) the horizon.
+            result = sin_sigma_sq * saturate(cos_theta);
+        }
+        else
+        {
+            float sin_theta = sqrt(1.0f - cos_theta * cos_theta);
+            float x = sqrt(1.0f / sin_sigma_sq - 1.0f);
+            float y = -x * (cos_theta / sin_theta);
+            float sin_theta_sqrt_y = sin_theta * sqrt(saturate(1.0f - y * y));
+            result = ((cos_theta * acos(clamp(y, -1.0f, 1.0f)) - x * sin_theta_sqrt_y) * sin_sigma_sq +
+                      atan(sin_theta_sqrt_y / x)) / PI;
+        }
+    }
+    return max(result, 0.0f);
+}
+
+// The integral, over the light's shape seen from P, of the clamped cosine
+// that `transform` (frame, then M^-1) turns it into: its form factor there.
+float LtcIntegrate(GpuLight light, float3 P, float3x3 transform)
+{
+    float3 center = light.position - P;
+    float3 F = 0.0f;
+    if (light.area_shape == GPU_LIGHT_RECTANGLE)
+    {
+        float3 corners[4] = {
+            center - light.direction - light.half_y, center + light.direction - light.half_y,
+            center + light.direction + light.half_y, center - light.direction + light.half_y,
+        };
+        float3 previous = normalize(mul(transform, corners[3]));
+        [unroll]
+        for (uint i = 0u; i < 4u; ++i)
+        {
+            float3 current = normalize(mul(transform, corners[i]));
+            F += LtcEdge(previous, current);
+            previous = current;
+        }
+    }
+    else
+    {
+        float3 previous = normalize(mul(transform, center + light.direction));
+        [unroll]
+        for (uint i = 1u; i <= AREA_DISC_SIDES; ++i)
+        {
+            float angle = float(i) * (2.0f * PI / float(AREA_DISC_SIDES));
+            float3 current = normalize(mul(transform, center + light.direction * cos(angle) + light.half_y * sin(angle)));
+            F += LtcEdge(previous, current);
+            previous = current;
+        }
+    }
+    F /= 2.0f * PI;
+    // The sum's sign follows the winding: point it toward the light.
+    if (dot(F, mul(transform, center)) < 0.0f) F = -F;
+    return LtcSphereFormFactor(F);
+}
+
+// An area light's light at P, toward V: its radiance (intensity over area)
+// times the diffuse form factor times the albedo, plus the specular one
+// times GGX's magnitude with Fresnel; nothing behind a one-sided light. The
+// range fades it out as for point lights. diffuse_only: probe rays.
+float3 EvaluateAreaLight(GpuLight light, float3 P, float3 N, float3 V, float3 albedo, float roughness, float metallic, bool diffuse_only)
+{
+    float3 result = 0.0f;
+    float3 normal = normalize(cross(light.direction, light.half_y));
+    float3 to_point = P - light.position;
+    float distance_ratio_squared = dot(to_point, to_point) / (light.range * light.range);
+    float window = saturate(1.0f - distance_ratio_squared * distance_ratio_squared);
+    [branch]
+    if (window > 0.0f && (dot(to_point, normal) > 0.0f || (light.flags & GPU_LIGHT_TWO_SIDED) != 0u))
+    {
+        float edge_x = length(light.direction);
+        float edge_y = length(light.half_y);
+        float area = (light.area_shape == GPU_LIGHT_DISC ? PI : 4.0f) * edge_x * edge_y;
+        float3 radiance = light.radiance / max(area, 1.0e-6f) * window * window;
+
+        // The frame: N, and the view direction's part across it.
+        float3 T1 = V - N * dot(V, N);
+        T1 = dot(T1, T1) > 1.0e-8f ? normalize(T1) : normalize(cross(N, abs(N.y) < 0.99f ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f)));
+        float3 T2 = cross(N, T1);
+        float3x3 frame = float3x3(T1, T2, N);
+
+        result = (1.0f - metallic) * albedo * LtcIntegrate(light, P, frame);
+        [branch]
+        if (!diffuse_only)
+        {
+            float n_dot_v = saturate(dot(N, V));
+            float2 uv = float2(roughness, sqrt(1.0f - n_dot_v)) * ((LTC_SIZE - 1.0f) / LTC_SIZE) + 0.5f / LTC_SIZE;
+            float4 t1 = g_textures[NonUniformResourceIndex(ltc_texture)].SampleLevel(g_clamp_sampler, uv, 0);
+            float4 t2 = g_textures[NonUniformResourceIndex(ltc_texture + 1u)].SampleLevel(g_clamp_sampler, uv, 0);
+            float3x3 inverse_m = float3x3(
+                t1.x, 0.0f, t1.z,
+                0.0f, 1.0f, 0.0f,
+                t1.y, 0.0f, t1.w
+            );
+            float3 F0 = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
+            result += LtcIntegrate(light, P, mul(inverse_m, frame)) * (F0 * t2.x + (1.0f - F0) * t2.y);
+        }
+        result *= radiance;
+    }
+    return result;
+}
+
 float2 EnvBRDFApprox(float NdotV, float material_roughness)
 {
     float4 c0 = float4(-1.0f, -0.0275f, -0.572f, 0.022f);
@@ -1062,6 +1213,8 @@ StructuredBuffer<GpuRayInstance> g_ray_instances : register(t15);
 // The whole SRV heap again, as raw buffers.
 ByteAddressBuffer g_mesh_buffers[] : register(t0, space1);
 #define RAY_MASK_SHADOW_CASTER 0x1u
+// Everything but area lights' markers (renderer_raytracing.odin).
+#define RAY_MASK_SCENE 0x3u
 // GpuRayInstance.flags: the surface is double-sided.
 #define RAY_INSTANCE_DOUBLE_SIDED 0x1u
 // The brightest a rough surface's ray-traced reflection may be (luminance).
@@ -1172,9 +1325,19 @@ float LightRayVisibility(GpuLight light, float3 world_pos, float3 geometric_norm
 {
     float3 origin = ShadowRayOrigin(world_pos, geometric_normal, view_distance);
     float3 target = light.position;
-    if (ray_light_soft != 0u && light.source_radius > 0.0f)
+    float2 noise = RayNoise(pixel + float2(float(slot) * 17.0f, float(slot) * 59.0f));
+    if (ray_light_soft != 0u && light.area_shape == GPU_LIGHT_RECTANGLE)
     {
-        float2 noise = RayNoise(pixel + float2(float(slot) * 17.0f, float(slot) * 59.0f));
+        // A random point of the rectangle, or of the disc (evenly over its area).
+        target += light.direction * (noise.x * 2.0f - 1.0f) + light.half_y * (noise.y * 2.0f - 1.0f);
+    }
+    else if (ray_light_soft != 0u && light.area_shape == GPU_LIGHT_DISC)
+    {
+        float angle = noise.y * 2.0f * PI;
+        target += (light.direction * cos(angle) + light.half_y * sin(angle)) * sqrt(noise.x);
+    }
+    else if (ray_light_soft != 0u && light.source_radius > 0.0f)
+    {
         target += RayDiscOffset(normalize(light.position - origin), light.source_radius, noise);
     }
     float3 to_target = target - origin;
@@ -1193,8 +1356,9 @@ float LightRayVisibility(GpuLight light, float3 world_pos, float3 geometric_norm
 // from it (by its geometric normal, as for the sun).
 float LightRayWeight(GpuLight light, float attenuation, float3 L, float3 geometric_normal)
 {
-    return dot(light.radiance, float3(0.2126f, 0.7152f, 0.0722f)) * attenuation *
-           saturate(dot(geometric_normal, L));
+    // An area light can light a surface facing away from its center.
+    float facing = light.area_shape != 0u ? 1.0f : saturate(dot(geometric_normal, L));
+    return dot(light.radiance, float3(0.2126f, 0.7152f, 0.0722f)) * attenuation * facing;
 }
 
 // The weight a shadow-casting light needs at this point to get a shadow ray
@@ -1474,13 +1638,19 @@ float4 ShadeSurface(PSInput input, bool is_front_face, bool transparent)
             light, attenuation, L, light_ray_threshold, input.world_pos, geometric_normal,
             input.position.xy, view_distance, i
         );
-        float3 radiance = light.radiance * attenuation * shadow;
-
-        result += EvaluateDirectLight(
-            N, V, L, albedo,
-            material_roughness, material_metallic,
-            radiance
-        );
+        [branch]
+        if (light.area_shape != 0u)
+        {
+            result += EvaluateAreaLight(light, input.world_pos, N, V, albedo, material_roughness, material_metallic, false) * shadow;
+        }
+        else
+        {
+            result += EvaluateDirectLight(
+                N, V, L, albedo,
+                material_roughness, material_metallic,
+                light.radiance * attenuation * shadow
+            );
+        }
     }
 
     if (shadow_show_cascades != 0u)
@@ -2375,7 +2545,15 @@ float3 ShadeRayHit(RayDesc ray, uint instance, uint primitive, float2 barycentri
         float attenuation = LightAttenuation(light, light.position - P, L);
         if (attenuation <= 0.0f) continue;
         float shadow = LocalLightShadow(light, attenuation, L, light_ray_threshold, P, geometric_normal, pixel, hit_distance, i);
-        result += RayHitDirectLight(diffuse_only, N, V, L, albedo, roughness, metallic, light.radiance * attenuation * shadow);
+        [branch]
+        if (light.area_shape != 0u)
+        {
+            result += EvaluateAreaLight(light, P, N, V, albedo, roughness, metallic, diffuse_only) * shadow;
+        }
+        else
+        {
+            result += RayHitDirectLight(diffuse_only, N, V, L, albedo, roughness, metallic, light.radiance * attenuation * shadow);
+        }
     }
 
     result += object.emissive * g_textures[NonUniformResourceIndex(object.emissive_texture)].SampleLevel(
@@ -2433,7 +2611,7 @@ ReflectionOutput PSRayReflections(FullscreenInput input)
     // The closest hit, among every draw; back faces are skipped as the
     // rasterizer skips them, except on double-sided instances.
     RayQuery<RAY_FLAG_CULL_BACK_FACING_TRIANGLES | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> query;
-    query.TraceRayInline(g_scene_bvh, RAY_FLAG_NONE, 0xFFu, ray);
+    query.TraceRayInline(g_scene_bvh, RAY_FLAG_NONE, RAY_MASK_SCENE, ray);
     while (query.Proceed())
     {
         if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
@@ -2503,7 +2681,7 @@ float4 PSVolumeRays(FullscreenInput input) : SV_TARGET
     ray.TMax = 1.0e4f;
     // Both sides: a back face tells the probe it is inside geometry.
     RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> query;
-    query.TraceRayInline(g_scene_bvh, RAY_FLAG_NONE, 0xFFu, ray);
+    query.TraceRayInline(g_scene_bvh, RAY_FLAG_NONE, RAY_MASK_SCENE, ray);
     while (query.Proceed())
     {
         if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&

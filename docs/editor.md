@@ -295,9 +295,10 @@ Every change made in the editor is a command in a history of up to 128 steps
 
 ## Lights
 
-**Add Point Light** and **Add Spot Light** place a white light three units in
-front of the camera, with its marker. See [Lighting](lighting.md) for how lights
-shade and cast shadows.
+**Add Point Light**, **Add Spot Light**, **Add Rect Light** and **Add Disc
+Light** place a white light three units in front of the camera, with its
+marker (a 1 × 0.5 rectangle or a disc 0.6 across, shining down, for area
+lights). See [Lighting](lighting.md) for how lights shade and cast shadows.
 
 - **Range**: how far a light reaches; its falloff reaches zero exactly there.
 - **Spot angles**: half-angles up to 89°; the inner angle stays within the
@@ -314,7 +315,11 @@ shade and cast shadows.
 - **Source radius** (shown with Cast shadows): the size of the light's
   glowing ball, over which ray-traced shadows soften (with TAA). 0, the
   default, gives exact shadows. It does nothing for atlas shadows.
-- A scene can have up to 1024 point and spot lights together. Adding,
+- **Area lights** ([Lighting](lighting.md#area-lights)): **Scale** x and z
+  set the shape's size, and Rotation aims it (it shines along local −Y).
+  **Two-sided** makes it shine from both faces. The shape is chosen when the
+  light is added. Their ray-traced shadows soften over the shape itself.
+- A scene can have up to 1024 point, spot and area lights together. Adding,
   duplicating, or undoing past that is refused with a note. The sun cannot be
   deleted.
 
@@ -426,7 +431,7 @@ of Sponza, so the panel can check four times a second.
   entity slots now hold other entities and the old images show the old scene.
 - **Parents** are saved as positions in the file's entity list, and loading
   rejects cycles ([Hierarchy](hierarchy.md#scene-files)).
-- **Versions**: the format is at version 20. Newer settings are optional
+- **Versions**: the format is at version 21. Newer settings are optional
   sections or fields, and a file without one gets a default. Where a feature
   changed how existing scenes look, the default keeps the old look: Reinhard
   tone mapping, FXAA, no sharpening, auto exposure off, no volumetric fog,

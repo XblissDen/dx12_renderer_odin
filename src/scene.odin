@@ -83,6 +83,35 @@ SpotLight :: struct {
     source_radius: f32,
 }
 
+AreaLightShape :: enum u32 {Rectangle, Disc}
+
+// Light from a glowing rectangle or disc: the unit square (-0.5 to 0.5) or
+// the disc inside it, in the entity's local XZ plane, under its world matrix,
+// so Scale x and z set its size (and its marker, a quad or disc, shows it).
+// It shines along local -Y, like a spot light, from one side unless
+// two-sided. Shading integrates the BRDF over the shape (scene.hlsl,
+// EvaluateAreaLight), so highlights take its shape.
+AreaLight :: struct {
+    shape: AreaLightShape,
+    color: [3]f32,
+    // As a point light's: on its axis, light falls off like a point light of
+    // this intensity, whatever its size (its radiance is this / its area).
+    intensity: f32,
+    range: f32,
+    two_sided: bool,
+    cast_shadows: bool,
+}
+
+area_light_valid :: proc(light: AreaLight) -> bool {
+    return (light.shape == .Rectangle || light.shape == .Disc) &&
+           light.intensity >= 0 && light.intensity < 1e6 && light.range > 0 && light.range < 1e6
+}
+
+// The model each shape's marker uses (built in, assets_register_builtin_meshes).
+area_light_marker :: proc(shape: AreaLightShape) -> string {
+    return "builtin.disc" if shape == .Disc else "builtin.quad"
+}
+
 // Source radii stay below this (in world units).
 MAX_LIGHT_SOURCE_RADIUS :: f32(10)
 
@@ -231,6 +260,9 @@ Scene :: struct{
     spot_lights: [MAX_ENTITIES]SpotLight,
     has_spot_light: [MAX_ENTITIES]bool,
 
+    area_lights: [MAX_ENTITIES]AreaLight,
+    has_area_light: [MAX_ENTITIES]bool,
+
     reflection_probes: [MAX_ENTITIES]ReflectionProbe,
     has_reflection_probe: [MAX_ENTITIES]bool,
 
@@ -372,6 +404,9 @@ scene_clear_entity_slot :: proc(scene: ^Scene, index: int) {
     scene.irradiance_volumes[index] = {}
     scene.has_irradiance_volume[index] = false
 
+    scene.area_lights[index] = {}
+    scene.has_area_light[index] = false
+
     scene.directional_lights[index] = {}
     scene.has_directional_light[index] = false
 
@@ -424,6 +459,12 @@ scene_add_spot_light :: proc(scene: ^Scene, entity: Entity, light: SpotLight) {
     scene.has_spot_light[index] = true
 }
 
+scene_add_area_light :: proc(scene: ^Scene, entity: Entity, light: AreaLight) {
+    index := int(entity)
+    scene.area_lights[index] = light
+    scene.has_area_light[index] = true
+}
+
 scene_add_reflection_probe :: proc(scene: ^Scene, entity: Entity, probe: ReflectionProbe) {
     index := int(entity)
     scene.reflection_probes[index] = probe
@@ -436,13 +477,24 @@ scene_add_irradiance_volume :: proc(scene: ^Scene, entity: Entity, volume: Irrad
     scene.has_irradiance_volume[index] = true
 }
 
-// Point and spot lights, which share the renderer's MAX_LIGHTS.
+// Point, spot and area lights, which share the renderer's MAX_LIGHTS.
 scene_local_light_count :: proc(scene: ^Scene) -> int {
     count := 0
     for i in 0..<scene.entity_count {
-        if scene.alive[i] && (scene.has_point_light[i] || scene.has_spot_light[i]) do count += 1
+        if scene.alive[i] && scene_has_local_light(scene, i) do count += 1
     }
     return count
+}
+
+scene_has_local_light :: proc(scene: ^Scene, index: int) -> bool {
+    return scene.has_point_light[index] || scene.has_spot_light[index] || scene.has_area_light[index]
+}
+
+// A point, spot or area light's range.
+scene_light_range :: proc(scene: ^Scene, index: int) -> f32 {
+    if scene.has_point_light[index] do return scene.point_lights[index].range
+    if scene.has_spot_light[index] do return scene.spot_lights[index].range
+    return scene.area_lights[index].range
 }
 
 scene_add_directional_light :: proc(
@@ -675,6 +727,9 @@ scene_update :: proc(scene: ^Scene, dt: f32){
 
         if scene.has_spot_light[i] && scene.has_material[i] {
             scene.materials[i].tint = scene.spot_lights[i].color
+        }
+        if scene.has_area_light[i] && scene.has_material[i] {
+            scene.materials[i].tint = scene.area_lights[i].color
         }
 
         if scene.has_transform[i] && scene.has_camera[i]{

@@ -224,7 +224,7 @@ editor_model_picker :: proc(label: cstring, selected: ^MeshHandle) -> bool {
     if ui_begin_combo(label, preview) {
         for i in 1..<len(g_assets.meshes) {
             // Parts are added with their model (as its node tree).
-            if g_assets.meshes[i].removed || g_assets.meshes[i].part_of != 0 do continue
+            if g_assets.meshes[i].removed || g_assets.meshes[i].part_of != 0 || g_assets.meshes[i].builtin do continue
             ui_push_id(i32(i))
             if ui_selectable(g_assets.meshes[i].label, selected^ == MeshHandle(i)) {
                 selected^ = MeshHandle(i)

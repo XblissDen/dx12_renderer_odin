@@ -8,6 +8,7 @@ import "base:runtime"
 import "core:encoding/json"
 import "core:fmt"
 import "core:io"
+import "core:math"
 import "core:mem"
 import "core:os"
 import "core:strings"
@@ -85,6 +86,9 @@ MeshAsset :: struct {
     // catalog file, and have ids "<model id>#<glTF mesh index>", plus "m"
     // for the mirrored version.
     part_of: MeshHandle,
+    // Generated in code (assets_register_builtin_meshes): never in the
+    // catalog file or the model lists.
+    builtin: bool,
 }
 
 ModelNode :: struct {
@@ -164,8 +168,8 @@ assets_prepare_catalog :: proc(
     textures := make([dynamic]TextureDesc, context.temp_allocator)
     environments := make([dynamic]EnvironmentDesc, context.temp_allocator)
     for asset in g_assets.meshes[1:] {
-        // Parts come back from their model's file.
-        if !asset.removed && asset.part_of == 0 do append(&models, asset.desc)
+        // Parts come back from their model's file; built-in meshes from code.
+        if !asset.removed && asset.part_of == 0 && !asset.builtin do append(&models, asset.desc)
     }
     for asset in g_assets.textures[1:] {
         if !asset.hidden && !asset.removed do append(&textures, asset.desc)
@@ -923,8 +927,44 @@ assets_init :: proc(path: string) -> (message: string) {
         g_assets.mesh_ids[desc.id] = handle
         assets_register_parts(handle, parts, nodes, allocator)
     }
+    assets_register_builtin_meshes()
     assets_json_init()
     return ""
+}
+
+// The area lights' markers: a unit quad and a disc of diameter 1, in the XZ
+// plane, facing -Y (the way the lights shine).
+assets_register_builtin_meshes :: proc() {
+    DISC_SEGMENTS :: 32
+    for id in ([]string{"builtin.quad", "builtin.disc"}) {
+        mesh: MeshData
+        vertices := make([dynamic]Vertex)
+        indices := make([dynamic]u32)
+        vertex :: proc(x, z: f32) -> Vertex {
+            return {position = {x, 0, z}, normal = {0, -1, 0}, texcoord = {x + 0.5, z + 0.5}, tangent = {1, 0, 0, 1}}
+        }
+        if id == "builtin.quad" {
+            append(&vertices, vertex(-0.5, -0.5), vertex(0.5, -0.5), vertex(0.5, 0.5), vertex(-0.5, 0.5))
+            append(&indices, 0, 1, 2, 0, 2, 3)
+        } else {
+            append(&vertices, vertex(0, 0))
+            for i in 0..<DISC_SEGMENTS {
+                angle := f32(i) / DISC_SEGMENTS * 2 * math.PI
+                append(&vertices, vertex(0.5 * math.cos(angle), 0.5 * math.sin(angle)))
+                append(&indices, 0, u32(1 + i), u32(1 + (i + 1) % DISC_SEGMENTS))
+            }
+        }
+        mesh.vertices, mesh.indices = vertices[:], indices[:]
+        mesh_single_submesh(&mesh)
+        desc := MeshDesc{id = id, name = "Area light quad" if id == "builtin.quad" else "Area light disc"}
+        material, slots, names, _ := assets_model_materials(desc, mesh)
+        handle := MeshHandle(len(g_assets.meshes))
+        append(&g_assets.meshes, MeshAsset{
+            desc = desc, label = assets_label(desc.name, desc.id), data = mesh, bounds = mesh_compute_bounds(mesh),
+            material = material, material_slots = slots, material_names = names, builtin = true,
+        })
+        g_assets.mesh_ids[id] = handle
+    }
 }
 
 // A texture asset's RGBA8 pixels, decoded from its file or generated (solid,

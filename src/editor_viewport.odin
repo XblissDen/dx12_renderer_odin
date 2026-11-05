@@ -115,8 +115,9 @@ editor_draw_icons :: proc(scene: ^Scene) {
         radius := ICON_RADIUS_PIXELS
         ui_draw_circle(center.x, center.y, radius + 2, gizmo_color(20, 20, 24, 170), 0)
 
-        if scene.has_point_light[index] || scene.has_spot_light[index] {
-            color_value := scene.point_lights[index].color if scene.has_point_light[index] else scene.spot_lights[index].color
+        if scene_has_local_light(scene, index) {
+            color_value := scene.point_lights[index].color if scene.has_point_light[index] else
+                           scene.spot_lights[index].color if scene.has_spot_light[index] else scene.area_lights[index].color
             color := editor_light_display_color(color_value, 255)
             ui_draw_circle(center.x, center.y, radius * 0.45, color, 0)
             if scene.has_spot_light[index] {
@@ -338,6 +339,15 @@ editor_debug_lines :: proc(scene: ^Scene) -> []DebugLineVertex {
                 editor_light_display_color(light.color, alpha),
                 editor_light_display_color(light.color, alpha / 2),
             )
+        }
+        if scene.has_area_light[i] {
+            // Its range, and a line along the way it shines.
+            light := scene.area_lights[i]
+            world := scene_world_matrix(scene, i)
+            center := alg.Vector3f32{world[0, 3], world[1, 3], world[2, 3]}
+            color := editor_light_display_color(light.color, alpha)
+            editor_lines_point_range(&lines, center, camera_position, light.range, color)
+            editor_line(&lines, center, center + spot_light_direction(world) * min(light.range, 1), color)
         }
     }
     return lines[:]

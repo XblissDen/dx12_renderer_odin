@@ -24,9 +24,12 @@ import "core:math"
 import alg "core:math/linalg"
 import d3d12 "vendor:directx/d3d12"
 
-// Instance masks: which draws a ray query considers.
+// Instance masks: which draws a ray query considers. Area lights' markers are
+// the lights' own shapes, whose light the shading already adds: reflection
+// and probe rays leave them out.
 RAY_MASK_SHADOW_CASTER :: 0x1
 RAY_MASK_OTHER :: 0x2
+RAY_MASK_LIGHT_MARKER :: 0x4
 
 // Acceleration structures start on 256-byte boundaries
 // (D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT).
@@ -331,7 +334,7 @@ renderer_execute_and_wait :: proc() {
 // rays test both sides (a shadow ray may meet a closed mesh's back faces
 // first); reflection rays cull back faces, as the rasterizer does, except on
 // double-sided surfaces.
-renderer_write_ray_instance :: proc(index: int, model: alg.Matrix4f32, mesh: MeshHandle, submesh: int, first_index: u32, cutout, double_sided, casts_shadow: bool) {
+renderer_write_ray_instance :: proc(index: int, model: alg.Matrix4f32, mesh: MeshHandle, submesh: int, first_index: u32, cutout, double_sided, casts_shadow: bool, light_marker := false) {
     r := &g_renderer
     rt := &r.ray_tracing
     if !rt.supported do return
@@ -342,7 +345,7 @@ renderer_write_ray_instance :: proc(index: int, model: alg.Matrix4f32, mesh: Mes
     }
     flags := d3d12.RAYTRACING_INSTANCE_FLAGS{.FORCE_NON_OPAQUE} if cutout else {.FORCE_OPAQUE}
     if double_sided do flags += {.TRIANGLE_CULL_DISABLE}
-    mask: u32 = RAY_MASK_SHADOW_CASTER if casts_shadow else RAY_MASK_OTHER
+    mask: u32 = RAY_MASK_SHADOW_CASTER if casts_shadow else RAY_MASK_LIGHT_MARKER if light_marker else RAY_MASK_OTHER
     slot := int(r.frame_slot) * MAX_DRAWS + index
     // The C struct's bit fields: ID (24 bits) and mask (8), then hit-group
     // offset (24) and flags (8). A null BLAS makes the instance inactive.

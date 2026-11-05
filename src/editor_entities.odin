@@ -27,19 +27,19 @@ editor_find_available_slot :: proc(scene: ^Scene) -> int {
     return -1
 }
 
-// Whether one more point or spot light fits (they share MAX_LIGHTS); if not,
-// says so in the Scene panel.
+// Whether one more point, spot or area light fits (they share MAX_LIGHTS);
+// if not, says so in the Scene panel.
 editor_light_fits :: proc(scene: ^Scene) -> bool {
     if scene_local_light_count(scene) < MAX_LIGHTS do return true
     // The status outlives this frame's temporary allocations.
-    @(static) message: [64]u8
-    g_editor_file_status = fmt.bprintf(message[:], "At most %d point and spot lights are supported.", MAX_LIGHTS)
+    @(static) message: [80]u8
+    g_editor_file_status = fmt.bprintf(message[:], "At most %d point, spot and area lights are supported.", MAX_LIGHTS)
     return false
 }
 
 editor_can_duplicate :: proc(scene: ^Scene, entity: Entity) -> bool {
     index := int(entity)
-    is_light := index >= 0 && (scene.has_point_light[index] || scene.has_spot_light[index])
+    is_light := index >= 0 && scene_has_local_light(scene, index)
     return editor_find_available_slot(scene) >= 0 &&
            editor_can_delete(scene, entity) &&
            (!is_light || scene_local_light_count(scene) < MAX_LIGHTS)
@@ -55,6 +55,7 @@ editor_entity_snapshot :: proc(scene: ^Scene, index: int) -> EditorEntitySnapsho
     if scene.has_mesh_renderer[index] do snapshot.mesh_renderer = scene.mesh_renderers[index]
     if scene.has_point_light[index] do snapshot.point_light = scene.point_lights[index]
     if scene.has_spot_light[index] do snapshot.spot_light = scene.spot_lights[index]
+    if scene.has_area_light[index] do snapshot.area_light = scene.area_lights[index]
     if scene.has_reflection_probe[index] do snapshot.reflection_probe = scene.reflection_probes[index]
     if scene.has_irradiance_volume[index] do snapshot.irradiance_volume = scene.irradiance_volumes[index]
     // The link itself, even to a parent deleted a moment ago in the same step.
@@ -71,6 +72,7 @@ editor_add_snapshot_components :: proc(scene: ^Scene, entity: Entity, snapshot: 
     }
     if light, ok := snapshot.point_light.?; ok do scene_add_point_light(scene, entity, light)
     if light, ok := snapshot.spot_light.?; ok do scene_add_spot_light(scene, entity, light)
+    if light, ok := snapshot.area_light.?; ok do scene_add_area_light(scene, entity, light)
     if probe, ok := snapshot.reflection_probe.?; ok do scene_add_reflection_probe(scene, entity, probe)
     if volume, ok := snapshot.irradiance_volume.?; ok do scene_add_irradiance_volume(scene, entity, volume)
     if parent, ok := snapshot.parent.?; ok do scene_set_parent(scene, int(entity), int(parent))
@@ -86,7 +88,7 @@ editor_restore_created_entity :: proc(
     if index < 0 || index >= MAX_ENTITIES {
         return false
     }
-    if (snapshot.point_light != nil || snapshot.spot_light != nil) && !editor_light_fits(scene) {
+    if (snapshot.point_light != nil || snapshot.spot_light != nil || snapshot.area_light != nil) && !editor_light_fits(scene) {
         return false
     }
 
@@ -327,9 +329,26 @@ editor_add_spot_light :: proc(scene: ^Scene) {
     })
 }
 
+// A white rectangle (1 x 0.5) or disc (0.6 across) light three units in
+// front of the camera, shining straight down. Scale x and z set its size.
+editor_add_area_light :: proc(scene: ^Scene, shape: AreaLightShape) {
+    intensity: f32 = 5
+    scale := [3]f32{1, 1, 0.5} if shape == .Rectangle else [3]f32{0.6, 1, 0.6}
+    editor_add_light(scene, area_light_marker(shape), "Rect light" if shape == .Rectangle else "Disc light", nil, nil, AreaLight{
+        shape = shape,
+        color = {1, 1, 1},
+        intensity = intensity,
+        range = light_default_range(intensity),
+        cast_shadows = true,
+    }, scale)
+}
+
 // Creates a light entity, with an unlit marker in the light's color, as one
-// undoable step.
-editor_add_light :: proc(scene: ^Scene, marker_id, name: string, point: Maybe(PointLight), spot: Maybe(SpotLight)) {
+// undoable step. Area lights' markers are their shape, at `scale`.
+editor_add_light :: proc(
+    scene: ^Scene, marker_id, name: string, point: Maybe(PointLight), spot: Maybe(SpotLight),
+    area: Maybe(AreaLight) = nil, scale := [3]f32{0.2, 0.2, 0.2},
+) {
     editor_finish_edit()
     marker := assets_mesh(marker_id)
     if !assets_mesh_valid(marker) {
@@ -344,7 +363,7 @@ editor_add_light :: proc(scene: ^Scene, marker_id, name: string, point: Maybe(Po
         return
     }
 
-    transform := Transform{scale = {0.2, 0.2, 0.2}}
+    transform := Transform{scale = scale}
     camera := camera_find_active(scene)
     if camera >= 0 {
         transform.position = scene.transforms[camera].position + camera_forward(&scene.cameras[camera]) * 3
@@ -358,6 +377,11 @@ editor_add_light :: proc(scene: ^Scene, marker_id, name: string, point: Maybe(Po
         uv_scale = 1,
     }
     if !assets_texture_valid(marker_material.texture) do marker_material.texture = g_assets.white
+    // An area light's marker is the glowing shape itself, seen from either side.
+    if area != nil {
+        marker_material.texture = g_assets.white
+        marker_material.double_sided = true
+    }
 
     editor_create_entity(scene, EditorEntitySnapshot{
         name = owned_name,
@@ -366,6 +390,7 @@ editor_add_light :: proc(scene: ^Scene, marker_id, name: string, point: Maybe(Po
         material = marker_material,
         point_light = point,
         spot_light = spot,
+        area_light = area,
     }, g_editor_selected)
 }
 
@@ -446,7 +471,7 @@ editor_restore_deleted_entity :: proc(
        scene.alive[index] {
         return false
     }
-    if (snapshot.point_light != nil || snapshot.spot_light != nil) && !editor_light_fits(scene) {
+    if (snapshot.point_light != nil || snapshot.spot_light != nil || snapshot.area_light != nil) && !editor_light_fits(scene) {
         return false
     }
 
