@@ -21,6 +21,36 @@ CullingStats :: struct {
     // The camera's opaque meshlets this frame (in its frustum or not), and
     // their triangles.
     scene_meshlets, scene_meshlet_triangles: int,
+    // Triangles in this frame's draws (in view or not), with their levels of
+    // detail and at full detail, and the draws at a lower level.
+    lod_triangles, full_triangles, lod_draws: int,
+}
+
+// The default for how much error a level of detail may show: a pixel.
+DEFAULT_LOD_ERROR_PIXELS :: f32(1)
+MAX_LOD_ERROR_PIXELS :: f32(8)
+// Draws tinted by their level with "Show LOD levels": full detail untinted,
+// then green, yellow, orange, red, magenta, blue.
+LOD_TINTS := [MAX_MESH_LODS][3]f32{{0.3, 1, 0.3}, {1, 1, 0.2}, {1, 0.6, 0.1}, {1, 0.2, 0.2}, {1, 0.3, 1}, {0.3, 0.5, 1}}
+
+// The coarsest level of a submesh whose error, at the draw's distance from
+// the camera, covers at most r.lod_error_pixels on screen; -1 for the full
+// version. Levels' errors grow with each level, so the first one too coarse
+// ends the search. `scale` is the draw's largest axis scale (errors are in
+// mesh units). Within the draw's bounds, the full version.
+renderer_select_lod :: proc(lods: []MeshLod, bounds: WorldBounds, camera: alg.Vector3f32, scale, pixels_per_radian: f32) -> int {
+    r := &g_renderer
+    if !r.lod_enabled || len(lods) == 0 || !bounds.valid do return -1
+    axes := bounds.half_axes
+    radius := math.sqrt(alg.dot(axes[0], axes[0]) + alg.dot(axes[1], axes[1]) + alg.dot(axes[2], axes[2]))
+    distance := alg.length(bounds.center - camera) - radius
+    if distance <= 0 do return -1
+    choice := -1
+    for lod, i in lods {
+        if lod.error * scale / distance * pixels_per_radian > r.lod_error_pixels do break
+        choice = i
+    }
+    return choice
 }
 
 // The cull pass's counters, at the start of the indirect call buffer: draws
@@ -404,6 +434,8 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
     proj := camera_projection(camera, f32(r.width) / f32(r.height))
     view_projection := view * proj
     camera_frustum := frustum_from_matrix(view_projection)
+    // For levels of detail: screen pixels per radian at the view's center.
+    pixels_per_radian := f32(r.height) * 0.5 / math.tan(CAMERA_FOV_Y * 0.5)
 
     // TAA renders each frame from a slightly different sub-pixel position, so
     // the history accumulates several samples per pixel. Culling and motion
@@ -530,23 +562,40 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
                 texture_indices[t] = r.textures[texture].srv_index
             }
 
+            // The level of detail its size on screen allows.
+            mesh_data := &g_assets.meshes[mesh].data
+            lods := mesh_data.lods[submesh.first_lod:][:submesh.lod_count]
+            draw_bounds := bounds_to_world(submesh.bounds, model)
+            level := renderer_select_lod(lods, draw_bounds, camera_position, max_scale, pixels_per_radian)
+            first_index, index_count := submesh.first_index, submesh.index_count
+            first_meshlet, meshlet_count := submesh.first_meshlet, submesh.meshlet_count
+            if level >= 0 {
+                first_index, index_count = lods[level].first_index, lods[level].index_count
+                first_meshlet, meshlet_count = lods[level].first_meshlet, lods[level].meshlet_count
+                r.culling_stats.lod_draws += 1
+            }
+            r.culling_stats.lod_triangles += int(index_count / 3)
+            r.culling_stats.full_triangles += int(submesh.index_count / 3)
+            tint := material.tint
+            if r.lod_show && level >= 0 do tint *= LOD_TINTS[level]
+
             draw^ = Draw{
                 mesh = mesh,
-                first_index = submesh.first_index,
-                index_count = submesh.index_count,
+                first_index = first_index,
+                index_count = index_count,
                 variant = Draw_Variant(int(cutout) + 2 * int(material.double_sided)),
                 blended = material.alpha_blend,
-                bounds = bounds_to_world(submesh.bounds, model),
+                bounds = draw_bounds,
                 // Unlit marker meshes do not cast shadows.
                 casts_shadow = !material.unlit,
                 alpha_texture = material.texture if cutout else 0,
                 alpha_cutoff = alpha_cutoff if cutout else 0,
             }
-            if r.meshlet_culling_enabled && submesh.meshlet_count > 0 && meshlet_flags + int(submesh.meshlet_count) <= MAX_MESHLET_FLAGS {
-                draw.first_meshlet = r.meshes[mesh].first_meshlet + submesh.first_meshlet
-                draw.meshlet_count = submesh.meshlet_count
+            if r.meshlet_culling_enabled && meshlet_count > 0 && meshlet_flags + int(meshlet_count) <= MAX_MESHLET_FLAGS {
+                draw.first_meshlet = r.meshes[mesh].first_meshlet + first_meshlet
+                draw.meshlet_count = meshlet_count
                 draw.meshlet_flag = u32(meshlet_flags)
-                meshlet_flags += int(submesh.meshlet_count)
+                meshlet_flags += int(meshlet_count)
             }
 
             if draw.casts_shadow {
@@ -571,7 +620,7 @@ renderer_prepare_frame :: proc(scene: ^Scene) -> ^FrameDraws {
                 previous_model = alg.transpose(previous_model),
                 // transpose(inverse_transpose(M)) is inverse(M).
                 normal_matrix = normal_matrix,
-                material_tint = material.tint,
+                material_tint = tint,
                 uv_scale = material.uv_scale,
                 roughness = material.roughness,
                 metallic = material.metallic,

@@ -45,11 +45,13 @@ so text stays sharp.
   GPUs with DXR 1.1, otherwise SSR, with **Denoise reflections**), reflection probes,
   irradiance volumes (dynamic or baked, with **Show diffuse ambient light
   only**), light
-  clusters, fog, and the frustum, occlusion and meshlet culling switches. **Show ImGui demo** opens
+  clusters, fog, the frustum, occlusion and meshlet culling switches, and
+  **Levels of detail** (with **LOD error (pixels)** and **Show LOD levels**). **Show ImGui demo** opens
   ImGui's own demo window.
 - **Profiler**: frame rate and frame time, the camera's and shadow views'
   draws and calls after culling (with how many were occluded), the camera's
-  meshlets and triangles drawn out of those its large meshes hold, the shadow
+  meshlets and triangles drawn out of those its large meshes hold, the
+  triangles drawn with levels of detail against full detail, the shadow
   atlas (lights holding tiles, how full it is, light views drawn this frame;
   unused while rays shadow the lights and fog is off),
   the point and spot lights in view, a warning when a frame had more draws than fit, and

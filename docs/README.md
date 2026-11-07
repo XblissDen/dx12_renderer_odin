@@ -63,7 +63,7 @@ README](../README.md) covers building and running.
 | `src/renderer_probes.odin` | Reflection probes and irradiance volumes: slots, captures, prefiltering, cell scheduling, dynamic probe updates |
 | `src/renderer_selection.odin` | Selection outline and debug lines |
 | `src/texture_mips.odin`, `src/texture_cache.odin` | Mip chains; BC7/BC5/BC4/BC6H compression and the texture cache |
-| `src/assets.odin`, `src/gltf.odin`, `src/mesh.odin` | Asset catalog, glTF and OBJ loading, meshlet building |
+| `src/assets.odin`, `src/gltf.odin`, `src/mesh.odin` | Asset catalog, glTF and OBJ loading, meshlet building, mesh simplification for levels of detail |
 | `src/scene.odin`, `src/scene_file.odin` | Entities, components and parents; saving and loading scenes |
 | `src/camera.odin`, `src/frustum.odin` | Fly camera; frustum culling |
 | `src/editor*.odin`, `src/debug_ui.odin` | Panels, picking, viewport icons and lines, gizmos, undo history |

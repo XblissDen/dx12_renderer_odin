@@ -423,6 +423,12 @@ Renderer :: struct {
     meshlet_buffer, meshlet_index_buffer, meshlet_flag_buffer: ^d3d12.IResource,
     meshlet_index_view: d3d12.INDEX_BUFFER_VIEW,
     meshlet_culling_enabled: bool,
+    // Levels of detail (mesh.odin, renderer_select_lod): whether draws use
+    // them, the most error a level may show on screen (pixels), and tinting
+    // draws by their level.
+    lod_enabled: bool,
+    lod_error_pixels: f32,
+    lod_show: bool,
     cull_root_signature: ^d3d12.IRootSignature,
     cull_pipeline_state, cull_meshlet_pipeline_state, hiz_pipeline_state: ^d3d12.IPipelineState,
     // ExecuteIndirect's layout of IndirectDraw.
@@ -1082,6 +1088,8 @@ renderer_init :: proc() {
     r.frustum_culling_enabled = true
     r.occlusion_culling_enabled = true
     r.meshlet_culling_enabled = true
+    r.lod_enabled = true
+    r.lod_error_pixels = DEFAULT_LOD_ERROR_PIXELS
 
     when ODIN_DEBUG {
         debug: ^d3d12.IDebug

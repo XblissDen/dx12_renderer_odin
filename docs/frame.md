@@ -301,6 +301,69 @@ each mesh is out of view or hidden.
 **Meshlet culling** in Renderer controls turns it off to compare, and the
 Profiler panel shows how many meshlets and triangles the camera drew.
 
+### Levels of detail
+
+Culling skips what is hidden or out of view, not what is merely far away: a
+distant model still draws every triangle, most of them smaller than a pixel.
+So each large submesh also gets simplified versions, its **levels of detail**,
+and every draw uses the coarsest one whose error is too small to see.
+
+**Building** (`mesh_build_lods` in `src/mesh.odin`), when meshes are loaded or
+imported, for every submesh of at least 256 triangles, before its meshlets:
+
+- **Simplifier**: edge collapses ordered by quadric error (Garland and
+  Heckbert), in the manner of meshoptimizer. Each collapse moves a vertex onto
+  a neighbour, so the levels reuse the mesh's vertices and add only index
+  ranges, appended to the index buffer, each with meshlets of its own.
+  Vertices at the same position (seams in UVs or normals) move together. The
+  kind of place a position is decides where it may go:
+  - **manifold** (inside the surface): anywhere;
+  - **border** (an open edge of the mesh, or the submesh's own edge, such as
+    a material boundary): only along that edge;
+  - **seam**: only along the seam, both sides together;
+  - **locked** (corners, non-manifold edges): never.
+
+  Borders and seams also add planes along their edges to their vertices'
+  quadrics, so they keep their shape. A collapse that would turn a triangle
+  over is skipped.
+- **Passes**: each pass takes every position's cheapest allowed collapse,
+  sorts them, and makes them in order. It skips any that touches a position
+  moved this pass or next to one (so every check still holds), and goes no
+  further than 1.5 times the error of the collapse that would meet its target
+  (meshoptimizer's limit). Without that limit, cheap collapses blocked this
+  pass were replaced by costly ones: the damaged helmet's first level strayed
+  0.28 units instead of 0.006.
+- **The chain**: each level halves the one before, until about 64 triangles,
+  6 levels, or a level that keeps more than 85% of the one before (borders
+  and seams leave little to remove). Each level records its **error**: how far
+  its surface may stray from the original, in mesh units (the largest
+  collapse's quadric distance).
+- **Cost**: submeshes are simplified at the same time on worker threads.
+  Loading takes about 0.4 s longer for Sponza (262K triangles), 0.35 s for the
+  flight helmet and 0.08 s for the damaged helmet. Nothing is cached yet, so
+  this is paid at every start.
+
+**Selection** (`renderer_select_lod`, per draw on the CPU): the coarsest level
+whose error, times the draw's largest scale, divided by its distance from the
+camera (to the nearest point of its bounding sphere), times the pixels per
+radian at the view's center, is at most **LOD error** pixels (default 1). The
+draw takes that level's index range and meshlets. Shadow views and probe
+faces draw the level the camera chose. Ray tracing (the BLASes and hits) and
+picking keep the full version.
+
+**Results**: in a field of 192 damaged helmets (2.97M triangles) stretching
+45 m from the camera, 186 draws use their first level and 1.53M triangles are
+drawn: the shadow pass 0.51 → 0.33 ms, the prepass 0.44 → 0.34 ms and the lit
+pass 0.99 → 0.93 ms, with no visible change. In Sponza nothing changes:
+its submeshes each span much of the building and the camera is inside their
+bounds, so they stay at full detail. Simplifying per meshlet (cluster LOD)
+would be needed for that.
+
+**Levels of detail** in Renderer controls turns them off to compare, with
+**LOD error (pixels)** and **Show LOD levels**, which tints draws by their
+level: green, yellow, orange, red, magenta, then blue (full detail is not
+tinted). The Profiler shows the triangles drawn against full detail.
+
 ### Bindless textures
 
 Shaders see the entire SRV heap as one array, `g_textures[]`, through one

@@ -194,6 +194,11 @@ debug_ui_update :: proc() {
         ui_checkbox("Frustum culling", &r.frustum_culling_enabled)
         ui_checkbox("Occlusion culling", &r.occlusion_culling_enabled)
         ui_checkbox("Meshlet culling", &r.meshlet_culling_enabled)
+        ui_checkbox("Levels of detail", &r.lod_enabled)
+        if r.lod_enabled {
+            ui_slider_float("LOD error (pixels)", &r.lod_error_pixels, 0.1, MAX_LOD_ERROR_PIXELS)
+            ui_checkbox("Show LOD levels", &r.lod_show)
+        }
         ui_checkbox("Show ImGui demo", &g_debug_ui_demo)
     }
     ui_end_panel()
@@ -222,7 +227,7 @@ debug_ui_draw_profiler :: proc() {
     r := &g_renderer
     text_buffer: [256]u8
     // Along the right edge of the window, wherever that is.
-    ui_next_window(max(f32(r.width) - 436, 16), 16, 420, 545)
+    ui_next_window(max(f32(r.width) - 436, 16), 16, 420, 565)
     if ui_begin_panel("Profiler") {
         debug_ui_text(fmt.bprintf(text_buffer[:], "FPS: %.0f | Frame: %.2f ms", r.fps, r.frame_ms))
         ui_separator()
@@ -259,6 +264,13 @@ debug_ui_draw_profiler :: proc() {
                 "Meshlets: %d of %d drawn, %d of %d triangles",
                 stats.gpu.scene_meshlets, stats.scene_meshlets,
                 stats.gpu.scene_meshlet_triangles, stats.scene_meshlet_triangles,
+            ))
+        }
+        if r.lod_enabled {
+            debug_ui_text(fmt.bprintf(
+                text_buffer[:],
+                "LOD: %d of %d triangles (%d draws simplified)",
+                stats.lod_triangles, stats.full_triangles, stats.lod_draws,
             ))
         }
         debug_ui_text(fmt.bprintf(
