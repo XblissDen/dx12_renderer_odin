@@ -2,6 +2,7 @@ package main
 
 import "base:runtime"
 import "core:fmt"
+import "core:hash"
 import "core:os"
 import "core:strconv"
 import "core:strings"
@@ -75,29 +76,25 @@ mesh_single_submesh :: proc(mesh: ^MeshData, allocator := context.allocator) {
 
 // Splits each large submesh into meshlets and reorders its index range so
 // each meshlet's triangles are contiguous; the draws over the whole range are
-// unchanged. A meshlet grows from a seed triangle by repeatedly taking the
+// unchanged. The levels of detail already have theirs (mesh_build_lods),
+// which stay first in the list. A meshlet grows from a seed triangle by repeatedly taking the
 // neighbouring triangle (sharing a vertex) that adds the fewest new vertices,
 // nearest the meshlet's centre on ties, until either limit is reached. That
 // keeps meshlets compact, so their bounds and normal cones are tight.
 mesh_build_meshlets :: proc(mesh: ^MeshData, allocator := context.allocator) {
     meshlets := make([dynamic]Meshlet, allocator)
-    vertex_count := len(mesh.vertices)
-    // Per vertex: the triangles using it (offsets into one list), and the
-    // meshlet it last joined.
-    scratch := Meshlet_Scratch{
-        tri_offsets = make([]u32, vertex_count + 1, context.temp_allocator),
-        vertex_mark = make([]i32, vertex_count, context.temp_allocator),
-        fill = make([]u32, vertex_count, context.temp_allocator),
-    }
+    append(&meshlets, ..mesh.meshlets)
+    delete(mesh.meshlets, allocator)
+    scratch := meshlet_scratch(len(mesh.vertices))
     for &submesh in mesh.submeshes {
-        submesh.first_meshlet, submesh.meshlet_count = mesh_build_range_meshlets(mesh, submesh.first_index, submesh.index_count, &meshlets, scratch)
-        for &lod in mesh.lods[submesh.first_lod:][:submesh.lod_count] {
-            lod.first_meshlet, lod.meshlet_count = mesh_build_range_meshlets(mesh, lod.first_index, lod.index_count, &meshlets, scratch)
-        }
+        range := mesh.indices[submesh.first_index:][:submesh.index_count]
+        submesh.first_meshlet, submesh.meshlet_count = mesh_build_range_meshlets(mesh.vertices, range, submesh.first_index, &meshlets, scratch)
     }
     mesh.meshlets = meshlets[:]
 }
 
+// Per vertex: the triangles using it (offsets into one list), and the meshlet
+// it last joined. In temporary memory.
 @(private="file")
 Meshlet_Scratch :: struct {
     tri_offsets: []u32,
@@ -105,19 +102,29 @@ Meshlet_Scratch :: struct {
     fill: []u32,
 }
 
+@(private="file")
+meshlet_scratch :: proc(vertex_count: int) -> Meshlet_Scratch {
+    return {
+        tri_offsets = make([]u32, vertex_count + 1, context.temp_allocator),
+        vertex_mark = make([]i32, vertex_count, context.temp_allocator),
+        fill = make([]u32, vertex_count, context.temp_allocator),
+    }
+}
+
 // One index range's meshlets (none below MESHLET_MIN_SUBMESH_TRIANGLES),
-// appended to `meshlets`, with the range reordered to match.
+// appended to `meshlets`, with the range reordered to match. The meshlets'
+// first indices count from `first_index`, where the range starts.
 @(private="file")
 mesh_build_range_meshlets :: proc(
-    mesh: ^MeshData, first_index, index_count: u32, meshlets: ^[dynamic]Meshlet, scratch: Meshlet_Scratch,
+    vertices: []Vertex, indices: []u32, first_index: u32, meshlets: ^[dynamic]Meshlet, scratch: Meshlet_Scratch,
 ) -> (first_meshlet, meshlet_count: u32) {
-    vertex_count := len(mesh.vertices)
+    vertex_count := len(vertices)
     tri_offsets, vertex_mark, fill := scratch.tri_offsets, scratch.vertex_mark, scratch.fill
     first_meshlet = u32(len(meshlets))
     {
-        triangle_count := int(index_count / 3)
+        triangle_count := len(indices) / 3
         if triangle_count < MESHLET_MIN_SUBMESH_TRIANGLES do return
-        range := mesh.indices[first_index:][:triangle_count * 3]
+        range := indices[:triangle_count * 3]
 
         slice.zero(tri_offsets)
         for index in range do tri_offsets[index + 1] += 1
@@ -166,7 +173,7 @@ mesh_build_range_meshlets :: proc(
                     for k in 0..<3 {
                         v := range[t * 3 + u32(k)]
                         if vertex_mark[v] != meshlet_id do new_vertices += 1
-                        center += mesh.vertices[v].position / 3
+                        center += vertices[v].position / 3
                     }
                     d := center - centroid
                     distance := d.x * d.x + d.y * d.y + d.z * d.z
@@ -187,13 +194,13 @@ mesh_build_range_meshlets :: proc(
                     if vertex_mark[v] == meshlet_id do continue
                     vertex_mark[v] = meshlet_id
                     vertices_in += 1
-                    centroid_sum += mesh.vertices[v].position
+                    centroid_sum += vertices[v].position
                     for neighbour in tri_list[tri_offsets[v]:tri_offsets[v + 1]] {
                         if !used[neighbour] do append(&candidates, neighbour)
                     }
                 }
             }
-            meshlet := mesh_meshlet_bounds(mesh.vertices, reordered[first:])
+            meshlet := mesh_meshlet_bounds(vertices, reordered[first:])
             meshlet.first_index = first_index + u32(first)
             meshlet.index_count = u32(len(reordered) - first)
             append(meshlets, meshlet)
@@ -781,12 +788,18 @@ lod_init :: proc(s: ^Simplifier, vertices: []Vertex, range: []u32) {
         for k in 0..<3 do quadric_add(&s.quadrics[s.group[range[t * 3 + k]]], q)
     }
 
-    // Borders and seams: count them per group, and add their planes.
+    // Borders and seams: count them per group, and add their planes. In key
+    // order, not the map's (which changes from run to run), so the quadrics
+    // sum the same way and a mesh always simplifies the same.
     lod_build_edges(s)
     borders := make([]u8, vertex_count, context.temp_allocator)
     seams := make([]u8, vertex_count, context.temp_allocator)
     locked := make([]bool, vertex_count, context.temp_allocator)
-    for key, edge in s.edges {
+    keys := make([dynamic]u64, 0, len(s.edges), context.temp_allocator)
+    for key in s.edges do append(&keys, key)
+    slice.sort(keys[:])
+    for key in keys {
+        edge := s.edges[key]
         lo, hi := u32(key >> 32), u32(key & 0xFFFFFFFF)
         if edge.forward > 1 || edge.backward > 1 {
             locked[lo], locked[hi] = true, true
@@ -991,18 +1004,144 @@ lod_simplify :: proc(s: ^Simplifier, target: int) {
     }
 }
 
+// One submesh's levels of detail while they are built: each level's indices
+// one after another, the levels, and their meshlets (first_index and
+// first_meshlet counted within the chain until it is appended to the mesh).
+@(private="file")
+Lod_Chain :: struct {
+    indices: [dynamic]u32,
+    lods: [dynamic]MeshLod,
+    meshlets: [dynamic]Meshlet,
+}
+
+// The LOD cache: each mesh's chains and their meshlets in a file named by a
+// hash of what they are built from (the vertices, the submeshes' indices and
+// ranges, the level and meshlet limits, and this version, raised whenever the
+// simplifier or the meshlet builder changes), so a changed mesh or builder
+// misses and builds again. The file holds the magic and version, the submesh
+// count, each submesh's level count, each level's index count, error and
+// meshlet count, then every level's indices in order, then every level's
+// meshlets (first indices counted from the start of those indices).
+LOD_CACHE_DIRECTORY :: "cache/lods"
+LOD_CACHE_MAGIC :: u32(0x31444F4C) // "LOD1"
+LOD_CACHE_VERSION :: u32(2)
+@(private="file")
+MESHLET_WORDS :: size_of(Meshlet) / 4
+
+@(private="file")
+lod_cache_path :: proc(mesh: MeshData) -> string {
+    h := hash.fnv64a(slice.to_bytes(mesh.vertices))
+    for submesh in mesh.submeshes {
+        h = hash.fnv64a(slice.to_bytes(mesh.indices[submesh.first_index:][:submesh.index_count]), h)
+        range := [2]u32{submesh.first_index, submesh.index_count}
+        h = hash.fnv64a(slice.to_bytes(range[:]), h)
+    }
+    version := [5]u32{LOD_CACHE_VERSION, MAX_MESH_LODS, MESHLET_MIN_SUBMESH_TRIANGLES, MESHLET_MAX_VERTICES, MESHLET_MAX_TRIANGLES}
+    h = hash.fnv64a(slice.to_bytes(version[:]), h)
+    return fmt.tprintf("%s/%016x.bin", LOD_CACHE_DIRECTORY, h)
+}
+
+// Fills `chains` from the cache file; false (and nothing filled) if it is
+// missing or does not match.
+@(private="file")
+lod_cache_read :: proc(path: string, chains: []Lod_Chain) -> bool {
+    data, error := os.read_entire_file(path, context.temp_allocator)
+    if error != nil do return false
+    words := slice.reinterpret([]u32, data[:len(data) / 4 * 4])
+    at := 0
+    next :: proc(words: []u32, at: ^int) -> (word: u32, ok: bool) {
+        if at^ >= len(words) do return 0, false
+        at^ += 1
+        return words[at^ - 1], true
+    }
+    if magic, ok := next(words, &at); !ok || magic != LOD_CACHE_MAGIC do return false
+    if version, ok := next(words, &at); !ok || version != LOD_CACHE_VERSION do return false
+    if count, ok := next(words, &at); !ok || int(count) != len(chains) do return false
+    level_counts := make([]u32, len(chains), context.temp_allocator)
+    for &count in level_counts {
+        ok: bool
+        count, ok = next(words, &at)
+        if !ok || count > MAX_MESH_LODS do return false
+    }
+    levels := make([dynamic]MeshLod, context.temp_allocator)
+    index_total, meshlet_total := 0, 0
+    for count in level_counts {
+        for _ in 0..<count {
+            index_count, ok_count := next(words, &at)
+            error_bits, ok_error := next(words, &at)
+            meshlet_count, ok_meshlets := next(words, &at)
+            if !ok_count || !ok_error || !ok_meshlets do return false
+            append(&levels, MeshLod{index_count = index_count, error = transmute(f32)error_bits, meshlet_count = meshlet_count})
+            index_total += int(index_count)
+            meshlet_total += int(meshlet_count)
+        }
+    }
+    if len(words) - at != index_total + meshlet_total * MESHLET_WORDS do return false
+    // Each meshlet must lie within its own level's indices.
+    file_meshlets := slice.reinterpret([]Meshlet, words[at + index_total:])
+    {
+        index_start, meshlet_start := u64(0), 0
+        for lod in levels {
+            for meshlet in file_meshlets[meshlet_start:][:lod.meshlet_count] {
+                first, end := u64(meshlet.first_index), u64(meshlet.first_index) + u64(meshlet.index_count)
+                if first < index_start || end > index_start + u64(lod.index_count) do return false
+            }
+            index_start += u64(lod.index_count)
+            meshlet_start += int(lod.meshlet_count)
+        }
+    }
+    level, meshlet_at := 0, 0
+    for &chain, i in chains {
+        for _ in 0..<level_counts[i] {
+            lod := levels[level]
+            lod.first_index = u32(len(chain.indices))
+            lod.first_meshlet = u32(len(chain.meshlets))
+            append(&chain.lods, lod)
+            append(&chain.indices, ..words[at:][:lod.index_count])
+            append(&chain.meshlets, ..file_meshlets[meshlet_at:][:lod.meshlet_count])
+            at += int(lod.index_count)
+            meshlet_at += int(lod.meshlet_count)
+            level += 1
+        }
+    }
+    // From the start of all the levels' indices to the start of the chain's.
+    index_start := u32(0)
+    for &chain in chains {
+        for &meshlet in chain.meshlets do meshlet.first_index -= index_start
+        index_start += u32(len(chain.indices))
+    }
+    return true
+}
+
+@(private="file")
+lod_cache_write :: proc(path: string, chains: []Lod_Chain) {
+    out := make([dynamic]u32, context.temp_allocator)
+    append(&out, LOD_CACHE_MAGIC, LOD_CACHE_VERSION, u32(len(chains)))
+    for chain in chains do append(&out, u32(len(chain.lods)))
+    for chain in chains do for lod in chain.lods do append(&out, lod.index_count, transmute(u32)lod.error, lod.meshlet_count)
+    for chain in chains do append(&out, ..chain.indices[:])
+    index_start := u32(0)
+    for chain in chains {
+        for meshlet in chain.meshlets {
+            moved := meshlet
+            moved.first_index += index_start
+            append(&out, ..slice.reinterpret([]u32, []Meshlet{moved}))
+        }
+        index_start += u32(len(chain.indices))
+    }
+    os.make_directory_all(LOD_CACHE_DIRECTORY)
+    _ = os.write_entire_file(path, slice.to_bytes(out[:]))
+}
+
 // The level-of-detail chains of every large submesh: each level simplified
 // from the one before to half its triangles, its indices appended after the
 // mesh's (reallocated with `allocator`), until the chain stops gaining.
 // Submeshes are simplified at the same time on worker threads (each with its
-// own temporary memory), then their levels are appended in submesh order.
+// own temporary memory), along with each level's meshlets; then their levels
+// are appended in submesh order, and their meshlets become the start of the
+// mesh's list. Chains come from the LOD cache when it has this mesh's, and go
+// into it when they are built.
 mesh_build_lods :: proc(mesh: ^MeshData, allocator := context.allocator) {
-    Lod_Chain :: struct {
-        // Each level's indices one after another, and the levels (first_index
-        // counted within `indices` until they are appended).
-        indices: [dynamic]u32,
-        lods: [dynamic]MeshLod,
-    }
     Lod_Work :: struct {
         mesh: ^MeshData,
         chains: []Lod_Chain,
@@ -1026,6 +1165,12 @@ mesh_build_lods :: proc(mesh: ^MeshData, allocator := context.allocator) {
             append(&chain.indices, ..s.indices[:])
             previous = count
         }
+        if len(chain.lods) == 0 do return
+        scratch := meshlet_scratch(len(mesh.vertices))
+        for &lod in chain.lods {
+            range := chain.indices[lod.first_index:][:lod.index_count]
+            lod.first_meshlet, lod.meshlet_count = mesh_build_range_meshlets(mesh.vertices, range, lod.first_index, &chain.meshlets, scratch)
+        }
     }
     worker :: proc(work: ^Lod_Work) {
         for {
@@ -1040,21 +1185,28 @@ mesh_build_lods :: proc(mesh: ^MeshData, allocator := context.allocator) {
         for chain in work.chains {
             delete(chain.indices)
             delete(chain.lods)
+            delete(chain.meshlets)
         }
         delete(work.chains)
     }
     large := 0
     for submesh in mesh.submeshes do if submesh.index_count / 3 >= LOD_MIN_SUBMESH_TRIANGLES do large += 1
-    if large > 1 {
-        threads := make([]^thread.Thread, min(large, max(os.get_processor_core_count(), 1)), context.temp_allocator)
-        for &t in threads do t = thread.create_and_start_with_poly_data(&work, worker)
-        thread.join_multiple(..threads)
-        for t in threads do thread.destroy(t)
-    } else {
-        worker(&work)
+    if large == 0 do return
+    cache_path := lod_cache_path(mesh^)
+    if !lod_cache_read(cache_path, work.chains) {
+        if large > 1 {
+            threads := make([]^thread.Thread, min(large, max(os.get_processor_core_count(), 1)), context.temp_allocator)
+            for &t in threads do t = thread.create_and_start_with_poly_data(&work, worker)
+            thread.join_multiple(..threads)
+            for t in threads do thread.destroy(t)
+        } else {
+            worker(&work)
+        }
+        lod_cache_write(cache_path, work.chains)
     }
 
     lods := make([dynamic]MeshLod, allocator)
+    meshlets := make([dynamic]Meshlet, allocator)
     base_count := len(mesh.indices)
     extra_count := 0
     for chain in work.chains do extra_count += len(chain.indices)
@@ -1067,15 +1219,23 @@ mesh_build_lods :: proc(mesh: ^MeshData, allocator := context.allocator) {
     for &submesh, i in mesh.submeshes {
         chain := &work.chains[i]
         submesh.first_lod, submesh.lod_count = u32(len(lods)), u32(len(chain.lods))
+        meshlet_base := u32(len(meshlets))
         for lod in chain.lods {
             moved := lod
             moved.first_index += u32(at)
+            moved.first_meshlet += meshlet_base
             append(&lods, moved)
+        }
+        for meshlet in chain.meshlets {
+            moved := meshlet
+            moved.first_index += u32(at)
+            append(&meshlets, moved)
         }
         copy(indices[at:], chain.indices[:])
         at += len(chain.indices)
     }
     mesh.lods = lods[:]
+    mesh.meshlets = meshlets[:]
     if extra_count > 0 {
         delete(mesh.indices, allocator)
         mesh.indices = indices

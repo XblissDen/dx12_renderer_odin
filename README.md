@@ -78,9 +78,9 @@ dx12_renderer.exe
   `shaders/` paths resolve.
 - Assets are listed in `assets.json`; if it is missing, startup creates one
   with the starter assets.
-- The first start compresses the textures and panoramas into `cache/`, which
-  takes a few seconds; later starts read them from there. Deleting `cache/` is
-  safe.
+- The first start compresses the textures and panoramas and builds the
+  meshes' levels of detail into `cache/`, which takes a few seconds; later
+  starts read them from there. Deleting `cache/` is safe.
 - Saving a file in `shaders/` while the program runs reloads the shaders.
 
 ## Controls

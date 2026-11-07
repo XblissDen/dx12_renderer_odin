@@ -338,10 +338,21 @@ imported, for every submesh of at least 256 triangles, before its meshlets:
   and seams leave little to remove). Each level records its **error**: how far
   its surface may stray from the original, in mesh units (the largest
   collapse's quadric distance).
-- **Cost**: submeshes are simplified at the same time on worker threads.
-  Loading takes about 0.4 s longer for Sponza (262K triangles), 0.35 s for the
-  flight helmet and 0.08 s for the damaged helmet. Nothing is cached yet, so
-  this is paid at every start.
+- **Cost**: submeshes are simplified at the same time on worker threads,
+  each building its levels' meshlets too. A first load takes about 0.35 s
+  longer for Sponza (262K triangles), 0.4 s for the flight helmet and 0.09 s
+  for the damaged helmet.
+- **Cache**: the levels and their meshlets are saved to
+  `cache/lods/<hash>.bin`, so later loads read them back instead: the three
+  models together load in about 0.3 s instead of 1.1 s (0.25 s without levels
+  of detail). The hash (FNV-1a, 64 bits) covers what the levels are built
+  from: the vertices, each submesh's indices and range, the level and meshlet
+  limits, and `LOD_CACHE_VERSION`, raised whenever the simplifier or the
+  meshlet builder changes. A changed mesh or builder thus gets a new file
+  rather than a stale one. The simplifier sums each position's border and
+  seam planes in edge order, not in the order of the map that holds the edges
+  (which changes from run to run), so a mesh always simplifies to the same
+  levels whether built or read back. Deleting `cache/` is safe.
 
 **Selection** (`renderer_select_lod`, per draw on the CPU): the coarsest level
 whose error, times the draw's largest scale, divided by its distance from the
