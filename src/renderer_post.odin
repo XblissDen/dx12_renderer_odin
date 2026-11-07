@@ -184,44 +184,19 @@ renderer_bloom_pass :: proc(
     r.command_list->ResourceBarrier(1, &barrier)
 }
 
-// The frame rate and the values keys 1-6 adjust; the Profiler panel has the
-// rest.
+// The scene's name and the frame rate; the Profiler panel has the rest.
 renderer_update_post_title :: proc() {
     r := &g_renderer
     title := fmt.tprintf(
-        "%s - %s%s | FPS %.0f Frame %.1f ms | E %s T %.1f B %.1f [1-6]",
+        "%s - %s%s | FPS %.0f Frame %.1f ms",
         WINDOW_TITLE,
         scene_file_name(),
         // A star for unsaved changes, checked once a second with the title.
         "*" if scene_file_dirty(&g_scene) else "",
         r.fps,
         r.frame_ms,
-        // Auto: the compensation, which keys 1/2 adjust.
-        fmt.tprintf("auto%+.2f", r.auto_exposure.compensation) if r.auto_exposure.enabled else fmt.tprintf("%.1f", r.post_exposure),
-        r.post_threshold,
-        r.post_strength,
     )
     win32.SetWindowTextW(g_hwnd, win32.utf8_to_wstring(title))
-}
-
-renderer_apply_post_steps :: proc(
-    exposure_steps, threshold_steps, bloom_steps: i32,
-) {
-    if exposure_steps == 0 && threshold_steps == 0 && bloom_steps == 0 {
-        return
-    }
-
-    r := &g_renderer
-    // With auto-exposure, keys 1/2 adjust its compensation in quarter stops.
-    if r.auto_exposure.enabled {
-        r.auto_exposure.compensation = clamp(r.auto_exposure.compensation + f32(exposure_steps) * 0.25, -5, 5)
-    } else {
-        r.post_exposure = clamp(r.post_exposure + f32(exposure_steps) * 0.1, 0.1, 5.0)
-    }
-    r.post_threshold = clamp(r.post_threshold + f32(threshold_steps) * 0.1, 0.1, 5.0)
-    r.post_strength = clamp(r.post_strength + f32(bloom_steps) * 0.1, 0.0, 2.0)
-
-    renderer_update_post_title()
 }
 
 // Prefilter into level 0, downsample to the smallest level, then upsample

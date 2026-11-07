@@ -21,10 +21,6 @@ g_mouse_delta_x: i32
 g_mouse_delta_y: i32
 g_cursor_locked: bool
 
-g_exposure_steps: i32
-g_threshold_steps: i32
-g_bloom_steps: i32
-
 window_create :: proc(){
     hinstance := win32.HINSTANCE(win32.GetModuleHandleW(nil))
 
@@ -265,16 +261,7 @@ wparam: win32.WPARAM, lparam: win32.LPARAM) -> win32.LRESULT{
             } else if debug_ui_wants_keyboard() {
                 return 0
             } else if (u64(lparam) & (u64(1) << 30)) == 0 {
-                // One adjustment per physical press, ignoring key auto-repeat.
-                switch wparam {
-                    case win32.WPARAM('1'): g_exposure_steps -= 1
-                    case win32.WPARAM('2'): g_exposure_steps += 1
-                    case win32.WPARAM('3'): g_threshold_steps -= 1
-                    case win32.WPARAM('4'): g_threshold_steps += 1
-                    case win32.WPARAM('5'): g_bloom_steps -= 1
-                    case win32.WPARAM('6'): g_bloom_steps += 1
-                }
-
+                // Once per physical press, ignoring key auto-repeat.
                 // W/E/R pick the gizmo and Q switches world/local axes; while
                 // the mouse is captured, W moves the camera.
                 if !g_cursor_locked && g_editor_gizmo.active == .None {

@@ -68,8 +68,8 @@ so text stays sharp.
 
 Panel positions and sizes are saved in `imgui.ini` in the working directory
 (ignored by git) and restored on the next run; deleting the file brings back
-the default layout. The window title shows the frame rate and the values keys
-1–6 adjust.
+the default layout. The window title shows the scene's name and the frame
+rate.
 
 Color pickers show colors gamma-encoded (a 2.2 power, close to sRGB), so the
 swatch and the numbers look like the result on screen; the scene stores and
@@ -90,7 +90,6 @@ plane at least 100.
 | **W A S D** (captured) | Move |
 | **Space / Shift** (captured) | Move up / down |
 | **F1** | Hide or show the panels |
-| **1–6** | Exposure (or auto-exposure compensation), bloom threshold, bloom strength |
 | **W / E / R** (released) | Gizmo: move, rotate, scale |
 | **Q** (released) | Gizmo: world or local axes |
 | **Ctrl+A** (released) | Select every listed entity |
