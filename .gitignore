@@ -4,7 +4,7 @@ models/barrel_01_2k
 models/marble_burst
 textures/imported/*
 textures/environments/*
-dx12_renderer.exe
+kilu.exe
 *.pdb
 *.ilk
 vendor/imgui/build/

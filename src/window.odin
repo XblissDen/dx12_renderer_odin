@@ -6,8 +6,8 @@ import "core:os"
 import "core:path/filepath"
 import win32 "core:sys/windows"
 
-WINDOW_CLASS :: "DX12WindowClass"
-WINDOW_TITLE :: "DX12 Renderer"
+WINDOW_CLASS :: "KiluEngineWindow"
+WINDOW_TITLE :: "Kilu Engine"
 WINDOW_WIDTH :: 1920
 WINDOW_HEIGHT :: 1080
 

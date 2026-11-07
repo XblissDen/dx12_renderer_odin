@@ -4,7 +4,7 @@ call "%~dp0vendor\imgui\build.bat"
 if errorlevel 1 exit /b 1
 rem Optimized by default: unoptimized CPU work (texture decoding, HDR mip
 rem generation) slows startup considerably. Extra arguments go to Odin.
-odin build "%~dp0src" -out:"%~dp0dx12_renderer.exe" -subsystem:windows -o:speed %*
+odin build "%~dp0src" -out:"%~dp0kilu.exe" -subsystem:windows -o:speed %*
 if errorlevel 1 exit /b 1
 rem The shaders are compiled at run time by DXC, whose DLLs come with Odin:
 rem dxcompiler.dll, and dxil.dll, which validates and signs its output.

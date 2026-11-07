@@ -1,7 +1,7 @@
-# DX12 renderer
+# Kilu Engine
 
-A graphics-learning project: a real-time renderer and small scene editor
-written in Odin on DirectX 12, with a Dear ImGui interface.
+Kilu Engine is a graphics-learning project: a real-time renderer and small
+scene editor written in Odin on DirectX 12, with a Dear ImGui interface.
 
 ## Features
 
@@ -64,7 +64,7 @@ From the project root:
 
 ```bat
 build.bat
-dx12_renderer.exe
+kilu.exe
 ```
 
 - `build.bat` builds optimized (`-o:speed`) and passes extra arguments to
@@ -73,7 +73,7 @@ dx12_renderer.exe
   to the executable: the shaders are compiled with them at startup.
 - The debug layer's messages, and a report of GPU objects still alive at
   shutdown, go to stderr, and the Windows-subsystem build has no console. To see them, build a console version instead:
-  `odin build src -debug -o:speed`.
+  `odin build src -out:kilu.exe -debug -o:speed`.
 - Run from the project root, so the relative `models/`, `textures/` and
   `shaders/` paths resolve.
 - Assets are listed in `assets.json`; if it is missing, startup creates one
